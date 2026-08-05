@@ -1,0 +1,127 @@
+@import "tailwindcss";
+
+/* ===== Wedding Planner – design tokens ===== */
+@theme {
+  --color-gold-50: #faf6ee;
+  --color-gold-100: #f3e9d4;
+  --color-gold-200: #e8d4ab;
+  --color-gold-300: #d9bb7c;
+  --color-gold-400: #cca85e;
+  --color-gold-500: #c9a86a;
+  --color-gold-600: #b08d4a;
+  --color-sage-50: #f3f6ef;
+  --color-sage-100: #e3ead9;
+  --color-sage-200: #c9d6b6;
+  --color-sage-300: #a3b18a;
+  --color-sage-400: #8a9a6f;
+  --color-sage-500: #6f8055;
+  --color-sage-600: #586843;
+  --color-slate-ink: #334155;
+  --font-sans: 'Heebo', system-ui, 'Segoe UI', sans-serif;
+  --font-display: 'Frank Ruhl Libre', 'Heebo', serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100svh;
+  font-family: var(--font-sans);
+  color: #334155;
+  background:
+    radial-gradient(1200px 600px at 100% -10%, rgba(201, 168, 106, 0.18), transparent),
+    radial-gradient(1000px 500px at -10% 110%, rgba(163, 177, 138, 0.18), transparent),
+    #f7f5f1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Glassmorphism helper */
+.glass {
+  background-color: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+/* Slim custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(201, 168, 106, 0.45);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+/* No `both`/`forwards` fill: once the animation ends the element must fall
+   back to `transform: none`, otherwise it stays a containing block and any
+   `position: fixed` modal rendered inside it is positioned against this
+   element instead of the viewport. */
+.animate-fade-in-up {
+  animation: fadeInUp 0.45s ease;
+}
+
+/* =========================================================================
+ *  MOBILE / TOUCH ADAPTATIONS
+ * ====================================================================== */
+
+/* Never let a stray wide element sideways-scroll the whole page. Inner
+   containers with `overflow-x-auto` keep their own scrolling. */
+body {
+  overflow-x: hidden;
+}
+
+/* Respect notch / home-indicator safe areas on phones. */
+@supports (padding: max(0px)) {
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+/* Remove the grey flash on tap and avoid the 300ms click delay. */
+button,
+a,
+select,
+[role="button"] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+@media (max-width: 640px) {
+  /* iOS auto-zooms when a focused field is under 16px – keep inputs at 16px
+     on phones while the visual scale stays compact. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* Momentum scrolling inside horizontally scrollable tables. */
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Slimmer scrollbars so they don't eat content width. */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+}
+

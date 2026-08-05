@@ -1,0 +1,327 @@
+/* =========================================================================
+ *  excelExport.js — ייצוא כל נתוני החתונה לקובץ Excel רב-גיליונות
+ * -------------------------------------------------------------------------
+ *  בניית הנתונים (`buildSheets`) מופרדת בכוונה מהכתיבה לקובץ (`exportWeddingWorkbook`):
+ *  הראשונה היא פונקציה טהורה בלי DOM ובלי ספריות, ולכן אפשר לבדוק אותה
+ *  בסקריפט Node (scripts/excel-test.mjs) ולוודא שכל עמודה וכל ערך יורדים נכון.
+ *
+ *  כותרות גיליון המוזמנים זהות לשמות שמייבא `handleFile` ב-App.jsx, כך
+ *  שקובץ שיוצא מהמערכת ניתן לייבוא בחזרה אליה.
+ *
+ *  ExcelJS נטען ב-import דינמי — הוא כבד, ואין סיבה שכל מי שפותח את
+ *  האפליקציה ישלם עליו בטעינה הראשונה.
+ * ====================================================================== */
+
+const RSVP_LABELS = {
+  confirmed: "אישרו הגעה",
+  pending: "ממתין",
+  declined: "לא מגיעים",
+};
+
+const TASK_LABELS = {
+  todo: "לביצוע",
+  inprogress: "בתהליך",
+  done: "הושלם",
+};
+
+const TABLE_TYPE_LABELS = {
+  knight: "שולחן אבירים",
+  standard: "שולחן רגיל",
+};
+
+const UNASSIGNED = "ללא שיבוץ";
+
+const yesNo = (v) => (v ? "כן" : "לא");
+const num = (v) => Math.round(Number(v) || 0);
+const text = (v) => (v == null ? "" : String(v));
+
+const tableCapacity = (type) => (type === "knight" ? 24 : 12);
+const guestSeats = (g) => Math.max(1, num(g?.seats) || 1);
+
+/**
+ * מחזיר את הגדרות כל הגיליונות: שם, עמודות (כותרת + מפתח + רוחב) ושורות.
+ * טהורה לחלוטין — אותו קלט תמיד מחזיר אותו פלט.
+ */
+export function buildSheets({
+  guests = [],
+  tables = [],
+  vendors = [],
+  budget = [],
+  budgetGoal = 0,
+} = {}) {
+  const guestById = new Map(guests.map((g) => [g.id, g]));
+
+  //  שיבוץ הפוך: לכל מוזמן, באיזה שולחן הוא יושב. מוזמן שהופיע בטעות
+  //  בשני שולחנות ייחשב לראשון בלבד, בדיוק כמו שהמסך מציג אותו.
+  const tableOfGuest = new Map();
+  for (const t of tables) {
+    for (const gid of t.guestIds || []) {
+      if (!tableOfGuest.has(gid)) tableOfGuest.set(gid, t);
+    }
+  }
+
+  /* ── גיליון 1: מוזמנים ─────────────────────────────────────────────── */
+  const guestsSheet = {
+    name: "מוזמנים",
+    columns: [
+      { header: "מס׳", key: "id", width: 8 },
+      { header: "שם", key: "name", width: 26 },
+      { header: "נייד", key: "phone", width: 16 },
+      { header: "קטגוריה", key: "category", width: 28 },
+      { header: "מקור", key: "source", width: 12 },
+      { header: "כיסאות", key: "seats", width: 10 },
+      { header: "אישור הגעה", key: "rsvp", width: 14 },
+      { header: "כמה אישרו", key: "attendingCount", width: 12 },
+      { header: "כנראה יבוא", key: "probablyComing", width: 12 },
+      { header: "לשקול", key: "considering", width: 10 },
+      { header: "גלאט", key: "glatt", width: 8 },
+      { header: "מתנה", key: "gift", width: 12, numFmt: "#,##0" },
+      { header: "שולחן", key: "table", width: 18 },
+      { header: "אזכור", key: "mention", width: 30 },
+    ],
+    rows: guests.map((g) => {
+      const seats = guestSeats(g);
+      return {
+        id: num(g.id),
+        name: text(g.name),
+        phone: text(g.phone),
+        category: text(g.category),
+        source: text(g.source),
+        seats,
+        rsvp: RSVP_LABELS[g.rsvp] || RSVP_LABELS.pending,
+        //  בדיוק כמו במסך: כשאין ערך מפורש, כל הכיסאות נחשבים מאושרים,
+        //  והערך אף פעם לא גדול ממספר הכיסאות.
+        attendingCount:
+          g.attendingCount != null ? Math.min(num(g.attendingCount), seats) : seats,
+        probablyComing: yesNo(g.probablyComing),
+        considering: yesNo(g.considering),
+        glatt: yesNo(g.glatt),
+        gift: num(g.gift),
+        table: tableOfGuest.get(g.id)?.name || UNASSIGNED,
+        mention: text(g.mention),
+      };
+    }),
+  };
+
+  /* ── גיליון 2: ספקים ──────────────────────────────────────────────── */
+  const vendorsSheet = {
+    name: "ספקים",
+    columns: [
+      { header: "מס׳", key: "id", width: 8 },
+      { header: "שם הספק", key: "name", width: 26 },
+      { header: "סוג", key: "type", width: 20 },
+      { header: "טלפון", key: "phone", width: 16 },
+      { header: "אימייל", key: "email", width: 26 },
+      { header: "עלות בחוזה", key: "contractCost", width: 14, numFmt: "#,##0" },
+      { header: "מקדמה ששולמה", key: "deposit", width: 14, numFmt: "#,##0" },
+      { header: "יתרה לתשלום", key: "balance", width: 14, numFmt: "#,##0" },
+      { header: "משימות שהושלמו", key: "tasksDone", width: 14 },
+      { header: "סה״כ משימות", key: "tasksTotal", width: 12 },
+      { header: "פירוט המשימות", key: "tasks", width: 46, wrap: true },
+      { header: "הערות", key: "notes", width: 46, wrap: true },
+    ],
+    rows: vendors.map((v) => {
+      const tasks = Array.isArray(v.tasks) ? v.tasks : [];
+      return {
+        id: num(v.id),
+        name: text(v.name),
+        type: text(v.type),
+        phone: text(v.phone),
+        email: text(v.email),
+        contractCost: num(v.contractCost),
+        deposit: num(v.deposit),
+        balance: num(v.contractCost) - num(v.deposit),
+        tasksDone: tasks.filter((t) => t.status === "done").length,
+        tasksTotal: tasks.length,
+        //  המשימות מקוננות בתוך הספק. במקום גיליון נפרד הן יורדות כשורות
+        //  טקסט בתא אחד, כך שאף משימה לא הולכת לאיבוד.
+        tasks: tasks
+          .map((t) => `[${TASK_LABELS[t.status] || TASK_LABELS.todo}] ${text(t.title)}`)
+          .join("\n"),
+        notes: text(v.notes),
+      };
+    }),
+  };
+
+  /* ── גיליון 3: סדר הושבה ──────────────────────────────────────────── */
+  //  שורה לכל צירוף שולחן-מוזמן, כדי שאפשר יהיה למיין ולסנן באקסל.
+  //  שולחן ריק מקבל שורה אחת בלי מוזמן, ובסוף מגיעים כל מי שעדיין לא שובצו.
+  const seatingRows = [];
+  for (const t of tables) {
+    const ids = Array.isArray(t.guestIds) ? t.guestIds : [];
+    const seated = ids.map((id) => guestById.get(id)).filter(Boolean);
+    const used = seated.reduce((s, g) => s + guestSeats(g), 0);
+    const capacity = tableCapacity(t.type);
+    const base = {
+      tableId: num(t.id),
+      tableName: text(t.name),
+      tableType: TABLE_TYPE_LABELS[t.type] || TABLE_TYPE_LABELS.standard,
+      capacity,
+      used,
+      free: capacity - used,
+    };
+    if (!seated.length) {
+      seatingRows.push({
+        ...base,
+        guestName: "",
+        guestPhone: "",
+        guestCategory: "",
+        guestSeats: 0,
+        guestRsvp: "",
+      });
+      continue;
+    }
+    for (const g of seated) {
+      seatingRows.push({
+        ...base,
+        guestName: text(g.name),
+        guestPhone: text(g.phone),
+        guestCategory: text(g.category),
+        guestSeats: guestSeats(g),
+        guestRsvp: RSVP_LABELS[g.rsvp] || RSVP_LABELS.pending,
+      });
+    }
+  }
+  for (const g of guests) {
+    if (tableOfGuest.has(g.id)) continue;
+    seatingRows.push({
+      tableId: 0,
+      tableName: UNASSIGNED,
+      tableType: "",
+      capacity: 0,
+      used: 0,
+      free: 0,
+      guestName: text(g.name),
+      guestPhone: text(g.phone),
+      guestCategory: text(g.category),
+      guestSeats: guestSeats(g),
+      guestRsvp: RSVP_LABELS[g.rsvp] || RSVP_LABELS.pending,
+    });
+  }
+
+  const seatingSheet = {
+    name: "סדר הושבה",
+    columns: [
+      { header: "מס׳ שולחן", key: "tableId", width: 10 },
+      { header: "שם השולחן", key: "tableName", width: 20 },
+      { header: "סוג השולחן", key: "tableType", width: 16 },
+      { header: "קיבולת", key: "capacity", width: 10 },
+      { header: "מקומות בשימוש", key: "used", width: 14 },
+      { header: "מקומות פנויים", key: "free", width: 14 },
+      { header: "שם המוזמן", key: "guestName", width: 26 },
+      { header: "נייד", key: "guestPhone", width: 16 },
+      { header: "קטגוריה", key: "guestCategory", width: 28 },
+      { header: "כיסאות", key: "guestSeats", width: 10 },
+      { header: "אישור הגעה", key: "guestRsvp", width: 14 },
+    ],
+    rows: seatingRows,
+  };
+
+  /* ── גיליון 4: ניהול תקציב ────────────────────────────────────────── */
+  const expectedTotal = budget.reduce((s, b) => s + num(b.expected), 0);
+  const actualTotal = budget.reduce((s, b) => s + num(b.actual), 0);
+  const income = guests.reduce((s, g) => s + num(g.gift), 0);
+
+  const budgetSheet = {
+    name: "ניהול תקציב",
+    columns: [
+      { header: "מס׳", key: "id", width: 8 },
+      { header: "סעיף", key: "category", width: 32 },
+      { header: "צפוי", key: "expected", width: 14, numFmt: "#,##0" },
+      { header: "בפועל", key: "actual", width: 14, numFmt: "#,##0" },
+      { header: "פער", key: "diff", width: 14, numFmt: "#,##0" },
+    ],
+    rows: budget.map((b) => ({
+      id: num(b.id),
+      category: text(b.category),
+      expected: num(b.expected),
+      actual: num(b.actual),
+      //  אותו חישוב כמו במסך: חיובי = חריגה מהצפוי.
+      diff: num(b.actual) - num(b.expected),
+    })),
+    //  שורות סיכום מתחת לטבלה, עם שורה ריקה מפרידה.
+    summary: [
+      { label: "סה״כ תקציב מתוכנן", value: expectedTotal },
+      { label: "סה״כ הוצאה בפועל", value: actualTotal },
+      { label: "הכנסות (מתנות)", value: income },
+      { label: "מאזן סופי", value: income - actualTotal },
+      { label: "יעד התקציב הכולל", value: num(budgetGoal) },
+    ],
+  };
+
+  return [guestsSheet, vendorsSheet, seatingSheet, budgetSheet];
+}
+
+/** שם קובץ בטוח: בלי תווים שאסורים במערכות קבצים ובלי רווחים כפולים. */
+export function workbookFileName(weddingName) {
+  const clean = String(weddingName || "החתונה שלי")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+  return `${clean || "החתונה שלי"} - ${new Date().toISOString().slice(0, 10)}.xlsx`;
+}
+
+/** בונה חוברת ExcelJS מהגדרות הגיליונות ומחזיר Buffer/ArrayBuffer. */
+export async function buildWorkbookBuffer(data) {
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "תכנון החתונה שלי";
+  wb.created = new Date();
+
+  for (const sheet of buildSheets(data)) {
+    //  views.rightToLeft — בלעדיו אקסל פותח גיליון עברי משמאל לימין.
+    const ws = wb.addWorksheet(sheet.name, {
+      views: [{ rightToLeft: true, state: "frozen", ySplit: 1 }],
+    });
+    ws.columns = sheet.columns.map((c) => ({
+      header: c.header,
+      key: c.key,
+      width: c.width,
+    }));
+
+    ws.getRow(1).font = { bold: true };
+    ws.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFF3E7C9" },
+    };
+
+    sheet.rows.forEach((r) => ws.addRow(r));
+
+    sheet.columns.forEach((c, i) => {
+      const col = ws.getColumn(i + 1);
+      if (c.numFmt) col.numFmt = c.numFmt;
+      if (c.wrap) col.alignment = { wrapText: true, vertical: "top" };
+    });
+
+    if (sheet.summary?.length) {
+      ws.addRow({});
+      for (const s of sheet.summary) {
+        const row = ws.addRow({ category: s.label, expected: s.value });
+        row.font = { bold: true };
+      }
+    }
+
+    ws.autoFilter = {
+      from: { row: 1, column: 1 },
+      to: { row: 1, column: sheet.columns.length },
+    };
+  }
+
+  return wb.xlsx.writeBuffer();
+}
+
+/** בונה את החוברת ומוריד אותה בדפדפן. */
+export async function exportWeddingWorkbook(data, weddingName) {
+  const buffer = await buildWorkbookBuffer(data);
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = workbookFileName(weddingName);
+  a.click();
+  URL.revokeObjectURL(url);
+}

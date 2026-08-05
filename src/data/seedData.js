@@ -1,0 +1,86 @@
+/* =========================================================================
+ *  נתוני הזריעה של החתונה (שולחנות, ספקים, תקציב).
+ *
+ *  היו קבועים בתוך App.jsx. הוצאו לכאן כדי שגם סקריפטים בצד השרת
+ *  (scripts/seed-account.mjs) יוכלו לזרוע חשבון בדיוק מאותם נתונים,
+ *  בלי לשכפל אותם ובלי סיכון שהעתק אחד יישאר מאחור.
+ *
+ *  רשימת המוזמנים יושבת בנפרד ב-guestsData.js.
+ * ====================================================================== */
+
+export const SEED_TABLES = [
+  { id: 1, name: "שולחן אבירים", type: "knight", guestIds: [] },
+  { id: 2, name: "שולחן 1", type: "standard", guestIds: [] },
+];
+
+export const SEED_VENDORS = [
+  {
+    id: 1,
+    name: "אולמי הגן הקסום",
+    type: "אולם / גן אירועים",
+    phone: "03-1234567",
+    email: "info@magic-garden.co.il",
+    contractCost: 95000,
+    deposit: 20000,
+    notes:
+      "סגרנו תפריט פרימיום כולל בר אלכוהול חופשי עד 01:00. יש לאשר מספר אורחים סופי שבועיים לפני.",
+    tasks: [
+      { id: 11, title: "חתימה על חוזה", status: "done" },
+      { id: 12, title: "בחירת תפריט סופי", status: "inprogress" },
+      { id: 13, title: "סידור הושבה לאולם", status: "todo" },
+    ],
+  },
+  {
+    id: 2,
+    name: "DJ קובי מיקס",
+    type: "תקליטן",
+    phone: "052-9876543",
+    email: "kobi@mix.co.il",
+    contractCost: 9000,
+    deposit: 2000,
+    notes: "להכין פלייליסט לכניסה לחופה. ביקש רשימת שירים אסורים.",
+    tasks: [
+      { id: 21, title: "פגישת תיאום מוזיקלי", status: "done" },
+      { id: 22, title: "שליחת פלייליסט", status: "todo" },
+    ],
+  },
+  {
+    id: 3,
+    name: "סטודיו אור – צילום",
+    type: "צלם / וידאו",
+    phone: "054-1112233",
+    email: "studio.or@photo.com",
+    contractCost: 18000,
+    deposit: 5000,
+    notes: "כולל מגנטים + אלבום דיגיטלי. צילומי Save the Date חודש לפני.",
+    tasks: [
+      { id: 31, title: "תיאום צילומי חוץ", status: "inprogress" },
+      { id: 32, title: "אישור לוקיישנים", status: "todo" },
+      { id: 33, title: "חתימת חוזה", status: "done" },
+    ],
+  },
+  {
+    id: 4,
+    name: "פרחי לבנדר",
+    type: "עיצוב ופרחים",
+    phone: "050-4445566",
+    email: "lavender@flowers.co.il",
+    contractCost: 14000,
+    deposit: 3000,
+    notes: "קונספט: גוונים של ירוק מרווה וזהב. סידורי שולחן נמוכים.",
+    tasks: [
+      { id: 41, title: "אישור קונספט עיצובי", status: "done" },
+      { id: 42, title: "בחירת זרי כלה", status: "todo" },
+    ],
+  },
+];
+
+export const SEED_BUDGET = [
+  { id: 1, category: "אולם וקייטרינג", expected: 95000, actual: 95000 },
+  { id: 2, category: "צילום ווידאו", expected: 17000, actual: 18000 },
+  { id: 3, category: "מוזיקה / DJ", expected: 10000, actual: 9000 },
+  { id: 4, category: "עיצוב ופרחים", expected: 12000, actual: 14000 },
+  { id: 5, category: "שמלת כלה וחליפה", expected: 15000, actual: 0 },
+  { id: 6, category: "טבעות", expected: 8000, actual: 0 },
+  { id: 7, category: "הזמנות ומיתוג", expected: 4000, actual: 3500 },
+];

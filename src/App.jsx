@@ -245,7 +245,9 @@ function ToastHost() {
   };
   const toneIcon = { info: CheckCircle2, success: CheckCircle2, error: AlertCircle };
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[100] flex flex-col items-center gap-2 px-4">
+    //  z גבוה מכל המודלים (105/110): הודעת שגיאה שנפתחת מתוך פופ-אפ נבלעה
+    //  מאחוריו, והמשתמש לא ראה למה הפעולה נכשלה.
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[200] flex flex-col items-center gap-2 px-4">
       {toasts.map((t) => {
         const Icon = toneIcon[t.tone] || CheckCircle2;
         return (
@@ -5055,7 +5057,12 @@ function LoginScreen() {
         );
         setPassword("");
       } else if (signup) {
-        await signUp(address, password, weddingDate || null);
+        //  הטוקן נשלח כבר בהרשמה כדי שהשרת לא יפתח למוזמן חתונה פרטית
+        //  משלו. אם הצירוף הצליח מסירים אותו, אחרת הוא נשאר וה-effect
+        //  שאחרי הכניסה ינסה שוב ויציג שגיאה מדויקת.
+        const pendingInvite = sessionStorage.getItem(INVITE_STORAGE_KEY);
+        const res = await signUp(address, password, weddingDate || null, pendingInvite);
+        if (res?.joinedWeddingId) sessionStorage.removeItem(INVITE_STORAGE_KEY);
       } else {
         await signIn(address, password);
       }
@@ -6929,20 +6936,21 @@ function MembersModal({
   const [role, setRole] = useState("editor");
   const [scopes, setScopes] = useState(["all"]);
   const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState(""); // מוצג בתוך המודל, לא כטוסט
   const [lastLink, setLastLink] = useState("");
   const [lastEmail, setLastEmail] = useState("");
   const [editing, setEditing] = useState(null); // userId שנמצא בעריכת הרשאות
 
   //  אין שליחת מיילים אוטומטית להזמנות, ולכן ההזמנה נשלחת על ידי המשתמש
-  //  עצמו: ווטסאפ, אימייל או העתקה. ההודעה מזכירה את כתובת המייל שאליה
-  //  ההזמנה נצמדה, אחרת הנמען מנסה להתחבר עם חשבון אחר והקישור נכשל.
+  //  עצמו: ווטסאפ, אימייל או העתקה. כשההזמנה נצמדה לכתובת מייל ההודעה
+  //  מזכירה אותה, אחרת הנמען מנסה להתחבר עם חשבון אחר והקישור נכשל.
   const eventLabel = weddingName || "החתונה שלנו";
   const shareSubject = `הזמנה לתכנון ${eventLabel}`;
   const shareMessage =
     `היי! שיתפתי אותך במערכת לתכנון ${eventLabel}.\n` +
     `להצטרפות: ${lastLink}\n` +
     (lastEmail ? `הקישור ממתין לכתובת המייל: ${lastEmail}\n` : "") +
-    "הקישור תקף 7 ימים.";
+    "הקישור תקף 7 ימים ומיועד לשימוש חד-פעמי.";
 
   const copyLink = useCallback(async () => {
     try {
@@ -6974,19 +6982,23 @@ function MembersModal({
 
   async function invite(e) {
     e.preventDefault();
-    //  ולידציה משלנו ולא של הדפדפן: ההודעה של `type="email"` מוצגת באנגלית
+    //  המייל הוא רשות: בלעדיו נוצרת הזמנת קישור שכל מי שמקבל אותה יכול
+    //  לממש פעם אחת. מוודאים רק שכתובת שכן הוזנה היא תקינה — ולידציה
+    //  משלנו ולא של הדפדפן, כי ההודעה של `type="email"` מוצגת באנגלית
     //  ובכיוון LTR, ומעל הכול היא נבלעת לגמרי כשהטופס בתוך מודל.
-    if (!isValidEmail(email)) {
-      notify("כתובת המייל אינה תקינה. לדוגמה: name@example.com", { tone: "error" });
+    const address = email.trim();
+    if (address && !isValidEmail(address)) {
+      setFormError("כתובת המייל אינה תקינה. לדוגמה: name@example.com");
       return;
     }
+    setFormError("");
     setBusy(true);
     try {
-      const inv = await inviteMember(weddingId, email, role, scopes);
+      const inv = await inviteMember(weddingId, address, role, scopes);
       setLastLink(inv.link);
-      setLastEmail(email.trim().toLowerCase());
+      setLastEmail(address.toLowerCase());
       setEmail("");
-      notify("ההזמנה נוצרה – שלחו את הקישור", { tone: "success" });
+      notify("הקישור מוכן – שלחו אותו למי שרוצים לשתף", { tone: "success" });
     } catch (err) {
       console.error(err);
       //  שגיאה גנרית משאירה את המשתמש בלי מושג מה לתקן. הקודים מגיעים
@@ -7000,7 +7012,7 @@ function MembersModal({
         timeout: "השרת לא השיב בזמן. נסו שוב בעוד רגע.",
         network_error: "אין חיבור לשרת. בדקו את האינטרנט ונסו שוב.",
       };
-      notify(byCode[err?.code] || "יצירת ההזמנה נכשלה", { tone: "error" });
+      setFormError(byCode[err?.code] || "יצירת הקישור נכשלה");
     } finally {
       setBusy(false);
     }
@@ -7073,14 +7085,16 @@ function MembersModal({
             <div className="flex flex-wrap gap-2">
               <input
                 type="email"
-                required
                 autoCapitalize="none"
                 spellCheck={false}
                 dir="ltr"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@example.com"
-                aria-label="כתובת מייל להזמנה"
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setFormError("");
+                }}
+                placeholder="name@example.com (רשות)"
+                aria-label="כתובת מייל להזמנה – רשות"
                 className="min-w-0 flex-1 rounded-xl bg-white px-3 py-2.5 text-sm outline-none ring-1 ring-slate-200 focus:ring-gold-400"
               />
               <select
@@ -7102,7 +7116,7 @@ function MembersModal({
                 ) : (
                   <UserPlus size={16} />
                 )}
-                הזמנה
+                יצירת קישור
               </button>
             </div>
 
@@ -7113,17 +7127,35 @@ function MembersModal({
               <ScopePicker scopes={scopes} onChange={setScopes} idPrefix="invite-scope" />
             </div>
 
+            {/*  השגיאה חייבת להופיע כאן ולא כטוסט בתחתית המסך: כשהמודל פתוח
+                הטוסט נבלע מאחוריו והמשתמש לא מבין למה כלום לא קורה.  */}
+            {formError && (
+              <p
+                role="alert"
+                className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 ring-1 ring-rose-200"
+              >
+                {formError}
+              </p>
+            )}
+
             <p className="text-[11px] text-slate-400">
-              ההזמנה תקפה 7 ימים וניתנת למימוש רק על ידי אותה כתובת מייל.
-              {/*  הקישור נוצר רק אחרי לחיצה על "הזמנה", ולכן בלי משפט ההסבר
-                  הבא נראה כאילו המערכת שולחת מייל בעצמה — והמוזמן פשוט לא מקבל כלום.  */}
-              {" "}אחרי היצירה תוכלו לשלוח את הקישור בוואטסאפ, במייל או להעתיק אותו.
+              הקישור תקף 7 ימים וניתן למימוש פעם אחת בלבד. השיתוף מוגבל למה
+              שסימנתם למעלה — גם אם המוזמן כבר משתמש במערכת.
+              {" "}מילוי כתובת מייל הוא רשות: אם תמלאו, רק בעל אותה כתובת יוכל
+              להצטרף; אם לא, כל מי שמקבל את הקישור יוכל להיכנס — אז שלחו אותו
+              בערוץ פרטי.
             </p>
             {lastLink && (
               <div className="space-y-2 rounded-xl bg-sage-50 p-3 ring-1 ring-sage-200">
                 <p className="text-[11px] font-semibold text-sage-800">
-                  ההזמנה מוכנה – שלחו את הקישור אל{" "}
-                  <span dir="ltr">{lastEmail || "המוזמן/ת"}</span>:
+                  {lastEmail ? (
+                    <>
+                      הקישור מוכן – שלחו אותו אל{" "}
+                      <span dir="ltr">{lastEmail}</span>:
+                    </>
+                  ) : (
+                    "הקישור מוכן – שלחו אותו למי שרוצים לשתף:"
+                  )}
                 </p>
                 <input
                   readOnly

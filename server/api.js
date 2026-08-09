@@ -309,12 +309,31 @@ router.post(
     const date = normalizeDate(req.body?.weddingDate);
     if (date === false) return fail(res, 400, "invalid_date");
 
-    const result = await registerUser(creds.email, creds.password, date);
+    //  נרשמים דרך קישור הזמנה: בודקים את ההזמנה לפני יצירת המשתמש, כדי לא
+    //  לפתוח לו חתונה פרטית משלו. חתונה כזו הופכת אותו לבעלים עם גישה מלאה
+    //  ומציגה לו את כל תפריט המערכת — למרות שההזמנה הוגבלה למסך אחד.
+    const inviteToken = String(req.body?.inviteToken ?? "");
+    const pending = inviteToken ? await withAdmin((q) => loadInvite(q, inviteToken)) : null;
+    const invite = pending?.invite ?? null;
+    const joining =
+      !!invite && (!invite.email || invite.email.toLowerCase() === creds.email.toLowerCase());
+
+    const result = await registerUser(creds.email, creds.password, date, {
+      createWedding: !joining,
+    });
     if (result.error) return fail(res, 409, result.error);
+
+    let joinedWeddingId = null;
+    if (joining) {
+      const joined = await withAdmin((q) =>
+        redeemInvite(q, invite, result.user.id, creds.email)
+      );
+      joinedWeddingId = joined.weddingId ?? null;
+    }
 
     const { token, expiresAt } = await createSession(result.user.id);
     res.setHeader("Set-Cookie", sessionCookie(token, expiresAt));
-    res.json({ user: result.user });
+    res.json({ user: result.user, joinedWeddingId });
   })
 );
 
@@ -590,6 +609,59 @@ router.delete(
   })
 );
 
+/**
+ *  מאתר הזמנה שעדיין ניתן לממש. הבדיקות כאן אינן תלויות במשתמש.
+ *  מחזיר `{ invite }` או `{ error }`.
+ */
+async function loadInvite(q, token) {
+  const { rows } = await q(
+    `SELECT id, wedding_id, email, role, scopes, expires_at, accepted_at
+       FROM public.wedding_invites WHERE token_hash = $1`,
+    [hashToken(token)]
+  );
+  if (!rows.length) return { error: "invite_not_found" };
+
+  const invite = rows[0];
+  if (invite.accepted_at) return { error: "invite_already_used" };
+  if (new Date(invite.expires_at) <= new Date()) return { error: "invite_expired" };
+  return { invite };
+}
+
+/**
+ *  מממש הזמנה עבור משתמש קיים. חייב לרוץ תחת `withAdmin`: המוזמן עדיין
+ *  אינו חבר, ולכן RLS מסתיר ממנו את שורת ההזמנה.
+ *
+ *  הזמנה עם `email` צמודה לאותה כתובת בלבד. הזמנת קישור (`email = NULL`)
+ *  פתוחה לכל מי שמחזיק בטוקן — ולכן היא נתפסת אטומית, כדי ששני אנשים
+ *  שקיבלו את אותה הודעה לא ייכנסו שניהם.
+ */
+async function redeemInvite(q, invite, userId, emailLower) {
+  if (invite.email && invite.email.toLowerCase() !== String(emailLower).toLowerCase()) {
+    return { error: "invite_email_mismatch" };
+  }
+
+  //  התפיסה קודמת לצירוף: `WHERE accepted_at IS NULL` הוא מה שהופך את
+  //  ההזמנה לחד-פעמית גם כששתי בקשות מגיעות באותו רגע.
+  const claimed = await q(
+    `UPDATE public.wedding_invites SET accepted_at = now()
+      WHERE id = $1 AND accepted_at IS NULL RETURNING id`,
+    [invite.id]
+  );
+  if (!claimed.rowCount) return { error: "invite_already_used" };
+
+  await q(
+    `INSERT INTO public.wedding_members (wedding_id, user_id, owner_id, role, scopes)
+     SELECT w.id, $2::UUID, w.owner_id, $3, $4::TEXT[]
+       FROM public.weddings w WHERE w.id = $1::UUID
+     ON CONFLICT (wedding_id, user_id)
+     DO UPDATE SET role = excluded.role, scopes = excluded.scopes
+           WHERE public.wedding_members.role <> 'owner'`,
+    [invite.wedding_id, userId, invite.role, invite.scopes ?? ["all"]]
+  );
+
+  return { weddingId: invite.wedding_id };
+}
+
 router.post(
   "/weddings/:id/invites",
   requireAuth,
@@ -597,17 +669,25 @@ router.post(
     const wid = weddingId(req, res);
     if (!wid) return;
 
-    //  ההזמנה נצמדת לכתובת המייל; ההשוואה תמיד ב-lowercase כמו `users.email_lower`.
-    const normalized = normalizeEmail(req.body?.email);
-    if (!normalized) return fail(res, 400, "invalid_email");
-    const email = normalized.toLowerCase();
+    //  המייל הוא רשות. כשהוא קיים ההזמנה נצמדת אליו (וההשוואה תמיד
+    //  ב-lowercase, כמו `users.email_lower`); כשהוא ריק נוצרת הזמנת
+    //  קישור שכל מי שמחזיק בטוקן יכול לממש — פעם אחת בלבד.
+    const raw = req.body?.email;
+    const wantsEmail = raw != null && String(raw).trim() !== "";
+    let email = null;
+    if (wantsEmail) {
+      const normalized = normalizeEmail(raw);
+      if (!normalized) return fail(res, 400, "invalid_email");
+      email = normalized.toLowerCase();
+      //  הזמנה עצמית הייתה מורידה את הבעלים לתפקיד נמוך יותר ונועלת אותו
+      //  מחוץ לחתונה שלו, כי מדיניות ה-UPDATE אוסרת להחזיר role='owner'.
+      if (email === String(req.user.email ?? "").toLowerCase()) {
+        return fail(res, 400, "cannot_invite_self");
+      }
+    }
+
     const role = req.body?.role;
     if (role !== "editor" && role !== "viewer") return fail(res, 400, "invalid_role");
-    //  הזמנה עצמית הייתה מורידה את הבעלים לתפקיד נמוך יותר ונועלת אותו
-    //  מחוץ לחתונה שלו, כי מדיניות ה-UPDATE אוסרת להחזיר role='owner'.
-    if (email === String(req.user.email ?? "").toLowerCase()) {
-      return fail(res, 400, "cannot_invite_self");
-    }
     const scopes = sanitizeScopes(req.body?.scopes);
     if (!scopes) return fail(res, 400, "invalid_scopes");
 
@@ -642,41 +722,14 @@ router.post(
     const token = String(req.body?.token ?? "");
     if (!token) return fail(res, 400, "invite_not_found");
 
-    //  withAdmin בכוונה: המוזמן עדיין אינו חבר, ולכן RLS יסתיר ממנו את
-    //  שורת ההזמנה. כל הבדיקות מבוצעות כאן במפורש.
     const result = await withAdmin(async (q) => {
-      const { rows } = await q(
-        `SELECT id, wedding_id, email, role, scopes, expires_at, accepted_at
-           FROM public.wedding_invites WHERE token_hash = $1`,
-        [hashToken(token)]
-      );
-      if (!rows.length) return { error: "invite_not_found" };
-
-      const invite = rows[0];
-      if (invite.accepted_at) return { error: "invite_already_used" };
-      if (new Date(invite.expires_at) <= new Date()) return { error: "invite_expired" };
+      const found = await loadInvite(q, token);
+      if (found.error) return found;
 
       const me = await q(`SELECT email_lower FROM app.users WHERE id = $1`, [
         req.user.userId,
       ]);
-      if (me.rows[0]?.email_lower !== invite.email.toLowerCase()) {
-        return { error: "invite_email_mismatch" };
-      }
-
-      await q(
-        `INSERT INTO public.wedding_members (wedding_id, user_id, owner_id, role, scopes)
-         SELECT w.id, $2::UUID, w.owner_id, $3, $4::TEXT[]
-           FROM public.weddings w WHERE w.id = $1::UUID
-         ON CONFLICT (wedding_id, user_id)
-         DO UPDATE SET role = excluded.role, scopes = excluded.scopes
-               WHERE public.wedding_members.role <> 'owner'`,
-        [invite.wedding_id, req.user.userId, invite.role, invite.scopes ?? ["all"]]
-      );
-      await q(`UPDATE public.wedding_invites SET accepted_at = now() WHERE id = $1`, [
-        invite.id,
-      ]);
-
-      return { weddingId: invite.wedding_id };
+      return redeemInvite(q, found.invite, req.user.userId, me.rows[0]?.email_lower ?? "");
     });
 
     if (result.error) return fail(res, 400, result.error);

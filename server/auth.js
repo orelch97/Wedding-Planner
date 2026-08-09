@@ -170,7 +170,15 @@ export async function purgeExpiredSessions() {
  * ב-Supabase זה היה טריגר; כאן זה מפורש.
  * @param {string|null} weddingDate  'YYYY-MM-DD' או null — נקבע כבר בהרשמה
  */
-export async function registerUser(email, password, weddingDate = null) {
+/**
+ *  יוצר משתמש חדש.
+ *
+ *  `createWedding = false` שמור למי שנרשם דרך קישור הזמנה: פתיחת חתונה
+ *  פרטית עבורו הופכת אותו לבעלים עם גישה מלאה, וזה נראה בדיוק כמו כשל
+ *  אבטחה — הוא רואה את כל תפריט המערכת אף שההזמנה שקיבל הוגבלה למסך אחד.
+ */
+export async function registerUser(email, password, weddingDate = null, options = {}) {
+  const { createWedding = true } = options;
   const passwordHash = await hashPassword(password);
 
   return withAdmin(async (q) => {
@@ -186,16 +194,18 @@ export async function registerUser(email, password, weddingDate = null) {
     );
     const user = rows[0];
 
-    const wedding = await q(
-      `INSERT INTO public.weddings (name, owner_id, wedding_date)
-       VALUES ($1, $2, $3::DATE) RETURNING id`,
-      ["החתונה שלי", user.id, weddingDate]
-    );
-    await q(
-      `INSERT INTO public.wedding_members (wedding_id, user_id, owner_id, role)
-       VALUES ($1, $2, $2, 'owner')`,
-      [wedding.rows[0].id, user.id]
-    );
+    if (createWedding) {
+      const wedding = await q(
+        `INSERT INTO public.weddings (name, owner_id, wedding_date)
+         VALUES ($1, $2, $3::DATE) RETURNING id`,
+        ["החתונה שלי", user.id, weddingDate]
+      );
+      await q(
+        `INSERT INTO public.wedding_members (wedding_id, user_id, owner_id, role)
+         VALUES ($1, $2, $2, 'owner')`,
+        [wedding.rows[0].id, user.id]
+      );
+    }
 
     return { user: { id: user.id, email: user.email } };
   });

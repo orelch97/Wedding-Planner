@@ -43,12 +43,18 @@ export function onAuthChange(listener) {
   return () => listeners.delete(listener);
 }
 
-export async function signUp(email, password, weddingDate = null) {
+/**
+ *  הרשמה. `inviteToken` נשלח כבר כאן ולא רק אחרי הכניסה: כך השרת יודע
+ *  לצרף את הנרשם לחתונה ששיתפו איתו במקום לפתוח לו חתונה פרטית משלו.
+ *  מחזיר גם `joinedWeddingId` — מזהה החתונה שאליה צורף, או null.
+ */
+export async function signUp(email, password, weddingDate = null, inviteToken = null) {
   const data = await apiFetch("/auth/register", {
     method: "POST",
-    body: { email, password, weddingDate },
+    body: { email, password, weddingDate, inviteToken: inviteToken || undefined },
   });
-  return setSession(data.user);
+  setSession(data.user);
+  return { user: data.user, joinedWeddingId: data.joinedWeddingId ?? null };
 }
 
 export async function signIn(email, password) {

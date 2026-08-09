@@ -232,19 +232,24 @@ export async function updateWedding(weddingId, patch = {}) {
   return apiFetch(`/weddings/${weddingId}`, { method: "PATCH", body });
 }
 
-/** מזמין משתמש לפי אימייל. מחזיר את ההזמנה + קישור מוכן לשליחה. */
+/**
+ *  יוצר הזמנה ומחזיר אותה יחד עם קישור מוכן לשליחה.
+ *
+ *  `email` הוא רשות. כשהוא נמסר ההזמנה נצמדת אליו ורק בעליו יוכל לממש
+ *  אותה; כשהוא ריק נוצרת הזמנת קישור — חד-פעמית, בתוקף לשבוע — שמתאימה
+ *  לשליחה בוואטסאפ בלי לדעת את כתובת המייל של הנמען.
+ */
 export async function inviteMember(weddingId, email, role, scopes = ["all"]) {
   requireWeddingId(weddingId);
   requireCloud();
   const clean = String(email || "").trim().toLowerCase();
-  if (!clean) throw new Error("cloudStore: email is required");
   if (role !== "editor" && role !== "viewer") {
     throw new Error("cloudStore: role must be 'editor' or 'viewer'");
   }
 
   const invite = await apiFetch(`/weddings/${weddingId}/invites`, {
     method: "POST",
-    body: { email: clean, role, scopes },
+    body: { email: clean || null, role, scopes },
   });
 
   // הטוקן מוחזר פעם אחת בלבד — במסד נשמר רק ה-hash שלו, ולכן אי אפשר

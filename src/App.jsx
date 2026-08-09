@@ -1145,7 +1145,7 @@ function Overview({
           icon={Star}
           label="כנראה יבואו (כיסאות)"
           value={stats.probably}
-          sub={`מתוך ${stats.invited} מוזמנים ברשימה`}
+          sub={`מתוך ${stats.invited} כיסאות שהוזמנו`}
           tone="sage"
         >
           <ProgressBar value={stats.probably} max={stats.invited} tone="sage" />

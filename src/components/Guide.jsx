@@ -46,6 +46,9 @@ export function Tour({ steps, onClose }) {
   const [index, setIndex] = useState(0);
   const [spot, setSpot] = useState(null);
   const [card, setCard] = useState(null);
+  //  המעבר החלק נדלק רק אחרי המיקום הראשון. בלעדיו הבועה מונפשת
+  //  ממקום החניה שלה מחוץ למסך וחוצה את כל החלון באלכסון.
+  const [animate, setAnimate] = useState(false);
   const cardRef = useRef(null);
 
   const step = steps[index];
@@ -114,6 +117,12 @@ export function Tour({ steps, onClose }) {
   }, [step, place]);
 
   useEffect(() => {
+    if (!card || animate) return;
+    const t = setTimeout(() => setAnimate(true), 80);
+    return () => clearTimeout(t);
+  }, [card, animate]);
+
+  useEffect(() => {
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     return () => {
@@ -159,7 +168,9 @@ export function Tour({ steps, onClose }) {
             width: spot.width,
             height: spot.height,
             boxShadow: "0 0 0 9999px rgba(15,23,42,0.62)",
-            transition: "top .25s, left .25s, width .25s, height .25s",
+            transition: animate
+              ? "top .25s, left .25s, width .25s, height .25s"
+              : "none",
           }}
         />
       )}
@@ -175,7 +186,7 @@ export function Tour({ steps, onClose }) {
           left: card?.left ?? -9999,
           width: card?.width ?? CARD_MAX,
           opacity: card ? 1 : 0,
-          transition: "top .25s, left .25s, opacity .15s",
+          transition: animate ? "top .25s, left .25s, opacity .15s" : "opacity .15s",
         }}
       >
         <div className="flex items-start gap-2.5">
@@ -251,6 +262,10 @@ export function Tour({ steps, onClose }) {
  * ====================================================================== */
 
 export function ScreenIntro({ guide, onStartTour, onDismiss }) {
+  //  בטלפון הפירוט המלא תפס יותר מחצי מהמסך הראשון ודחף את הנתונים עצמם
+  //  מתחת לקיפול. במסך רחב אין בעיה כזו, ולכן שם הוא פתוח תמיד.
+  const [more, setMore] = useState(false);
+
   if (!guide) return null;
 
   return (
@@ -265,30 +280,40 @@ export function ScreenIntro({ guide, onStartTour, onDismiss }) {
           </h3>
           <p className="mt-1 text-xs leading-relaxed text-slate-600">{guide.lead}</p>
 
-          {guide.here?.length > 0 && (
-            <ul className="mt-2 space-y-1">
-              {guide.here.map((line) => (
-                <li
-                  key={line}
-                  className="flex gap-1.5 text-[11px] leading-relaxed text-slate-500 sm:text-xs"
-                >
-                  <span aria-hidden="true" className="text-gold-500">
-                    •
-                  </span>
-                  <span className="min-w-0">{line}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <div className={more ? "block" : "hidden sm:block"}>
+            {guide.here?.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {guide.here.map((line) => (
+                  <li
+                    key={line}
+                    className="flex gap-1.5 text-[11px] leading-relaxed text-slate-500 sm:text-xs"
+                  >
+                    <span aria-hidden="true" className="text-gold-500">
+                      •
+                    </span>
+                    <span className="min-w-0">{line}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
 
-          {guide.notHere && (
-            <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-              <span className="font-semibold text-slate-600">שימו לב: </span>
-              {guide.notHere}
-            </p>
-          )}
+            {guide.notHere && (
+              <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                <span className="font-semibold text-slate-600">שימו לב: </span>
+                {guide.notHere}
+              </p>
+            )}
+          </div>
 
           <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <button
+              type="button"
+              onClick={() => setMore((v) => !v)}
+              aria-expanded={more}
+              className="text-[11px] font-semibold text-slate-500 underline-offset-4 transition hover:text-slate-700 hover:underline sm:hidden"
+            >
+              {more ? "פחות" : "מה בדיוק מזינים כאן?"}
+            </button>
             {onStartTour && (
               <button
                 type="button"

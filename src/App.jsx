@@ -3689,6 +3689,14 @@ function Vendors({ vendors, setVendors, weddingId = null, canEdit = true }) {
                     </div>
                   </div>
 
+                  {/*  לוח ריק היה שלוש עמודות שכל אחת אומרת "ריק" — כחצי מסך
+                      של כלום בטלפון, כפול מספר הספקים. העמודות מופיעות רק
+                      כשיש מה לשים בהן; עד אז שורה אחת שמפנה לשדה ההוספה.  */}
+                  {v.tasks.length === 0 ? (
+                    <p className="rounded-2xl bg-slate-50/80 px-4 py-2.5 text-center text-xs text-slate-400 ring-1 ring-slate-200/70">
+                      אין עדיין משימות לספק הזה — הוסיפו אחת בשדה שלמעלה.
+                    </p>
+                  ) : (
                   <div className="grid gap-3 sm:grid-cols-3">
                     {TASK_COLUMNS.map((col) => {
                       const items = v.tasks.filter((t) => t.status === col.key);
@@ -3758,6 +3766,7 @@ function Vendors({ vendors, setVendors, weddingId = null, canEdit = true }) {
                       );
                     })}
                   </div>
+                  )}
                 </div>
               </Card>
 
@@ -3896,28 +3905,14 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
         )}
       </div>
 
+      {/*  מצב ריק בגובה של אזור גרירה שלם, עם כפתור שכפול של "צירוף קובץ"
+          שכבר יושב בכותרת, הכריח גלילה ארוכה על כל ספק בלי קבצים. שורה
+          אחת מספרת את אותו הדבר.  */}
       {files.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-8 text-center">
-          <span className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-white text-gold-500 ring-1 ring-slate-200">
-            <Paperclip size={22} />
-          </span>
-          <p className="text-sm font-semibold text-slate-600">
-            עדיין לא צורפו קבצים
-          </p>
-          <p className="mt-1 text-xs text-slate-400">
-            חוזה, הצעת מחיר או תמונה — עד {formatBytes(MAX_FILE_BYTES)} לקובץ.
-          </p>
-          {canEdit && (
-            <button
-              onClick={() => inputRef.current?.click()}
-              disabled={busy}
-              className="mt-4 inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 hover:text-gold-600 disabled:opacity-60"
-            >
-              <Upload size={16} />
-              בחירת קובץ
-            </button>
-          )}
-        </div>
+        <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-2.5 text-center text-xs text-slate-400">
+          עדיין לא צורפו קבצים — חוזה, הצעת מחיר או תמונה, עד{" "}
+          {formatBytes(MAX_FILE_BYTES)} לקובץ.
+        </p>
       ) : (
         <ul className="grid gap-2 sm:grid-cols-2">
           {files.map((f) => {

@@ -67,6 +67,14 @@ import {
 } from "lucide-react";
 import { SEED_GUESTS, GUEST_CATEGORIES, GUEST_SOURCES } from "./data/guestsData";
 import { SEED_TABLES, SEED_VENDORS, SEED_BUDGET } from "./data/seedData";
+import {
+  SCREEN_GUIDE,
+  authTourSteps,
+  appTourSteps,
+  guideSeen,
+  markGuideSeen,
+} from "./data/guide";
+import { Tour, ScreenIntro } from "./components/Guide";
 import { isCloudConfigured } from "./lib/api";
 import {
   loadSession,
@@ -821,6 +829,7 @@ function Sidebar({
             return (
               <button
                 key={key}
+                data-tour={`nav-${key}`}
                 onClick={() => {
                   onChange(key);
                   setOpen(false);
@@ -5023,11 +5032,14 @@ const isValidEmail = (value) => EMAIL_RE.test(String(value).trim());
 
 /*  שדה מייל אחיד לכל מסכי ההזדהות: אותה ולידציה, אותו dir="ltr", אותו
     autoComplete. בלי זה כל מסך היה מתנהג קצת אחרת.  */
-function EmailField({ value, onChange, label = "מייל", autoFocus = false }) {
+function EmailField({ value, onChange, label = "מייל", autoFocus = false, tourId }) {
   return (
     <label className="block space-y-1">
       <span className="text-xs font-medium text-slate-500">{label}</span>
-      <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 ring-1 ring-slate-200 focus-within:ring-gold-400">
+      <div
+        data-tour={tourId}
+        className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 ring-1 ring-slate-200 focus-within:ring-gold-400"
+      >
         <Mail size={16} className="text-slate-400" />
         <input
           type="email"
@@ -5087,6 +5099,17 @@ function LoginScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
+  //  הדרכה ראשונית: עולה לבד בביקור הראשון בלבד, ומי שהגיע דרך
+  //  קישור הזמנה מדלג עליה — הוא כבר באמצע משימה.
+  const [tourOn, setTourOn] = useState(() => !hasInvite && !guideSeen("auth"));
+  //  זהות יציבה: הסיור מודד מחדש בכל שינוי של אובייקט השלב, ומערך
+  //  חדש בכל רנדור היה מכניס אותו ללולאת מדידה אינסופית.
+  const authSteps = useMemo(() => authTourSteps(setMode), []);
+
+  function closeTour() {
+    setTourOn(false);
+    markGuideSeen("auth");
+  }
 
   const signup = mode === "signup";
   const forgot = mode === "forgot";
@@ -5167,14 +5190,17 @@ function LoginScreen() {
         </p>
       )}
 
-      <EmailField value={email} onChange={setEmail} />
+      <EmailField value={email} onChange={setEmail} tourId="auth-email" />
 
       {/*  מי שמצטרף לחתונה קיימת לא פותח חתונה משלו, ולכן שדה התאריך
           שלה רק מבלבל אותו.  */}
       {signup && !hasInvite && (
         <label className="block space-y-1">
           <span className="text-xs font-medium text-slate-500">תאריך החתונה</span>
-          <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 ring-1 ring-slate-200 focus-within:ring-gold-400">
+          <div
+            data-tour="auth-date"
+            className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 ring-1 ring-slate-200 focus-within:ring-gold-400"
+          >
             <CalendarDays size={16} className="text-slate-400" />
             <input
               type="date"
@@ -5193,7 +5219,10 @@ function LoginScreen() {
       {!forgot && (
         <label className="block space-y-1">
           <span className="text-xs font-medium text-slate-500">סיסמה</span>
-          <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 ring-1 ring-slate-200 focus-within:ring-gold-400">
+          <div
+            data-tour="auth-password"
+            className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 ring-1 ring-slate-200 focus-within:ring-gold-400"
+          >
             <Lock size={16} className="text-slate-400" />
             <input
               type="password"
@@ -5229,6 +5258,7 @@ function LoginScreen() {
       <button
         type="submit"
         disabled={busy}
+        data-tour="auth-submit"
         className="flex w-full items-center justify-center gap-2 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-gold-600 disabled:opacity-60"
       >
         {busy ? <Loader2 size={16} className="animate-spin" /> : <Lock size={16} />}
@@ -5239,6 +5269,7 @@ function LoginScreen() {
         <button
           type="button"
           onClick={() => switchMode(signup || forgot ? "signin" : "signup")}
+          data-tour="auth-toggle"
           className="w-full text-center text-xs font-medium text-slate-500 underline-offset-4 transition hover:text-gold-600 hover:underline"
         >
           {signup || forgot ? "יש לי כבר חשבון – להתחברות" : "אין לי חשבון – להרשמה"}
@@ -5253,7 +5284,20 @@ function LoginScreen() {
             שכחתי סיסמה
           </button>
         )}
+
+        {/*  ההדרכה נשארת זמינה גם אחרי שסגרו אותה פעם אחת — מי שחוזר
+            אחרי חודשיים לא זוכר, ואין דרך אחרת להחזיר אותה במסך הזה.  */}
+        <button
+          type="button"
+          onClick={() => setTourOn(true)}
+          className="flex w-full items-center justify-center gap-1.5 pt-1 text-xs font-medium text-gold-600 underline-offset-4 transition hover:underline"
+        >
+          <HelpCircle size={14} />
+          הדרכה: איך פותחים חשבון
+        </button>
       </div>
+
+      {tourOn && <Tour steps={authSteps} onClose={closeTour} />}
     </AuthCard>
   );
 }
@@ -5672,6 +5716,25 @@ function WeddingApp({
   }, [sidebarOpen]);
   const [membersOpen, setMembersOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  //  הדרכה: הסיור עולה לבד פעם אחת בחשבון, וההסבר בראש המסך נשאר עד
+  //  שמסתירים אותו — לכל מסך בנפרד, כי כל מסך נלמד בזמן אחר.
+  const [tourOn, setTourOn] = useState(false);
+  const tourSteps = useMemo(() => appTourSteps({ setSidebarOpen }), []);
+  const [introHidden, setIntroHidden] = usePersistentState("introHidden", {});
+  useEffect(() => {
+    if (guideSeen("app")) return;
+    //  הדגל נרשם רק כשהסיור באמת נפתח. אם נרשום אותו מיד, טעינת החתונה
+    //  שמרכיבה מחדש את הרכיב תבטל את הטיימר — והמשתמש יאבד את ההדרכה
+    //  בלי שראה אותה אף פעם.
+    const t = setTimeout(() => {
+      markGuideSeen("app");
+      setTourOn(true);
+    }, 900);
+    return () => clearTimeout(t);
+  }, []);
+  function startTour() {
+    setTourOn(true);
+  }
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistentState(
     "sidebarCollapsed",
     false
@@ -6334,6 +6397,19 @@ function WeddingApp({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            {/*  כפתור העזרה מחזיר את ההסבר של המסך הנוכחי — וההסבר עצמו
+                מציע את הסיור המודרך. כפתור אחד במקום שניים בכותרת צפופה.  */}
+            <button
+              data-tour="help"
+              onClick={() =>
+                setIntroHidden((prev) => ({ ...prev, [active]: false }))
+              }
+              title="מה עושים במסך הזה?"
+              aria-label="הסבר על המסך והדרכה"
+              className="grid h-10 w-10 place-items-center rounded-xl bg-white text-gold-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-gold-50 sm:h-9 sm:w-9"
+            >
+              <HelpCircle size={19} />
+            </button>
             {/* במצב ענן מחוון הענן כבר מספר את סיפור השמירה; שני מחוונים זה
                 רעש ודוחק את כותרת המסך. מציגים "נשמר" רק במצב מקומי. */}
             {isCloudConfigured ? (
@@ -6378,7 +6454,7 @@ function WeddingApp({
             {/* גיבוי ושחזור נוגעים בכל מערכי הנתונים, ולכן מוצגים רק למי
                 שיש לו גישה לכל המסכים — אחרת שחזור היה מוחק מה שלא נראה. */}
             {(fullScope || (isCloudConfigured && session)) && (
-              <div className="relative" ref={backupMenuRef}>
+              <div className="relative" ref={backupMenuRef} data-tour="backup">
                 {/*  בנייד זה תפריט גלישה אחד שמרכז את כל הפעולות המשניות.
                     חמישה כפתורים נפרדים ברוחב 390px הותירו לכותרת המסך כ-100px,
                     והיא הוצגה כ-"דאשבור...".  */}
@@ -6539,6 +6615,17 @@ function WeddingApp({
         )}
 
         <div key={active} className="animate-fade-in-up p-3 sm:p-5 lg:p-8">
+          {/*  הסבר קצר על המסך. יושב מחוץ ל-fieldset המושבת כדי שגם צופה
+              בלבד (viewer) יוכל לסגור אותו ולפתוח את הסיור.  */}
+          {!introHidden[active] && (
+            <ScreenIntro
+              guide={SCREEN_GUIDE[active]}
+              onStartTour={startTour}
+              onDismiss={() =>
+                setIntroHidden((prev) => ({ ...prev, [active]: true }))
+              }
+            />
+          )}
           {/* הרשאת viewer: fieldset מושבת מנטרל כל input/select/button שבתוכו.
               זו שכבת UX בלבד — הגבול האמיתי הוא מדיניות ה-RLS ב-CockroachDB. */}
           <fieldset disabled={!canEdit} className="contents">
@@ -6595,6 +6682,18 @@ function WeddingApp({
           </fieldset>
         </div>
       </main>
+
+      {tourOn && (
+        <Tour
+          steps={tourSteps}
+          onClose={() => {
+            setTourOn(false);
+            //  הסיור פותח את מגירת הניווט בשלבים שמדברים על הלשוניות.
+            //  יציאה באמצע הייתה משאירה אותה פתוחה על המסך.
+            setSidebarOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -6652,7 +6751,7 @@ function WeddingSwitcher({ weddings, activeWedding, onSwitch, onCreate, onOpenMe
   );
 
   return (
-    <div className="mb-4 px-2">
+    <div className="mb-4 px-2" data-tour="switcher">
       <div className="rounded-2xl bg-white/70 p-2 ring-1 ring-slate-200/80">
         <button
           onClick={() => setOpen((o) => !o)}

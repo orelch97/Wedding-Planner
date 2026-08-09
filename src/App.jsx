@@ -108,6 +108,28 @@ import {
   isCryptoAvailable,
 } from "./lib/backupCrypto";
 import { exportWeddingWorkbook } from "./lib/excelExport";
+import logoUrl from "./assets/logo.jpg";
+
+/* =========================================================================
+ *  LOGO
+ *  ------------------------------------------------------------------------
+ *  אותו קובץ שמשמש כאייקון של האפליקציה במסך הבית, כדי שהזיהוי יהיה זהה
+ *  בין האייקון לבין המסך שנפתח. הרקע של הציור הוא נייר בז' ולא שקוף,
+ *  ולכן יש רקע תואם מתחתיו - אחרת נראית מסגרת לבנה בפינות המעוגלות.
+ * ====================================================================== */
+
+function Logo({ className = "h-14 w-14", rounded = "rounded-2xl" }) {
+  return (
+    <img
+      src={logoUrl}
+      alt=""
+      aria-hidden="true"
+      width={512}
+      height={512}
+      className={`${className} ${rounded} shrink-0 bg-[#f7f6f2] object-cover shadow-md ring-1 ring-gold-200/60`}
+    />
+  );
+}
 
 /* =========================================================================
  *  DATA LAYER (Mock)
@@ -697,9 +719,7 @@ function Sidebar({
         } ${collapsed ? "lg:hidden" : ""}`}
       >
         <div className="mb-6 flex items-center gap-3 px-2">
-          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-gold-400 via-gold-500 to-sage-400 text-white shadow-lg">
-            <Heart size={24} fill="currentColor" />
-          </div>
+          <Logo className="h-12 w-12" />
           <div className="min-w-0">
             <h1 className="font-[var(--font-display)] text-xl font-bold leading-tight text-slate-800">
               תכנון החתונה שלי
@@ -4923,9 +4943,7 @@ function AuthCard({ title, subtitle, onSubmit, children }) {
         className="w-full max-w-sm space-y-5 rounded-3xl bg-white/80 p-8 shadow-xl ring-1 ring-white/60 backdrop-blur-xl"
       >
         <div className="flex flex-col items-center gap-2 text-center">
-          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gold-500 text-white shadow-md">
-            <Heart size={26} />
-          </span>
+          <Logo className="h-24 w-24" rounded="rounded-3xl" />
           <h1 className="font-[var(--font-display)] text-xl font-bold text-slate-800">
             {title}
           </h1>
@@ -5439,9 +5457,7 @@ function NoWeddingScreen({ onCreate }) {
         className="w-full max-w-sm space-y-5 rounded-3xl bg-white/80 p-8 shadow-xl ring-1 ring-white/60 backdrop-blur-xl"
       >
         <div className="flex flex-col items-center gap-2 text-center">
-          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gold-500 text-white shadow-md">
-            <Heart size={26} />
-          </span>
+          <Logo className="h-24 w-24" rounded="rounded-3xl" />
           <h1 className="font-[var(--font-display)] text-xl font-bold text-slate-800">
             בואו ניצור את החתונה שלכם
           </h1>

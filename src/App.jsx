@@ -68,7 +68,7 @@ import {
 import { SEED_GUESTS, GUEST_CATEGORIES, GUEST_SOURCES } from "./data/guestsData";
 import { SEED_TABLES, SEED_VENDORS, SEED_BUDGET } from "./data/seedData";
 import {
-  SCREEN_GUIDE,
+  screenGuide,
   authTourSteps,
   appTourSteps,
   guideSeen,
@@ -595,6 +595,14 @@ const categoryBadgeStyles = (() => {
 
 // Categories are user-editable at runtime; the seed list is the default value.
 const CategoriesContext = createContext(GUEST_CATEGORIES);
+
+/*  הרשאת עריכה. עד כה כל תוכן המסכים ישב בתוך <fieldset disabled> אחד,
+    וזה ניטרל גם כפתורים שרק משנים תצוגה — חיפוש, סינון, מיון, מעבר טאבים
+    ו"הצג עוד". צופה נשאר תקוע ב-30 המוזמנים הראשונים בלי יכולת לחפש.
+    מכאן והלאה כל מסך מסתיר או מנטרל בעצמו רק את מה שכותב.
+    זו שכבת UX; הגבול האמיתי הוא ה-RLS וה-403 בשרת.  */
+const CanEditContext = createContext(true);
+const useCanEdit = () => useContext(CanEditContext);
 
 // Resolve a badge color for any category, including ones added after load.
 function categoryStyle(category) {
@@ -1222,6 +1230,7 @@ const GuestRow = memo(function GuestRow({
   updateRsvp,
   updateAttending,
   removeGuest,
+  canEdit = true,
 }) {
   // Local draft state for free-text fields so typing stays local to this row
   // (no parent re-render per keystroke). Committed to the store on blur.
@@ -1243,17 +1252,20 @@ const GuestRow = memo(function GuestRow({
   return (
     <tr className={`border-b border-slate-100 transition ${selected ? "bg-gold-50/60" : "hover:bg-white/60"}`}>
       <td className="px-2 py-3">
-        <input
-          type="checkbox"
-          checked={!!selected}
-          onChange={() => onToggleSelect(g.id)}
-          aria-label={`בחירת ${g.name || "מוזמן"}`}
-          className="h-4 w-4 cursor-pointer accent-gold-500"
-        />
+        {canEdit && (
+          <input
+            type="checkbox"
+            checked={!!selected}
+            onChange={() => onToggleSelect(g.id)}
+            aria-label={`בחירת ${g.name || "מוזמן"}`}
+            className="h-4 w-4 cursor-pointer accent-gold-500"
+          />
+        )}
       </td>
       <td className="px-2 py-3">
         <input
           value={name}
+          readOnly={!canEdit}
           onChange={(e) => setName(e.target.value)}
           onBlur={() => name !== (g.name || "") && updateName(g.id, name)}
           placeholder="שם"
@@ -1263,6 +1275,7 @@ const GuestRow = memo(function GuestRow({
       <td className="px-2 py-3">
         <input
           value={phone}
+          readOnly={!canEdit}
           onChange={(e) => setPhone(e.target.value)}
           onBlur={() => phone !== (g.phone || "") && updatePhone(g.id, phone)}
           placeholder="נייד"
@@ -1274,6 +1287,7 @@ const GuestRow = memo(function GuestRow({
       <td className="px-2 py-3">
         <select
           value={g.category}
+          disabled={!canEdit}
           onChange={(e) => updateCategory(g.id, e.target.value)}
           title="שינוי קטגוריה"
           className={`max-w-[180px] cursor-pointer rounded-full px-2 py-1 text-xs font-semibold ring-inset outline-none transition focus:ring-2 ${
@@ -1290,6 +1304,7 @@ const GuestRow = memo(function GuestRow({
       <td className="px-2 py-3">
         <input
           value={mention}
+          readOnly={!canEdit}
           onChange={(e) => setMention(e.target.value)}
           onBlur={() => mention !== (g.mention || "") && updateMention(g.id, mention)}
           placeholder="אזכור"
@@ -1299,6 +1314,7 @@ const GuestRow = memo(function GuestRow({
       <td className="px-2 py-3">
         <input
           value={seats}
+          readOnly={!canEdit}
           onChange={(e) => setSeats(e.target.value)}
           onBlur={() => {
             const n = Math.max(1, Number(seats) || 1);
@@ -1319,6 +1335,7 @@ const GuestRow = memo(function GuestRow({
           <input
             type="checkbox"
             checked={!!g.glatt}
+            disabled={!canEdit}
             onChange={() => toggleFlag(g.id, "glatt")}
             className="h-5 w-5 accent-gold-500"
           />
@@ -1336,6 +1353,7 @@ const GuestRow = memo(function GuestRow({
       <td className="px-2 py-3 text-center">
         <button
           onClick={() => toggleFlag(g.id, "probablyComing")}
+          disabled={!canEdit}
           aria-label={g.probablyComing ? "מסומן ככנראה יבוא" : "סימון ככנראה יבוא"}
           aria-pressed={!!g.probablyComing}
           title="כנראה יבוא"
@@ -1351,6 +1369,7 @@ const GuestRow = memo(function GuestRow({
       <td className="px-2 py-3 text-center">
         <button
           onClick={() => toggleFlag(g.id, "considering")}
+          disabled={!canEdit}
           aria-label={g.considering ? "מסומן לשקילה" : "סימון לשקילה"}
           aria-pressed={!!g.considering}
           title="לשקול אם להזמין"
@@ -1367,6 +1386,7 @@ const GuestRow = memo(function GuestRow({
         <div className="flex flex-col gap-1">
           <select
             value={RSVP[g.rsvp] ? g.rsvp : "pending"}
+            disabled={!canEdit}
             onChange={(e) => updateRsvp(g.id, e.target.value)}
             aria-label="אישור הגעה"
             title="שינוי סטטוס אישור הגעה"
@@ -1385,6 +1405,7 @@ const GuestRow = memo(function GuestRow({
                 min="0"
                 max={g.seats || 1}
                 value={attending}
+                readOnly={!canEdit}
                 onChange={(e) => setAttending(e.target.value)}
                 onBlur={() => {
                   const n = Math.max(0, Math.min(g.seats || 1, Math.round(Number(attending) || 0)));
@@ -1404,20 +1425,23 @@ const GuestRow = memo(function GuestRow({
         <input
           type="number"
           value={gift}
+          readOnly={!canEdit}
           onChange={(e) => setGift(e.target.value)}
           onBlur={() => Number(gift) !== (g.gift || 0) && updateGift(g.id, gift)}
           className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
         />
       </td>
       <td className="px-2 py-3 text-left">
-        <button
-          onClick={() => removeGuest(g.id)}
-          aria-label={`מחיקת ${g.name || "מוזמן"}`}
-          title="מחיקת מוזמן"
-          className="rounded-lg p-2 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
-        >
-          <Trash2 size={16} />
-        </button>
+        {canEdit && (
+          <button
+            onClick={() => removeGuest(g.id)}
+            aria-label={`מחיקת ${g.name || "מוזמן"}`}
+            title="מחיקת מוזמן"
+            className="rounded-lg p-2 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
+          >
+            <Trash2 size={16} />
+          </button>
+        )}
       </td>
     </tr>
   );
@@ -1438,6 +1462,7 @@ const GuestCard = memo(function GuestCard({
   updateRsvp,
   updateAttending,
   removeGuest,
+  canEdit = true,
 }) {
   const categories = useContext(CategoriesContext);
   const [name, setName] = useState(g.name || "");
@@ -1479,16 +1504,19 @@ const GuestCard = memo(function GuestCard({
             ב-label עם ריפוד מגדילה את אזור הלחיצה ל-44px בלי לשנות
             את המראה ובלי להזיז את שאר השורה.  */}
         <label className="-m-1.5 grid h-11 w-9 shrink-0 cursor-pointer place-items-center">
-          <input
-            type="checkbox"
-            checked={!!selected}
-            onChange={() => onToggleSelect(g.id)}
-            aria-label={`בחירת ${g.name || "מוזמן"}`}
-            className="h-5 w-5 cursor-pointer accent-gold-500"
-          />
+          {canEdit && (
+            <input
+              type="checkbox"
+              checked={!!selected}
+              onChange={() => onToggleSelect(g.id)}
+              aria-label={`בחירת ${g.name || "מוזמן"}`}
+              className="h-5 w-5 cursor-pointer accent-gold-500"
+            />
+          )}
         </label>
         <input
           value={name}
+          readOnly={!canEdit}
           onChange={(e) => setName(e.target.value)}
           onBlur={() => name !== (g.name || "") && updateName(g.id, name)}
           placeholder="שם האורח"
@@ -1520,7 +1548,9 @@ const GuestCard = memo(function GuestCard({
         <button
           onClick={() => removeGuest(g.id)}
           aria-label={`מחיקת ${g.name || "מוזמן"}`}
-          className="grid h-11 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
+          className={`grid h-11 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none ${
+            canEdit ? "" : "hidden"
+          }`}
         >
           <Trash2 size={18} />
         </button>
@@ -1533,6 +1563,7 @@ const GuestCard = memo(function GuestCard({
           נייד
           <input
             value={phone}
+            readOnly={!canEdit}
             onChange={(e) => setPhone(e.target.value)}
             onBlur={() => phone !== (g.phone || "") && updatePhone(g.id, phone)}
             placeholder="נייד"
@@ -1545,6 +1576,7 @@ const GuestCard = memo(function GuestCard({
           קטגוריה
           <select
             value={g.category}
+            disabled={!canEdit}
             onChange={(e) => updateCategory(g.id, e.target.value)}
             className={field}
           >
@@ -1561,6 +1593,7 @@ const GuestCard = memo(function GuestCard({
             type="number"
             min="1"
             value={seats}
+            readOnly={!canEdit}
             onChange={(e) => setSeats(e.target.value)}
             onBlur={() => {
               //  כמו ב-GuestRow: הטיוטה המקומית חייבת להתיישר לערך שנשמר בפועל,
@@ -1577,6 +1610,7 @@ const GuestCard = memo(function GuestCard({
           <input
             type="number"
             value={gift}
+            readOnly={!canEdit}
             onChange={(e) => setGift(e.target.value)}
             onBlur={() => Number(gift) !== (g.gift || 0) && updateGift(g.id, gift)}
             className={`${field} tabular-nums`}
@@ -1586,6 +1620,7 @@ const GuestCard = memo(function GuestCard({
           אזכור
           <input
             value={mention}
+            readOnly={!canEdit}
             onChange={(e) => setMention(e.target.value)}
             onBlur={() => mention !== (g.mention || "") && updateMention(g.id, mention)}
             placeholder="אזכור"
@@ -1596,6 +1631,7 @@ const GuestCard = memo(function GuestCard({
           אישור הגעה
           <select
             value={RSVP[g.rsvp] ? g.rsvp : "pending"}
+            disabled={!canEdit}
             onChange={(e) => updateRsvp(g.id, e.target.value)}
             className={field}
           >
@@ -1612,6 +1648,7 @@ const GuestCard = memo(function GuestCard({
               min="0"
               max={g.seats || 1}
               value={attending}
+              readOnly={!canEdit}
               onChange={(e) => setAttending(e.target.value)}
               onBlur={() => {
                 const n = Math.max(0, Math.min(g.seats || 1, Math.round(Number(attending) || 0)));
@@ -1627,6 +1664,7 @@ const GuestCard = memo(function GuestCard({
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           onClick={() => toggleFlag(g.id, "probablyComing")}
+          disabled={!canEdit}
           aria-pressed={!!g.probablyComing}
           className={`flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition sm:min-h-0 sm:px-2.5 sm:py-1.5 sm:text-xs ${
             g.probablyComing
@@ -1638,6 +1676,7 @@ const GuestCard = memo(function GuestCard({
         </button>
         <button
           onClick={() => toggleFlag(g.id, "considering")}
+          disabled={!canEdit}
           aria-pressed={!!g.considering}
           className={`flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition sm:min-h-0 sm:px-2.5 sm:py-1.5 sm:text-xs ${
             g.considering
@@ -1649,6 +1688,7 @@ const GuestCard = memo(function GuestCard({
         </button>
         <button
           onClick={() => toggleFlag(g.id, "glatt")}
+          disabled={!canEdit}
           aria-pressed={!!g.glatt}
           className={`flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition sm:min-h-0 sm:px-2.5 sm:py-1.5 sm:text-xs ${
             g.glatt
@@ -1671,6 +1711,7 @@ const GuestCard = memo(function GuestCard({
 });
 
 function Guests({ guests, setGuests, tables, setTables, categories, setCategories }) {
+  const canEdit = useCanEdit();
   const fileRef = useRef(null);
   const [catManagerOpen, setCatManagerOpen] = useState(false);
   //  המסך מאחד שתי עבודות נפרדות. כשהן זו מתחת לזו, כל כניסה
@@ -2413,20 +2454,24 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 className="hidden"
                 onChange={handleFile}
               />
-              <button
-                onClick={() => setCatManagerOpen(true)}
-                title="הוספה, עריכה ומחיקה של קטגוריות מוזמנים"
-                className="flex items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
-              >
-                <Tag size={17} /> קטגוריות
-              </button>
-              <button
-                onClick={downloadTemplate}
-                title="הורדת קובץ תבנית לייבוא"
-                className="flex items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
-              >
-                <FileText size={17} /> תבנית
-              </button>
+              {canEdit && (
+                <button
+                  onClick={() => setCatManagerOpen(true)}
+                  title="הוספה, עריכה ומחיקה של קטגוריות מוזמנים"
+                  className="flex items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                >
+                  <Tag size={17} /> קטגוריות
+                </button>
+              )}
+              {canEdit && (
+                <button
+                  onClick={downloadTemplate}
+                  title="הורדת קובץ תבנית לייבוא"
+                  className="flex items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                >
+                  <FileText size={17} /> תבנית
+                </button>
+              )}
               <button
                 onClick={exportGuests}
                 title="ייצוא הרשומות המסוננות לקובץ CSV"
@@ -2434,16 +2479,19 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               >
                 <Download size={17} /> ייצוא
               </button>
-              <button
-                onClick={() => fileRef.current?.click()}
-                className="flex items-center gap-2 rounded-2xl bg-sage-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sage-500/30 transition hover:bg-sage-600"
-              >
-                <Upload size={18} /> ייבוא Excel / CSV
-              </button>
+              {canEdit && (
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  className="flex items-center gap-2 rounded-2xl bg-sage-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sage-500/30 transition hover:bg-sage-600"
+                >
+                  <Upload size={18} /> ייבוא Excel / CSV
+                </button>
+              )}
             </div>
           }
         />
 
+        {canEdit && (
         <form
           onSubmit={addGuest}
           className="mb-4 rounded-2xl border border-gold-200 bg-gradient-to-l from-gold-50/70 to-white p-3 shadow-sm sm:mb-5 sm:p-4"
@@ -2527,6 +2575,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           </button>
           </div>
         </form>
+        )}
 
         {/* Search & Filters */}
         <div className="mb-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3 sm:mb-4 sm:p-4">
@@ -2677,7 +2726,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         </p>
 
         {/* Bulk action bar */}
-        {selectedIds.size > 0 && (
+        {canEdit && selectedIds.size > 0 && (
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded-2xl border border-gold-200 bg-gold-50/70 px-4 py-3">
             <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
               <CheckCheck size={16} className="text-gold-600" />
@@ -2729,17 +2778,19 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             <thead className="sticky top-0 z-10 bg-white/95 backdrop-blur">
               <tr className="border-b border-slate-200 text-xs uppercase text-slate-400">
                 <th className="px-2 py-2">
-                  <input
-                    type="checkbox"
-                    aria-label="בחירת כל הרשומות המסוננות"
-                    checked={sorted.length > 0 && sorted.every((g) => selectedIds.has(g.id))}
-                    onChange={(e) =>
-                      setSelectedIds(
-                        e.target.checked ? new Set(sorted.map((g) => g.id)) : new Set()
-                      )
-                    }
-                    className="h-4 w-4 cursor-pointer accent-gold-500"
-                  />
+                  {canEdit && (
+                    <input
+                      type="checkbox"
+                      aria-label="בחירת כל הרשומות המסוננות"
+                      checked={sorted.length > 0 && sorted.every((g) => selectedIds.has(g.id))}
+                      onChange={(e) =>
+                        setSelectedIds(
+                          e.target.checked ? new Set(sorted.map((g) => g.id)) : new Set()
+                        )
+                      }
+                      className="h-4 w-4 cursor-pointer accent-gold-500"
+                    />
+                  )}
                 </th>
                 <SortHeader label="שם" sortKey="name" sort={sort} onSort={toggleSort} />
                 <SortHeader label="נייד" sortKey="phone" sort={sort} onSort={toggleSort} />
@@ -2778,6 +2829,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   updateRsvp={updateRsvp}
                   updateAttending={updateAttending}
                   removeGuest={removeGuest}
+                  canEdit={canEdit}
                 />
               ))}
               {padBottom > 0 && (
@@ -2815,6 +2867,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               updateRsvp={updateRsvp}
               updateAttending={updateAttending}
               removeGuest={removeGuest}
+              canEdit={canEdit}
             />
           ))}
           {sorted.length === 0 && (
@@ -3009,6 +3062,7 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
 
 /* ---- Seating arrangements ---- */
 function Seating({ guests, tables, setTables }) {
+  const canEdit = useCanEdit();
   const categories = useContext(CategoriesContext);
   const [newTable, setNewTable] = useState({ name: "", type: "standard" });
   const [search, setSearch] = useState("");
@@ -3123,6 +3177,7 @@ function Seating({ guests, tables, setTables }) {
         title="סידור הושבה"
         subtitle="שולחן רגיל (12) או שולחן אבירים (24) · ניתן לשבץ כל מוזמן שלא סירב להגיע"
         action={
+          canEdit ? (
           <form
             onSubmit={addTable}
             className="flex w-full flex-wrap items-center gap-2 sm:w-auto"
@@ -3150,6 +3205,7 @@ function Seating({ guests, tables, setTables }) {
               <Plus size={16} /> שולחן
             </button>
           </form>
+          ) : null
         }
       />
 
@@ -3200,14 +3256,16 @@ function Seating({ guests, tables, setTables }) {
                     </p>
                   </div>
                 </div>
-                <button
-                  onClick={() => removeTable(t.id)}
-                  aria-label={`מחיקת השולחן ${t.name}`}
-                  title="מחיקת שולחן"
-                  className="-m-1.5 grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
-                >
-                  <X size={16} />
-                </button>
+                {canEdit && (
+                  <button
+                    onClick={() => removeTable(t.id)}
+                    aria-label={`מחיקת השולחן ${t.name}`}
+                    title="מחיקת שולחן"
+                    className="-m-1.5 grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
               </div>
 
               <div className="mb-2 flex items-center justify-between text-xs">
@@ -3243,7 +3301,9 @@ function Seating({ guests, tables, setTables }) {
                         onClick={() => unassign(t.id, id)}
                         aria-label={`הסרת ${g.name} מהשולחן`}
                         title="הסרה מהשולחן"
-                        className="-my-1.5 grid h-11 w-11 shrink-0 place-items-center rounded text-slate-400 transition hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
+                        className={`-my-1.5 grid h-11 w-11 shrink-0 place-items-center rounded text-slate-400 transition hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none ${
+                          canEdit ? "" : "hidden"
+                        }`}
                       >
                         <X size={16} />
                       </button>
@@ -3252,13 +3312,15 @@ function Seating({ guests, tables, setTables }) {
                 })}
               </ul>
 
-              <button
-                onClick={() => openPicker(t.id)}
-                disabled={left <= 0}
-                className="mt-3 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-500 transition hover:border-gold-400 hover:bg-gold-50 hover:text-gold-600 disabled:opacity-50"
-              >
-                <Plus size={16} /> {left <= 0 ? "השולחן מלא" : "שבץ מוזמן"}
-              </button>
+              {canEdit && (
+                <button
+                  onClick={() => openPicker(t.id)}
+                  disabled={left <= 0}
+                  className="mt-3 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-500 transition hover:border-gold-400 hover:bg-gold-50 hover:text-gold-600 disabled:opacity-50"
+                >
+                  <Plus size={16} /> {left <= 0 ? "השולחן מלא" : "שבץ מוזמן"}
+                </button>
+              )}
             </div>
           );
         })}
@@ -3269,7 +3331,9 @@ function Seating({ guests, tables, setTables }) {
             </div>
             <p className="text-base font-semibold text-slate-700">עדיין אין שולחנות</p>
             <p className="mt-1 max-w-sm text-sm text-slate-400">
-              הוסיפו שולחן חדש בעזרת הכפתור למעלה כדי להתחיל לשבץ מוזמנים.
+              {canEdit
+                ? "הוסיפו שולחן חדש בעזרת הכפתור למעלה כדי להתחיל לשבץ מוזמנים."
+                : "סידור ההושבה עדיין לא נבנה על ידי בעלי החתונה."}
             </p>
           </div>
         )}
@@ -3521,12 +3585,14 @@ function Vendors({ vendors, setVendors, weddingId = null, canEdit = true }) {
           title="ניהול ספקים ומשימות"
           subtitle="פרטים, תשלומים, סיכומי פגישות ולוח משימות"
           action={
-            <button
-              onClick={addVendor}
-              className="flex items-center gap-2 rounded-2xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:bg-gold-600"
-            >
-              <Plus size={18} /> ספק חדש
-            </button>
+            canEdit ? (
+              <button
+                onClick={addVendor}
+                className="flex items-center gap-2 rounded-2xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:bg-gold-600"
+              >
+                <Plus size={18} /> ספק חדש
+              </button>
+            ) : null
           }
         />
 
@@ -3555,14 +3621,18 @@ function Vendors({ vendors, setVendors, weddingId = null, canEdit = true }) {
             </div>
             <p className="text-base font-semibold text-slate-700">עדיין אין ספקים</p>
             <p className="mt-1 max-w-sm text-sm text-slate-400">
-              הוסיפו ספק חדש בעזרת הכפתור למעלה כדי לנהל פרטים, תשלומים ומשימות.
+              {canEdit
+                ? "הוסיפו ספק חדש בעזרת הכפתור למעלה כדי לנהל פרטים, תשלומים ומשימות."
+                : "רשימת הספקים עדיין ריקה."}
             </p>
-            <button
-              onClick={addVendor}
-              className="mt-4 flex items-center gap-2 rounded-2xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:bg-gold-600"
-            >
-              <Plus size={18} /> הוספת ספק ראשון
-            </button>
+            {canEdit && (
+              <button
+                onClick={addVendor}
+                className="mt-4 flex items-center gap-2 rounded-2xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:bg-gold-600"
+              >
+                <Plus size={18} /> הוספת ספק ראשון
+              </button>
+            )}
           </div>
         </Card>
       )}
@@ -3573,6 +3643,10 @@ function Vendors({ vendors, setVendors, weddingId = null, canEdit = true }) {
           const balance = v.contractCost - v.deposit;
           return (
             <div key={v.id} className="grid gap-6 xl:grid-cols-3">
+              {/*  כרטיס הספק כולו הוא טופס עריכה, ואין בו פקד שמשנה רק תצוגה.
+                  לכן לצופה מנטרלים אותו במלואו. הקבצים להורדה הם קישורי <a>
+                  ואינם מושפעים מ-fieldset מושבת.  */}
+              <fieldset disabled={!canEdit} className="contents">
               {/* Details + finance */}
               <Card className="xl:col-span-1">
                 <div className="space-y-4">
@@ -3794,6 +3868,7 @@ function Vendors({ vendors, setVendors, weddingId = null, canEdit = true }) {
                   onChanged={reloadFiles}
                 />
               </Card>
+              </fieldset>
             </div>
           );
         })}
@@ -4014,6 +4089,7 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
  * ====================================================================== */
 
 function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, financeLabels, setFinanceLabels }) {
+  const canEdit = useCanEdit();
   const [form, setForm] = useState({ category: "", expected: "", actual: "" });
   const [goalDraft, setGoalDraft] = useState(budgetGoal);
   const [dragId, setDragId] = useState(null);
@@ -4104,6 +4180,9 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
   }
 
   return (
+    /*  מסך התקציב כולו הוא עריכה — אין בו חיפוש, סינון או מיון —
+        ולכן הניטרול הגורף לצופה אינו פוגע בשום פעולת צפייה.  */
+    <fieldset disabled={!canEdit} className="contents">
     <div className="space-y-4 sm:space-y-6">
       <Card>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -4147,7 +4226,9 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
               שהמשתמש מעולם לא הגדיר — זה מבהיל בלי סיבה.  */}
           {goal <= 0 ? (
             <div className="rounded-xl bg-gold-50 px-3 py-2.5 text-xs text-slate-600 ring-1 ring-gold-200">
-              עוד לא הוגדר יעד תקציב. הזינו סכום למעלה כדי לעקוב אחרי חריגות.
+              {canEdit
+                ? "עוד לא הוגדר יעד תקציב. הזינו סכום למעלה כדי לעקוב אחרי חריגות."
+                : "עוד לא הוגדר יעד תקציב לחתונה הזו."}
               <br />
               <span className="text-slate-500">
                 תכנון נוכחי (סכום הסעיפים):{" "}
@@ -4268,6 +4349,7 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
           }
         />
 
+        {canEdit && (
         <form
           onSubmit={addItem}
           className="mb-4 grid grid-cols-2 gap-2 rounded-2xl bg-white/50 p-3 ring-1 ring-slate-200/70 sm:mb-5 sm:gap-3 sm:p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
@@ -4299,6 +4381,7 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
             <Plus size={18} /> הוסף
           </button>
         </form>
+        )}
 
         <div className="hidden overflow-x-auto lg:block">
           <table className="w-full min-w-[620px] text-right text-sm">
@@ -4568,6 +4651,7 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
         </div>
       </Card>
     </div>
+    </fieldset>
   );
 }
 
@@ -5719,7 +5803,6 @@ function WeddingApp({
   //  הדרכה: הסיור עולה לבד פעם אחת בחשבון, וההסבר בראש המסך נשאר עד
   //  שמסתירים אותו — לכל מסך בנפרד, כי כל מסך נלמד בזמן אחר.
   const [tourOn, setTourOn] = useState(false);
-  const tourSteps = useMemo(() => appTourSteps({ setSidebarOpen }), []);
   const [introHidden, setIntroHidden] = usePersistentState("introHidden", {});
   useEffect(() => {
     if (guideSeen("app")) return;
@@ -5763,6 +5846,23 @@ function WeddingApp({
   const canEdit = role !== "viewer";
   const isOwner = role === "owner";
   const fullScope = isFullScope(scopes);
+
+  /*  הסיור נבנה לפי מה שהמשתמש הזה באמת רואה ורשאי לעשות.
+      בלי זה צופה קיבל הדרכה על הוספת מוזמנים ועריכת תקציב,
+      ושלבים שהצביעו על לשוניות שאינן קיימות בהיקף שלו.  */
+  const showBackup = fullScope || (isCloudConfigured && !!session);
+  const navKeys = useMemo(() => navItems.map((n) => n.key), [navItems]);
+  const tourSteps = useMemo(
+    () =>
+      appTourSteps({
+        setSidebarOpen,
+        canEdit,
+        isOwner,
+        navKeys,
+        showBackup,
+      }),
+    [canEdit, isOwner, navKeys, showBackup]
+  );
 
   //  האם מותר לסנכרן ענן עבור dataset מסוים? כתיבה מחוץ להיקף תיחסם ב-RLS
   //  ותחזיר 403, ולכן אין טעם אפילו לנסות.
@@ -6619,16 +6719,17 @@ function WeddingApp({
               בלבד (viewer) יוכל לסגור אותו ולפתוח את הסיור.  */}
           {!introHidden[active] && (
             <ScreenIntro
-              guide={SCREEN_GUIDE[active]}
+              guide={screenGuide(active, canEdit)}
               onStartTour={startTour}
               onDismiss={() =>
                 setIntroHidden((prev) => ({ ...prev, [active]: true }))
               }
             />
           )}
-          {/* הרשאת viewer: fieldset מושבת מנטרל כל input/select/button שבתוכו.
-              זו שכבת UX בלבד — הגבול האמיתי הוא מדיניות ה-RLS ב-CockroachDB. */}
-          <fieldset disabled={!canEdit} className="contents">
+          {/*  הרשאת העריכה עוברת ב-context וכל מסך מסתיר בעצמו את מה שכותב.
+              קודם היה כאן fieldset מושבת אחד סביב הכול, והוא ניטרל לצופה
+              גם את החיפוש, הסינון, המיון והכפתור "הצג עוד".  */}
+          <CanEditContext.Provider value={canEdit}>
           {active === "overview" && (
             <Overview
               guests={guests}
@@ -6679,7 +6780,7 @@ function WeddingApp({
               coupleTitle={coupleTitle}
             />
           )}
-          </fieldset>
+          </CanEditContext.Provider>
         </div>
       </main>
 

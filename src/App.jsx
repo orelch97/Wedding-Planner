@@ -5071,16 +5071,19 @@ function AuthCard({ title, subtitle, onSubmit, children }) {
 }
 
 function LoginScreen() {
-  const [mode, setMode] = useState("signin"); // signin | signup | forgot
+  const hasInvite =
+    typeof sessionStorage !== "undefined" &&
+    !!sessionStorage.getItem(INVITE_STORAGE_KEY);
+  //  מי שמגיע דרך קישור הזמנה עדיין אין לו חשבון, ולכן הוא נוחת ישר
+  //  על ההרשמה. "התחברות" כברירת מחדל שידרה שיש להזין פרטים קיימים,
+  //  ומי שקיבל את הקישור ניסה את הפרטים של מי ששלח אותו.
+  const [mode, setMode] = useState(hasInvite ? "signup" : "signin"); // signin | signup | forgot
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [weddingDate, setWeddingDate] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
-  const hasInvite =
-    typeof sessionStorage !== "undefined" &&
-    !!sessionStorage.getItem(INVITE_STORAGE_KEY);
 
   const signup = mode === "signup";
   const forgot = mode === "forgot";
@@ -5140,22 +5143,32 @@ function LoginScreen() {
       subtitle={
         forgot
           ? "נשלח קישור לאיפוס סיסמה"
-          : signup
-            ? "פתחו חשבון וקבלו חתונה משלכם"
-            : "התחברו כדי לגשת לנתונים שלכם"
+          : hasInvite
+            ? "הוזמנתם לחתונה משותפת"
+            : signup
+              ? "פתחו חשבון וקבלו חתונה משלכם"
+              : "התחברו כדי לגשת לנתונים שלכם"
       }
       onSubmit={submit}
     >
       {hasInvite && (
+        /*  הנוסח הקודם היה "התחברו או הירשמו עם אותה כתובת מייל שעבורה
+            נוצרה ההזמנה" — וזה נקרא כאילו מדובר בכתובת של מי ששלח. ההרשאה
+            המצומצמת נצמדת לחשבון של המוזמן, ולכן חייב להיות לו חשבון משלו;
+            כניסה עם הפרטים של המזמין היא פשוט המזמין, עם גישה מלאה.  */
         <p className="rounded-lg bg-sage-50 px-3 py-2 text-xs text-sage-700 ring-1 ring-sage-200">
-          קיבלתם הזמנה לחתונה משותפת. התחברו או הירשמו עם אותה כתובת מייל
-          שעבורה נוצרה ההזמנה, והיא תתווסף אוטומטית.
+          <strong className="font-semibold">פתחו חשבון משלכם</strong> — עם המייל
+          שלכם וסיסמה שאתם בוחרים. אל תשתמשו בפרטים של מי ששלח את הקישור: הם
+          יכניסו אתכם כבעלים ולא לפי ההרשאה שניתנה לכם. יש לכם כבר חשבון?
+          התחברו אליו והחתונה תתווסף אליו.
         </p>
       )}
 
       <EmailField value={email} onChange={setEmail} />
 
-      {signup && (
+      {/*  מי שמצטרף לחתונה קיימת לא פותח חתונה משלו, ולכן שדה התאריך
+          שלה רק מבלבל אותו.  */}
+      {signup && !hasInvite && (
         <label className="block space-y-1">
           <span className="text-xs font-medium text-slate-500">תאריך החתונה</span>
           <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 ring-1 ring-slate-200 focus-within:ring-gold-400">
@@ -7010,6 +7023,7 @@ function MembersModal({
     `היי! שיתפתי אותך במערכת לתכנון ${eventLabel}.\n` +
     `להצטרפות: ${lastLink}\n` +
     (lastEmail ? `הקישור ממתין לכתובת המייל: ${lastEmail}\n` : "") +
+    "פתחו חשבון משלכם עם המייל שלכם — לא בפרטים שלי.\n" +
     "הקישור תקף 7 ימים ומיועד לשימוש חד-פעמי.";
 
   const copyLink = useCallback(async () => {

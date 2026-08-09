@@ -12,7 +12,9 @@ services:
     name: wedding-planner
     runtime: node
     plan: free
-    region: frankfurt # הקרוב ביותר לישראל מבין אזורי החינם
+    #  חייב להתאים לאזור של הקלאסטר (aws-eu-central-1). שירות באזור אחר
+    #  משלם חציית יבשת על כל שאילתה, וזה מורגש בכל מסך שנטען.
+    region: frankfurt
 
     #  --include=dev חובה: NODE_ENV=production גורם ל-npm לדלג על
     #  devDependencies, ואז vite לא מותקן וה-build נכשל.

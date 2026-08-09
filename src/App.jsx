@@ -679,18 +679,21 @@ function SectionTitle({ icon: Icon, title, subtitle, action }) {
 
 //  scope = ההיקף שנדרש כדי לראות את המסך. null = דורש היקף מלא (הדאשבורד
 //  מציג נתונים מכל הטבלאות, ולכן אין לו משמעות בשיתוף חלקי).
+//  hidden = המסך קיים בקוד אבל אינו מוצג. להחזרתו — מחיקת השורה הזו בלבד.
 const NAV = [
   { key: "overview", label: "דאשבורד ראשי", icon: LayoutDashboard, scope: null },
   { key: "guests", label: "מוזמנים והושבה", icon: Users, scope: "guests" },
   { key: "vendors", label: "ספקים ומשימות", icon: Briefcase, scope: "vendors" },
   { key: "finance", label: "ניהול תקציב", icon: Wallet, scope: "finance" },
-  { key: "portal", label: "פורטל ספקים", icon: Smartphone, scope: "vendors" },
+  { key: "portal", label: "פורטל ספקים", icon: Smartphone, scope: "vendors", hidden: true },
 ];
+
+const VISIBLE_NAV = NAV.filter((item) => !item.hidden);
 
 /** מסנן את הניווט לפי ההיקף שהוקצה לחבר. ה-UI בלבד — ה-RLS הוא הגבול. */
 function navForScopes(scopes) {
-  if (isFullScope(scopes)) return NAV;
-  return NAV.filter((item) => item.scope && hasScope(scopes, item.scope));
+  if (isFullScope(scopes)) return VISIBLE_NAV;
+  return VISIBLE_NAV.filter((item) => item.scope && hasScope(scopes, item.scope));
 }
 
 /*  מחוות פתיחה למגירת הניווט בטלפון.
@@ -758,7 +761,7 @@ function Sidebar({
   setOpen,
   collapsed,
   setCollapsed,
-  navItems = NAV,
+  navItems = VISIBLE_NAV,
   weddings = [],
   activeWedding = null,
   weddingDate = null,

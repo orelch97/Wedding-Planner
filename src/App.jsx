@@ -713,7 +713,9 @@ function useDrawerSwipe(open, setOpen) {
     function onStart(e) {
       if (e.touches.length !== 1 || wide.matches) return;
       //  כשמודל פתוח הוא מכסה את המסך; פתיחת המגירה מאחוריו רק מבלבלת.
-      if (document.querySelector('[role="dialog"]')) return;
+      //  ConfirmHost משתמש ב-alertdialog ולא ב-dialog, ובלי זה מחווה
+      //  בתוך דיאלוג אישור הייתה פותחת את המגירה מאחוריו.
+      if (document.querySelector('[role="dialog"],[role="alertdialog"]')) return;
       const t = e.touches[0];
       startX = t.clientX;
       startY = t.clientY;
@@ -3771,7 +3773,7 @@ function Vendors({ vendors, setVendors, weddingId = null, canEdit = true }) {
               </Card>
 
               {/* Attachments */}
-              <Card className="xl:col-span-3">
+              <Card className="min-w-0 xl:col-span-3">
                 <VendorFiles
                   weddingId={weddingId}
                   vendorId={v.id}
@@ -3914,13 +3916,19 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
           {formatBytes(MAX_FILE_BYTES)} לקובץ.
         </p>
       ) : (
-        <ul className="grid gap-2 sm:grid-cols-2">
+        /*  `grid` בלי הגדרת עמודות יוצר עמודה ברוחב auto, והיא נמדדת לפי
+            max-content של השורה — כלומר לפי שם הקובץ המלא, שהוא שורה אחת
+            בלי מקום לשבור בה. מספיק היה שם ארוך אחד כדי למתוח את הכרטיס
+            (ואיתו את כל טור הכרטיסים) הרבה מעבר לרוחב המסך, והמסך נחתך.
+            grid-cols-1 של Tailwind הוא minmax(0,1fr) — מינימום אפס, ולכן
+            העמודה נצמדת לרוחב הזמין והשם מתקצר עם שלוש נקודות.  */
+        <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {files.map((f) => {
             const isImage = IMAGE_MIME.has(f.mime);
             return (
               <li
                 key={f.id}
-                className="flex items-center gap-2 rounded-2xl bg-white/70 p-2.5 ring-1 ring-slate-200 transition hover:ring-gold-300"
+                className="flex min-w-0 items-center gap-1 rounded-2xl bg-white/70 p-2.5 ring-1 ring-slate-200 transition hover:ring-gold-300 sm:gap-2"
               >
                 <span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl bg-slate-100 text-slate-400 ring-1 ring-slate-200">
                   {isImage ? (

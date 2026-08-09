@@ -84,9 +84,16 @@ export function isEncryptedBackup(obj) {
 /** מפענח מעטפת גיבוי. זורק 'bad_passphrase' אם הסיסמה שגויה. */
 export async function decryptBackup(envelope, passphrase) {
   if (!isCryptoAvailable) throw new Error("crypto_unavailable");
+  //  מספר הסיבובים נקרא מהקובץ כדי שגיבויים ישנים ימשיכו להיפתח אחרי
+  //  שנעלה את ברירת המחדל. הקובץ מגיע מהמשתמש, ולכן הוא יכול להכיל
+  //  iterations עצום שמקפיא את הלשונית — לכן יש תקרה. סיבובים מעטים
+  //  אינם מחלישים דבר: הקובץ כבר מוצפן, ומי ששולט בערך שולט גם בתוכן.
+  const iterations = Math.min(
+    Math.max(Math.trunc(Number(envelope.kdf?.iterations)) || PBKDF2_ITERATIONS, 1),
+    2_000_000
+  );
   const salt = fromBase64(envelope.salt);
   const iv = fromBase64(envelope.iv);
-  const iterations = Number(envelope.kdf?.iterations) || PBKDF2_ITERATIONS;
   const key = await deriveKey(passphrase, salt, iterations);
   let plain;
   try {

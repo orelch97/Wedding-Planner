@@ -24,6 +24,7 @@ import {
   sessionCookie,
   clearCookie,
   hashToken,
+  asText,
 } from "./auth.js";
 import { sendPasswordResetEmail, APP_URL } from "./mailer.js";
 
@@ -92,6 +93,12 @@ function sanitizeScopes(input) {
 /* ── קבצים מצורפים לספק ────────────────────────────────────────────────── */
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+
+//  מכסה לכל חתונה. הקבצים יושבים בעמודת BYTES במסד עצמו, ולכן חתונה אחת
+//  שמעלה בלי גבול פוגעת בכל הלקוחות. 200MB ו-300 קבצים הם הרבה מעבר
+//  לחוזים והצעות מחיר של אירוע אחד.
+const MAX_FILES_PER_WEDDING = 300;
+const MAX_BYTES_PER_WEDDING = 200 * 1024 * 1024;
 
 //  רק הטיפוסים האלה מוגשים inline. SVG לא נמצא ברשימה בכוונה — הוא מסמך
 //  שמריץ סקריפטים, והגשתו inline מאותו origin שקולה ל-XSS מאוחסן.
@@ -215,7 +222,7 @@ async function memberScopes(q, wid, userId) {
  */
 function normalizeDate(value) {
   if (value === undefined || value === null || value === "") return null;
-  const text = String(value);
+  const text = asText(value);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
   //  הרגקס לבדו מקבל 2027-02-31. Date מנרמל תאריך כזה ליום אחר, ולכן
   //  השוואה חזרה למחרוזת המקורית היא מה שפוסל אותו.
@@ -224,7 +231,20 @@ function normalizeDate(value) {
   return parsed.toISOString().slice(0, 10) === text ? text : false;
 }
 
-/** מנקה שורה נכנסת לפי הרשימה הלבנה. שדות לא מוכרים נזרקים בשקט. */function sanitizeRow(cfg, raw, wid) {
+/* ── תקרות אורך לשדות חופשיים ──────────────────────────────────────────────
+ *  ה-RLS מחליט *מי* רשאי לכתוב, אבל לא *כמה*. בלי תקרה, בעל חשבון לגיטימי
+ *  אחד (או סקריפט שרץ עם העוגייה שלו) יכול לדחוף מגה-בייט למחרוזת בכל
+ *  סנכרון ולנפח את מסד הנתונים ללא גבול. עמודות TEXT ב-CockroachDB חסרות
+ *  אורך מוגדר, ולכן זו התקרה היחידה שקיימת.
+ *  הגזירה היא חיתוך שקט ולא שגיאה: הלקוח לעולם לא שולח ערכים כאלה בעצמו,
+ *  ושגיאה כאן הייתה מכשילה סנכרון שלם בגלל שדה בודד.
+ */
+const MAX_TEXT = 300;
+const TEXT_LIMITS = { notes: 5_000, mention: 1_000 };
+const MAX_JSON_CHARS = 200_000; // לוח משימות / רשימת מושבים לשולחן
+
+/** מנקה שורה נכנסת לפי הרשימה הלבנה. שדות לא מוכרים נזרקים בשקט. */
+function sanitizeRow(cfg, raw, wid) {
   const id = Number(raw?.id);
   if (!Number.isInteger(id)) throw new HttpError(400, "invalid_row_id");
 
@@ -232,7 +252,16 @@ function normalizeDate(value) {
   for (const col of cfg.columns) {
     let v = raw[col];
     if (v === undefined || v === null) v = cfg.defaults[col] ?? null;
-    if (cfg.jsonColumns.includes(col)) v = JSON.stringify(v ?? []);
+    if (cfg.jsonColumns.includes(col)) {
+      v = JSON.stringify(v ?? []);
+      if (v.length > MAX_JSON_CHARS) throw new HttpError(413, "row_too_large");
+    } else if (typeof v === "string") {
+      v = v.slice(0, TEXT_LIMITS[col] ?? MAX_TEXT);
+    } else if (typeof v === "object") {
+      //  אובייקט בעמודה סקלרית הוא תמיד קלט זדוני או באג בלקוח. pg היה
+      //  מסדר אותו כמחרוזת ומכניס זבל לעמודה, ולכן הוא נופל לברירת המחדל.
+      v = cfg.defaults[col] ?? null;
+    }
     values.push(v);
   }
   return values;
@@ -296,6 +325,39 @@ setInterval(() => {
   for (const [key, entry] of attempts) if (now > entry.resetAt) attempts.delete(key);
 }, WINDOW_MS).unref();
 
+/* ── תקרת תעבורה כללית ─────────────────────────────────────────────────────
+ *  ההגבלה שלמעלה שומרת רק על ההזדהות. אחרי התחברות אחת אפשר היה להריץ
+ *  לולאה אינסופית מול /data או מול העלאת קבצים, ולשרוף את מכסת מסד הנתונים
+ *  ואת התעבורה של האתר. זו תקרה רחבה בכוונה — היא לא אמורה להיתקל בשימוש
+ *  אנושי (אפילו סנכרון מלא הוא כמה עשרות בקשות), רק לעצור לולאה.
+ *  המונה בזיכרון התהליך: אחרי פריסה הוא מתאפס, וכשירוצו כמה מופעים כל אחד
+ *  יספור לחוד. להגבלה אמיתית בקנה מידה גדול צריך Redis או שכבת CDN.
+ */
+const traffic = new Map();
+const TRAFFIC_WINDOW_MS = 60_000;
+const MAX_REQUESTS = 300;
+
+router.use((req, res, next) => {
+  const key = req.ip || "unknown";
+  const now = Date.now();
+  const entry = traffic.get(key);
+
+  if (!entry || now > entry.resetAt) {
+    traffic.set(key, { count: 1, resetAt: now + TRAFFIC_WINDOW_MS });
+    return next();
+  }
+  if (++entry.count > MAX_REQUESTS) {
+    res.set("Retry-After", String(Math.ceil((entry.resetAt - now) / 1000)));
+    return fail(res, 429, "too_many_requests");
+  }
+  next();
+});
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of traffic) if (now > entry.resetAt) traffic.delete(key);
+}, TRAFFIC_WINDOW_MS).unref();
+
 router.post(
   "/auth/register",
   rateLimit,
@@ -312,7 +374,7 @@ router.post(
     //  נרשמים דרך קישור הזמנה: בודקים את ההזמנה לפני יצירת המשתמש, כדי לא
     //  לפתוח לו חתונה פרטית משלו. חתונה כזו הופכת אותו לבעלים עם גישה מלאה
     //  ומציגה לו את כל תפריט המערכת — למרות שההזמנה הוגבלה למסך אחד.
-    const inviteToken = String(req.body?.inviteToken ?? "");
+    const inviteToken = asText(req.body?.inviteToken);
     const pending = inviteToken ? await withAdmin((q) => loadInvite(q, inviteToken)) : null;
     const invite = pending?.invite ?? null;
     const joining =
@@ -392,11 +454,11 @@ router.post(
   "/auth/reset",
   rateLimitAlways,
   route(async (req, res) => {
-    const password = String(req.body?.password ?? "");
+    const password = asText(req.body?.password);
     if (password.length < 8) return fail(res, 400, "weak_password");
     if (password.length > 200) return fail(res, 400, "password_too_long");
 
-    const result = await consumePasswordReset(String(req.body?.token ?? ""), password);
+    const result = await consumePasswordReset(asText(req.body?.token), password);
     if (result.error) return fail(res, 400, result.error);
 
     //  לא מחברים אוטומטית: consumePasswordReset מוחק את כל הסשנים, וזו
@@ -434,7 +496,7 @@ router.post(
   "/weddings",
   requireAuth,
   route(async (req, res) => {
-    const name = String(req.body?.name ?? "").trim().slice(0, 120) || "החתונה שלי";
+    const name = asText(req.body?.name).trim().slice(0, 120) || "החתונה שלי";
     const date = req.body?.date || null;
     if (date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
       return fail(res, 400, "invalid_date");
@@ -478,7 +540,7 @@ router.patch(
     };
 
     if (req.body?.name !== undefined) {
-      const name = String(req.body.name ?? "").trim().slice(0, 120);
+      const name = asText(req.body.name).trim().slice(0, 120);
       if (!name) return fail(res, 400, "invalid_name");
       push("name", name);
     }
@@ -497,7 +559,7 @@ router.patch(
       ["partnerB", "partner_b"],
     ]) {
       if (req.body?.[key] === undefined) continue;
-      push(column, String(req.body[key] ?? "").trim().slice(0, 80));
+      push(column, asText(req.body[key]).trim().slice(0, 80));
     }
 
     if (!sets.length) return fail(res, 400, "no_changes");
@@ -673,7 +735,7 @@ router.post(
     //  ב-lowercase, כמו `users.email_lower`); כשהוא ריק נוצרת הזמנת
     //  קישור שכל מי שמחזיק בטוקן יכול לממש — פעם אחת בלבד.
     const raw = req.body?.email;
-    const wantsEmail = raw != null && String(raw).trim() !== "";
+    const wantsEmail = raw != null && asText(raw).trim() !== "";
     let email = null;
     if (wantsEmail) {
       const normalized = normalizeEmail(raw);
@@ -719,7 +781,7 @@ router.post(
   "/invites/accept",
   requireAuth,
   route(async (req, res) => {
-    const token = String(req.body?.token ?? "");
+    const token = asText(req.body?.token);
     if (!token) return fail(res, 400, "invite_not_found");
 
     const result = await withAdmin(async (q) => {
@@ -936,7 +998,7 @@ function vendorIdParam(req, res) {
 
 /** שם קובץ בטוח לכותרת Content-Disposition. */
 function safeFileName(name) {
-  const clean = String(name ?? "")
+  const clean = asText(name)
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f"\\/:*?<>|]/g, "_")
     .trim()
@@ -990,8 +1052,8 @@ router.post(
     if (vendorId === null) return;
 
     const name = safeFileName(req.body?.name);
-    const mime = String(req.body?.mime ?? "").slice(0, 100) || "application/octet-stream";
-    const b64 = String(req.body?.data ?? "");
+    const mime = asText(req.body?.mime).slice(0, 100) || "application/octet-stream";
+    const b64 = asText(req.body?.data);
     if (!b64) return fail(res, 400, "empty_file");
 
     const buf = Buffer.from(b64, "base64");
@@ -1008,6 +1070,22 @@ router.post(
         [wid, vendorId]
       );
       if (!exists.rows.length) throw new HttpError(409, "vendor_not_synced");
+
+      //  מכסת אחסון לחתונה. בלעדיה כל בעל חשבון יכול להעלות קבצים של 5MB
+      //  בלולאה עד שהמסד מתמלא — הגבלה לקובץ בודד אינה מגבילה כמות.
+      //  הספירה בתוך אותה טרנזקציה של ה-INSERT, ולכן שתי העלאות מקבילות
+      //  לא יכולות לחמוק שתיהן מעבר לתקרה.
+      const used = await q(
+        `SELECT count(*)::INT8 AS files, coalesce(sum(size), 0)::INT8 AS bytes
+           FROM public.vendor_files WHERE wedding_id = $1`,
+        [wid]
+      );
+      if (Number(used.rows[0].files) >= MAX_FILES_PER_WEDDING) {
+        throw new HttpError(413, "file_quota_exceeded");
+      }
+      if (Number(used.rows[0].bytes) + buf.length > MAX_BYTES_PER_WEDDING) {
+        throw new HttpError(413, "storage_quota_exceeded");
+      }
 
       const { rows } = await q(
         `INSERT INTO public.vendor_files (wedding_id, vendor_id, name, mime, size, data)

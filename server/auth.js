@@ -36,9 +36,18 @@ const MAX_PASSWORD = 200; // חוסם DoS דרך scrypt על קלט ענק
 export const MAX_EMAIL = 254;
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
 
+/*  גוף הבקשה הוא JSON של הלקוח, ולכן שדה "מחרוזת" יכול להגיע ככל דבר.
+ *  ל-String() יש מלכודת: אובייקט כמו {"toString": 1} מפיל אותה ב-TypeError
+ *  ("Cannot convert object to primitive value"), והבקשה חוזרת 500 במקום דחייה מסודרת.
+ *  על נתיב לא-מזוהה זהו גם וקטור להצפת לוגים בזול. שדה שאינו מחרוזת
+ *  פשוט אינו קלט תקין, ולכן הוא מטופל כריק. */
+export function asText(value) {
+  return typeof value === "string" ? value : "";
+}
+
 /** בודק שכתובת המייל תקינה ומחזיר אותה מנוקה, או `null`. */
 export function normalizeEmail(value) {
-  const trimmed = String(value ?? "").trim();
+  const trimmed = asText(value).trim();
   if (!trimmed || trimmed.length > MAX_EMAIL) return null;
   if (!EMAIL_RE.test(trimmed)) return null;
   //  כל חלק ב"מקומי" רגיש-רישיות לפי התקן, אבל בפועל אף ספק לא מבחין.
@@ -67,16 +76,30 @@ export async function hashPassword(password) {
   ].join("$");
 }
 
+/*  \u05e4\u05e8\u05de\u05d8\u05e8\u05d9 scrypt \u05e0\u05e7\u05e8\u05d0\u05d9\u05dd \u05de\u05ea\u05d5\u05da \u05d4-hash \u05d4\u05e9\u05de\u05d5\u05e8, \u05db\u05d3\u05d9 \u05e9\u05e0\u05d5\u05db\u05dc \u05dc\u05d4\u05e2\u05dc\u05d5\u05ea \u05d0\u05d5\u05ea\u05dd \u05d1\u05e2\u05ea\u05d9\u05d3\n *  \u05d1\u05dc\u05d9 \u05dc\u05e4\u05e1\u05d5\u05dc \u05e1\u05d9\u05e1\u05de\u05d0\u05d5\u05ea \u05e7\u05d9\u05d9\u05de\u05d5\u05ea. \u05d4\u05de\u05e9\u05de\u05e2\u05d5\u05ea: \u05e2\u05e8\u05da \u05d1\u05e9\u05d5\u05e8\u05d4 \u05e9\u05dc\u05d5\u05d8\u05d4 \u05de\u05db\u05ea\u05d9\u05d1 \u05db\u05de\u05d4 \u05e2\u05d1\u05d5\u05d3\u05ea\n *  CPU \u05d4\u05e9\u05e8\u05ea \u05d9\u05e9\u05e7\u05d9\u05e2 \u05d1\u05db\u05dc \u05d4\u05ea\u05d7\u05d1\u05e8\u05d5\u05ea. N=2^30 \u05d9\u05e7\u05e4\u05d9\u05d0 \u05d0\u05ea \u05d4\u05ea\u05d4\u05dc\u05d9\u05da, \u05d5\u05dc\u05db\u05df \u05d4\u05d2\u05d1\u05d5\u05dc\u05d5\u05ea\n *  \u05de\u05d7\u05d5\u05e9\u05d1\u05d9\u05dd \u05d1\u05e7\u05d5\u05d3 \u05d5\u05dc\u05d0 \u05e0\u05dc\u05e7\u05d7\u05d9\u05dd \u05db\u05dc\u05e9\u05d5\u05e0\u05dd \u05de\u05d1\u05e1\u05d9\u05e1 \u05d4\u05e0\u05ea\u05d5\u05e0\u05d9\u05dd.  */
+const SCRYPT_MAX = { N: 1 << 20, r: 32, p: 4, keylen: 128 };
+
+function scryptParam(value, max) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= max ? n : 0;
+}
+
 export async function verifyPassword(password, stored) {
-  const parts = String(stored).split("$");
+  const parts = typeof stored === "string" ? stored.split("$") : [];
   if (parts.length !== 6 || parts[0] !== "scrypt") return false;
 
   const [, N, r, p, salt, hash] = parts;
   const expected = Buffer.from(hash, "base64");
-  const actual = await scryptAsync(password, Buffer.from(salt, "base64"), expected.length, {
-    N: Number(N),
-    r: Number(r),
-    p: Number(p),
+  const cost = scryptParam(N, SCRYPT_MAX.N);
+  const block = scryptParam(r, SCRYPT_MAX.r);
+  const par = scryptParam(p, SCRYPT_MAX.p);
+  if (!cost || !block || !par || !expected.length || expected.length > SCRYPT_MAX.keylen) return false;
+
+  const actual = await scryptAsync(asText(password), Buffer.from(salt, "base64"), expected.length, {
+    N: cost,
+    r: block,
+    p: par,
+    maxmem: 256 * 1024 * 1024,
   });
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
@@ -91,7 +114,7 @@ export function validateCredentials(email, password, { isRegistration = false } 
   //  מעולם, ולכן אין כאן סיכון לנעול חשבון קיים בחוץ.
   const normalized = normalizeEmail(email);
   if (!normalized) return { error: "invalid_email" };
-  const pw = String(password ?? "");
+  const pw = asText(password);
   if (pw.length < MIN_PASSWORD) return { error: "weak_password" };
   if (pw.length > MAX_PASSWORD) return { error: "password_too_long" };
   return { email: normalized, password: pw, isRegistration };

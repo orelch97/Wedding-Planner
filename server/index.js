@@ -16,6 +16,7 @@ loadEnv();
 import { router } from "./api.js";
 import { parseCookies, readSession, purgeExpiredSessions, COOKIE_NAME } from "./auth.js";
 import { getPool, closePool, pingDatabase, isConnectionError } from "./db.js";
+import { APP_URL } from "./mailer.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PORT || 3001);
@@ -29,7 +30,10 @@ if (!process.env.DATABASE_URL) {
 const app = express();
 
 //  מאחורי proxy (Render / Fly / nginx) — כדי ש-req.ip יהיה אמיתי ו-Secure יזוהה.
-if (process.env.TRUST_PROXY) app.set("trust proxy", 1);
+//  בייצור זה מופעל תמיד: השרת עולה מאחורי מאזן עומסים שמסיים את ה-TLS,
+//  ובלי זה כל הבקשות נראות מאותו IP — והגבלת הקצב היתה נועלת את כולם
+//  בבת אחת. הערך 1 = אמון בקפיצה אחת בלבד, כך שאי אפשר לזייף X-Forwarded-For.
+if (isProd || process.env.TRUST_PROXY) app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
 //  כותרות אבטחה. public/_headers עובד רק אצל מארחים סטטיים (Netlify /
@@ -60,7 +64,49 @@ app.use((_req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: "8mb" })); // ייבוא רשימת מוזמנים גדולה
+/* ── גודל גוף הבקשה ——————————————————————————————————
+ *  רק שלושה נתיבים מעבירים נפח אמיתי: ייבוא רשימת מוזמנים והעלאת קובץ.
+ *  מגבלה גלובלית של 8MB הייתה מאפשרת לכל אדם — גם ללא הזדהות, כי הפרסור
+ *  רץ לפני בדיקת העוגייה — להכריח את השרת לפרסר 8MB של JSON בכל קריאה
+ *  ל-/api/auth/login. שאר הנתיבים שולחים עשרות בייטים, ולכן 64kb מרווח להם.
+ */
+const bulkJson = express.json({ limit: "8mb" });
+const smallJson = express.json({ limit: "64kb" });
+const BULK_ROUTES = /^\/api\/weddings\/[^/]+\/(sync|seed|vendors\/[^/]+\/files)\/?$/;
+
+app.use((req, res, next) =>
+  (BULK_ROUTES.test(req.path) ? bulkJson : smallJson)(req, res, next)
+);
+
+/* ── הגנה מפני CSRF —————————————————————————————————————
+ *  עוגיית הסשן היא SameSite=Strict, שמונעת את התקיפה בכל דפדפן עדכני.
+ *  הבדיקה כאן היא השכבה השנייה: היא לא תלויה בהתנהגות הדפדפן ולא
+ *  בניסוח העוגייה, ולכן גם אם אחד מהם ישתנה בעתיד ההגנה נשמרת.
+ *  בקשה ללא Origin (curl, סקריפט, בדיקות) עוברת — היא אינה וקטור CSRF,
+ *  שכן CSRF מוגדרת כבקשה שהדפדפן שולח לבד עם העוגייה.
+ */
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const APP_ORIGIN_HOST = (() => {
+  try {
+    return new URL(APP_URL).host;
+  } catch {
+    return null;
+  }
+})();
+
+app.use("/api", (req, res, next) => {
+  if (SAFE_METHODS.has(req.method)) return next();
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  let host;
+  try {
+    host = new URL(origin).host;
+  } catch {
+    return res.status(403).json({ error: "bad_origin" });
+  }
+  if (host === req.headers.host || host === APP_ORIGIN_HOST) return next();
+  return res.status(403).json({ error: "bad_origin" });
+});
 
 //  בדיקת חיים ל-Render. חייבת להיות לפני זיהוי המשתמש, כדי שהיא לא תיגע
 //  במסד ולא תיכשל בזמן שהמסד מתעורר. לא מחזירה שום מידע על המערכת.

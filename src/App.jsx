@@ -693,6 +693,62 @@ function navForScopes(scopes) {
   return NAV.filter((item) => item.scope && hasScope(scopes, item.scope));
 }
 
+/*  מחוות פתיחה למגירת הניווט בטלפון.
+ *  המגירה יושבת בקצה הימני (RTL), ולכן החלקה מהקצה הימני שמאלה פותחת
+ *  אותה — אותה תנועה שבה היא נכנסת למסך — והחלקה ימינה סוגרת.
+ *
+ *  המאזינים פסיביים: אנחנו רק מודדים את התנועה ולא מבטלים אותה, אחרת
+ *  הגלילה האנכית הרגילה של הדף הייתה נתקעת בכל נגיעה.  */
+const EDGE_ZONE = 32; // רוחב הרצועה בקצה שממנה מתחילה פתיחה
+const SWIPE_MIN = 60; // מרחק מינימלי כדי שזו תיחשב מחווה ולא נגיעה
+
+function useDrawerSwipe(open, setOpen) {
+  useEffect(() => {
+    //  ב-lg המגירה היא חלק מהפריסה ואין מה לפתוח.
+    const wide = window.matchMedia("(min-width: 1024px)");
+    let startX = 0;
+    let startY = 0;
+    let tracking = false;
+
+    function onStart(e) {
+      if (e.touches.length !== 1 || wide.matches) return;
+      //  כשמודל פתוח הוא מכסה את המסך; פתיחת המגירה מאחוריו רק מבלבלת.
+      if (document.querySelector('[role="dialog"]')) return;
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      //  פתיחה רק מהקצה. בלי ההגבלה הזו כל החלקה אופקית בתוך התוכן
+      //  (טבלה שנגללת לצדדים, סרגל טאבים) הייתה פותחת את התפריט.
+      tracking = open || startX >= window.innerWidth - EDGE_ZONE;
+    }
+
+    function onEnd(e) {
+      if (!tracking) return;
+      tracking = false;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      //  תנועה אנכית דומיננטית היא גלילה, לא מחווה.
+      if (Math.abs(dx) < SWIPE_MIN || Math.abs(dy) > Math.abs(dx)) return;
+      setOpen(dx < 0);
+    }
+
+    function onCancel() {
+      tracking = false;
+    }
+
+    const opts = { passive: true };
+    document.addEventListener("touchstart", onStart, opts);
+    document.addEventListener("touchend", onEnd, opts);
+    document.addEventListener("touchcancel", onCancel, opts);
+    return () => {
+      document.removeEventListener("touchstart", onStart);
+      document.removeEventListener("touchend", onEnd);
+      document.removeEventListener("touchcancel", onCancel);
+    };
+  }, [open, setOpen]);
+}
+
 function Sidebar({
   active,
   onChange,
@@ -5583,6 +5639,7 @@ function WeddingApp({
     ? requestedView
     : navItems[0]?.key ?? "guests";
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  useDrawerSwipe(sidebarOpen, setSidebarOpen);
   //  כשמגירת הניווט פתוחה בנייד היא מכסה את המסך, אבל הדף שמאחוריה עדיין
   //  גלל עם האצבע — מה שגרם לתחושה של "המסך קופץ". נועלים את הגלילה של
   //  ה-body כל עוד המגירה פתוחה, ומשחררים בסגירה או בפירוק הרכיב.

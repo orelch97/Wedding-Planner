@@ -1057,7 +1057,8 @@ function Overview({
       />
 
       {/* Summary cards */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      {/*  שתי עמודות גם בנייד: כרטיס נתון בשורה שלמה מבזבז את מחצית הרוחב.  */}
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-3">
         <StatCard
           icon={Wallet}
           label="תקציב מול הוצאה"
@@ -4129,7 +4130,7 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
         </div>
       </Card>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-4">
         <StatCard
           icon={Wallet}
           label={
@@ -4196,31 +4197,31 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
 
         <form
           onSubmit={addItem}
-          className="mb-5 grid gap-3 rounded-2xl bg-white/50 p-4 ring-1 ring-slate-200/70 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
+          className="mb-4 grid grid-cols-2 gap-2 rounded-2xl bg-white/50 p-3 ring-1 ring-slate-200/70 sm:mb-5 sm:gap-3 sm:p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
         >
           <input
             value={form.category}
             onChange={(e) => setForm({ ...form, category: e.target.value })}
             placeholder="שם הסעיף"
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400"
+            className="col-span-2 min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400 sm:col-span-1"
           />
           <input
             type="number"
             value={form.expected}
             onChange={(e) => setForm({ ...form, expected: e.target.value })}
             placeholder="עלות צפויה"
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400"
+            className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400"
           />
           <input
             type="number"
             value={form.actual}
             onChange={(e) => setForm({ ...form, actual: e.target.value })}
             placeholder="עלות בפועל"
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400"
+            className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400"
           />
           <button
             type="submit"
-            className="flex items-center justify-center gap-1.5 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-gold-600"
+            className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-gold-600 sm:col-span-1"
           >
             <Plus size={18} /> הוסף
           </button>

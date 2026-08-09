@@ -1,0 +1,63 @@
+# =============================================================================
+#  render.yaml — Blueprint לפריסה ב-Render
+# -----------------------------------------------------------------------------
+#  Render → New → Blueprint → בחרו את הריפו. Render יקרא את הקובץ הזה.
+#
+#  מה שמסומן `sync: false` לא נשמר בקובץ ולא נכנס ל-git — יש להזין אותו
+#  ידנית ב-Dashboard → Environment. אלה סודות.
+# =============================================================================
+
+services:
+  - type: web
+    name: wedding-planner
+    runtime: node
+    plan: free
+    region: frankfurt # הקרוב ביותר לישראל מבין אזורי החינם
+
+    #  --include=dev חובה: NODE_ENV=production גורם ל-npm לדלג על
+    #  devDependencies, ואז vite לא מותקן וה-build נכשל.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+
+    #  נתיב שלא נוגע במסד, כדי ש-Render לא יסמן את השירות כמת בזמן
+    #  שהמסד מתעורר.
+    healthCheckPath: /api/health
+
+    envVars:
+      #  מפעיל את דגל Secure בעוגיית הסשן ואת הגשת dist/ מהשרת.
+      - key: NODE_ENV
+        value: production
+
+      #  Render יושב מאחורי reverse proxy. בלי זה req.ip הוא כתובת ה-proxy,
+      #  וכל התוקפים נספרים יחד בהגבלת הקצב על ניסיונות התחברות.
+      - key: TRUST_PROXY
+        value: "1"
+
+      #  נצרב לתוך ה-build. השרת מגיש גם את ה-API וגם את הקבצים — אותו origin.
+      - key: VITE_API_URL
+        value: /api
+
+      - key: NODE_VERSION
+        value: "24"
+
+      #  ── להזנה ידנית ב-Dashboard ──────────────────────────────────────────
+      #  מחרוזת החיבור ל-CockroachDB. סוד — לעולם לא בקובץ.
+      - key: DATABASE_URL
+        sync: false
+
+      #  כתובת הבסיס לקישורי איפוס סיסמה, כולל הסכמה:
+      #  https://<the-service>.onrender.com
+      - key: APP_URL
+        sync: false
+
+      #  SMTP. בלעדיהם קישורי איפוס סיסמה נכתבים ללוג במקום להישלח.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false

@@ -15,7 +15,7 @@ loadEnv();
 
 import { router } from "./api.js";
 import { parseCookies, readSession, purgeExpiredSessions, COOKIE_NAME } from "./auth.js";
-import { getPool, closePool } from "./db.js";
+import { getPool, closePool, pingDatabase, isConnectionError } from "./db.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PORT || 3001);
@@ -32,7 +32,39 @@ const app = express();
 if (process.env.TRUST_PROXY) app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
+//  כותרות אבטחה. public/_headers עובד רק אצל מארחים סטטיים (Netlify /
+//  Cloudflare Pages); כשהשרת הזה מגיש את הבילד בעצמו (Render) הן חייבות
+//  לצאת מכאן, אחרת אין CSP ואין HSTS כלל. שמור על התאמה בין שני הקבצים.
+const SECURITY_HEADERS = {
+  "Content-Security-Policy":
+    "default-src 'self'; script-src 'self'; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src 'self' data: https://fonts.gstatic.com; " +
+    "img-src 'self' data: blob:; " +
+    "connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; " +
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Permissions-Policy":
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+  "Cross-Origin-Opener-Policy": "same-origin",
+};
+
+app.use((_req, res, next) => {
+  res.set(SECURITY_HEADERS);
+  //  HSTS רק ב-HTTPS. בפיתוח מקומי הוא היה נועל את הדפדפן על https://localhost.
+  if (isProd) {
+    res.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+  }
+  next();
+});
+
 app.use(express.json({ limit: "8mb" })); // ייבוא רשימת מוזמנים גדולה
+
+//  בדיקת חיים ל-Render. חייבת להיות לפני זיהוי המשתמש, כדי שהיא לא תיגע
+//  במסד ולא תיכשל בזמן שהמסד מתעורר. לא מחזירה שום מידע על המערכת.
+app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
 //  מזהה את המשתמש מהעוגייה. לא חוסם — כל נתיב מחליט בעצמו אם הוא דורש זיהוי.
 app.use(async (req, _res, next) => {
@@ -68,12 +100,29 @@ app.use((err, _req, res, _next) => {
   if (err?.code === "42501") return res.status(403).json({ error: "forbidden" });
   if (err?.status) return res.status(err.status).json({ error: err.code });
 
+  //  המסד לא זמין גם אחרי כל הניסיונות החוזרים. 503 ולא 500, כדי
+  //  שהלקוח ידע שזה מצב זמני ששווה לנסות בגללו שוב, ולא באג קבוע.
+  if (err?.code === "ECONNREFUSED" || err?.code === "ETIMEDOUT" || err?.code?.startsWith?.("08")) {
+    console.error("[db] המסד אינו זמין:", err.message);
+    return res.status(503).json({ error: "database_unavailable" });
+  }
+
   //  הודעות שגיאה של המסד עלולות להסגיר מבנה סכימה. נרשמות אצלנו, לא נשלחות.
   console.error("[api]", err);
   res.status(500).json({ error: "server_error" });
 });
 
 getPool();
+
+//  קלאסטר CockroachDB Basic נרדם כשאין אליו תנועה. בלי החימום הזה,
+//  המשתמש הראשון שנכנס אחרי יממה של שקט הוא זה שממתין להתעוררות.
+//  כישלון כאן אינו קטלני: הבקשה הבאה תנסה שוב דרך אותו מנגנון.
+await pingDatabase().catch((err) => console.warn("[db] חימום נכשל:", err.message));
+
+//  שומר על הקלאסטר ער כל עוד השרת חי. unref — כדי שלא יעכב כיבוי תקין.
+const KEEPALIVE_MS = Number(process.env.DB_KEEPALIVE_MS || 4 * 60_000);
+setInterval(() => pingDatabase().catch(() => {}), KEEPALIVE_MS).unref();
+
 await purgeExpiredSessions().catch((err) =>
   console.warn("[db] session cleanup skipped:", err.message)
 );
@@ -81,6 +130,19 @@ setInterval(() => purgeExpiredSessions().catch(() => {}), 6 * 60 * 60_000).unref
 
 const server = app.listen(PORT, () => {
   console.log(`\x1b[32m✓\x1b[0m API על http://localhost:${PORT}`);
+});
+
+//  רשת ביטחון אחרונה. סוקט שמת מול המסד אינו סיבה להפיל שרת שלם —
+//  הבקשה שנפגעה כבר קיבלה שגיאה דרך לולאת הניסיונות, ושאר המשתמשים לא
+//  אמורים לשלם על כך בהפסקת שירות. כל חריגה אחרת מפילה כרגיל:
+//  מצב לא ידוע מסוכן יותר מאתחול מחדש.
+process.on("uncaughtException", (err) => {
+  if (isConnectionError(err)) {
+    console.error("[db] חיבור נפל מחוץ לבקשה:", err.message);
+    return;
+  }
+  console.error("[fatal]", err);
+  process.exit(1);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

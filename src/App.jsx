@@ -5249,6 +5249,17 @@ function WeddingShell({ session }) {
     }
   });
   const [error, setError] = useState("");
+  //  קלאסטר שנרדם מחוסר תנועה מחזיר שגיאה על הבקשה הראשונה ועונה כרגיל
+  //  על השנייה. בלי הניסיון החוזר המשתמש נתקע במסך שגיאה שהמוצא היחיד
+  //  ממנו הוא יציאה מהחשבון — והוא לא אמור לדעת שמדובר במסד שמתעורר.
+  const [attempt, setAttempt] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+
+  const retry = useCallback(() => {
+    setError("");
+    setWeddings(null);
+    setAttempt((n) => n + 1);
+  }, []);
 
   const refreshWeddings = useCallback(async () => {
     const list = await listWeddings();
@@ -5258,6 +5269,7 @@ function WeddingShell({ session }) {
 
   useEffect(() => {
     let cancelled = false;
+    let timer = null;
     (async () => {
       try {
         let target = null;
@@ -5273,20 +5285,45 @@ function WeddingShell({ session }) {
         }
         const list = await refreshWeddings();
         if (cancelled) return;
+        setRetrying(false);
         setActiveWeddingId((cur) => {
           if (target && list.some((w) => w.id === target)) return target;
           if (cur && list.some((w) => w.id === cur)) return cur;
           return list[0]?.id ?? null;
         });
       } catch (err) {
+        if (cancelled) return;
         console.error("Failed to load weddings:", err);
-        if (!cancelled) setError("טעינת רשימת החתונות נכשלה. רעננו את הדף.");
+
+        //  שלושה ניסיונות אוטומטיים לפני שמוויתרים ומציגים מסך. זמן ההמתנה
+        //  גדל בכל סבב, כדי לכסות גם שרת שעולה משינה וגם מסד שמתעורר.
+        const transient =
+          err?.status === 503 ||
+          err?.status === 502 ||
+          err?.status === 504 ||
+          err?.code === "network_error" ||
+          err?.code === "timeout";
+
+        if (transient && attempt < 3) {
+          setRetrying(true);
+          timer = setTimeout(() => setAttempt((n) => n + 1), 2000 * 2 ** attempt);
+          return;
+        }
+
+        setRetrying(false);
+        setError(
+          transient
+            ? "השרת עדיין מתעורר. המתינו רגע ונסו שוב."
+            : "טעינת רשימת החתונות נכשלה. נסו שוב."
+        );
       }
     })();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
-  }, [refreshWeddings]);
+    //  attempt בכוונה ברשימה — הגדלתו היא שמפעילה ניסיון טעינה נוסף.
+  }, [refreshWeddings, attempt]);
 
   useEffect(() => {
     try {
@@ -5311,20 +5348,31 @@ function WeddingShell({ session }) {
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
         <CloudOff className="text-rose-400" size={32} />
         <p className="text-sm text-slate-600">{error}</p>
-        <button
-          onClick={signOutAndWipe}
-          className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-600 ring-1 ring-slate-200"
-        >
-          יציאה
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={retry}
+            className="rounded-xl bg-gold-500 px-4 py-2 text-sm font-semibold text-white"
+          >
+            נסו שוב
+          </button>
+          <button
+            onClick={signOutAndWipe}
+            className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-600 ring-1 ring-slate-200"
+          >
+            יציאה
+          </button>
+        </div>
       </div>
     );
   }
 
   if (weddings === null) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3">
         <Loader2 className="animate-spin text-gold-500" size={32} />
+        {retrying && (
+          <p className="text-xs text-slate-400">השרת מתעורר, עוד רגע…</p>
+        )}
       </div>
     );
   }

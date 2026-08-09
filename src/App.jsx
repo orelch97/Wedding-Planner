@@ -34,6 +34,7 @@ import {
   Save,
   Settings2,
   Menu,
+  MoreHorizontal,
   CheckCheck,
   Search,
   Star,
@@ -635,7 +636,9 @@ function ProgressBar({ value, max, tone = "gold" }) {
 function Card({ children, className = "" }) {
   return (
     <div
-      className={`glass rounded-3xl p-5 shadow-[0_10px_40px_-15px_rgba(51,65,85,0.25)] ${className}`}
+      /*  רווח פנימי קטן יותר בנייד: ב-390px כל כרטיס ביזבז 40px מהרוחב
+          ו-40px מהגובה רק על ריפוד, ויש עשרות כרטיסים במסך.  */
+      className={`glass rounded-2xl p-3.5 shadow-[0_10px_40px_-15px_rgba(51,65,85,0.25)] sm:rounded-3xl sm:p-5 ${className}`}
     >
       {children}
     </div>
@@ -644,18 +647,18 @@ function Card({ children, className = "" }) {
 
 function SectionTitle({ icon: Icon, title, subtitle, action }) {
   return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+    <div className="mb-4 flex flex-wrap items-end justify-between gap-3 sm:mb-6">
       {/*  במובייל הכותרת תופסת שורה שלמה והאקשן יורד מתחתיה. בלי זה הכותרת
           נמעכת לשלוש שורות כדי לפנות מקום לכפתור.  */}
-      <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto sm:flex-1">
-        <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-gold-400 to-gold-600 text-white shadow-lg shadow-gold-500/30">
-          <Icon size={22} />
+      <div className="flex w-full min-w-0 items-center gap-2.5 sm:w-auto sm:flex-1 sm:gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-gold-400 to-gold-600 text-white shadow-lg shadow-gold-500/30 sm:h-11 sm:w-11 sm:rounded-2xl">
+          <Icon size={20} />
         </div>
         <div className="min-w-0">
-          <h2 className="font-[var(--font-display)] text-xl font-bold text-slate-800 sm:text-2xl">
+          <h2 className="font-[var(--font-display)] text-lg font-bold text-slate-800 sm:text-2xl">
             {title}
           </h2>
-          {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
+          {subtitle && <p className="text-xs text-slate-500 sm:text-sm">{subtitle}</p>}
         </div>
       </div>
       {action && (
@@ -811,16 +814,16 @@ function StatCard({ icon: Icon, label, value, sub, tone = "gold", children }) {
       />
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-xs font-medium text-slate-500 sm:text-sm">{label}</p>
+          <p className="text-[11px] font-medium leading-tight text-slate-500 sm:text-sm">{label}</p>
           {/*  סכומים כמו "‎-139,500 ₪" גלשו מהכרטיס ונחתכו ב-overflow-hidden.
               clamp מקטין את הגופן לפי רוחב המסך במקום לחתוך ספרות.  */}
-          <p className="mt-1 text-[clamp(1.25rem,2.1vw,1.875rem)] font-extrabold leading-tight tracking-tight text-slate-800">
+          <p className="mt-0.5 text-[clamp(1.125rem,2.1vw,1.875rem)] font-extrabold leading-tight tracking-tight text-slate-800 sm:mt-1">
             {value}
           </p>
-          {sub && <p className="mt-1 text-[11px] text-slate-500 sm:text-xs">{sub}</p>}
+          {sub && <p className="mt-0.5 text-[11px] leading-tight text-slate-500 sm:mt-1 sm:text-xs">{sub}</p>}
         </div>
         <div
-          className={`grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-gradient-to-br sm:h-12 sm:w-12 ${
+          className={`grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-gradient-to-br sm:h-12 sm:w-12 sm:rounded-2xl ${
             tone === "gold"
               ? "from-gold-400 to-gold-600"
               : tone === "sage"
@@ -828,10 +831,10 @@ function StatCard({ icon: Icon, label, value, sub, tone = "gold", children }) {
               : "from-rose-300 to-rose-500"
           } text-white shadow-lg`}
         >
-          <Icon size={22} />
+          <Icon size={18} />
         </div>
       </div>
-      {children && <div className="mt-4">{children}</div>}
+      {children && <div className="mt-3 sm:mt-4">{children}</div>}
     </Card>
   );
 }
@@ -1044,7 +1047,7 @@ function Overview({
   }, [guests, vendors, budget]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Countdown hero */}
       <Countdown
         date={weddingDate}
@@ -1383,17 +1386,26 @@ const GuestCard = memo(function GuestCard({
     //  להקיש עליהם, ו-16px גופן כדי ש-iOS לא יעשה זום אוטומטי בפוקוס.
     "min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm";
 
+  //  כרטיס פתוח הוא כ-420px. עם 592 מוזמנים זה שני כרטיסים למסך וגלילה
+  //  אין-סופית, ולכן ברירת המחדל היא שורת סיכום שנפתחת בלחיצה.
+  const [open, setOpen] = useState(false);
+  const rsvpKey = RSVP[g.rsvp] ? g.rsvp : "pending";
+  const rsvpLabel = RSVP[rsvpKey].label;
+  const rsvpDot = { sage: "bg-sage-500", gold: "bg-gold-500", rose: "bg-rose-400" }[
+    RSVP[rsvpKey].color
+  ];
+
   return (
     <div
-      className={`rounded-2xl border p-4 transition ${
+      className={`rounded-2xl border p-3 transition sm:p-4 ${
         selected ? "border-gold-300 bg-gold-50/60" : "border-slate-200 bg-white/70"
       }`}
     >
-      <div className="mb-3 flex items-center gap-2">
+      <div className={`flex items-center gap-1.5 ${open ? "mb-3" : ""}`}>
         {/*  תיבת הסימון היא 16px ובלתי אפשרית ללחיצה באצבע. עטיפה
             ב-label עם ריפוד מגדילה את אזור הלחיצה ל-44px בלי לשנות
             את המראה ובלי להזיז את שאר השורה.  */}
-        <label className="-m-2.5 grid h-11 w-11 shrink-0 cursor-pointer place-items-center">
+        <label className="-m-1.5 grid h-11 w-9 shrink-0 cursor-pointer place-items-center">
           <input
             type="checkbox"
             checked={!!selected}
@@ -1407,17 +1419,42 @@ const GuestCard = memo(function GuestCard({
           onChange={(e) => setName(e.target.value)}
           onBlur={() => name !== (g.name || "") && updateName(g.id, name)}
           placeholder="שם האורח"
-          className="min-h-11 flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base font-semibold text-slate-800 outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
+          className="min-h-11 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base font-semibold text-slate-800 outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
         />
+        {/*  סיכום בשורה עצמה: מספר הכיסאות ונקודת צבע לסטטוס, כדי
+            שלא יהיה צורך לפתוח כרטיס רק כדי לראות אותם.  */}
+        {!open && (
+          <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
+            <span className="tabular-nums" title="כיסאות">
+              {g.seats ?? 1}
+            </span>
+            <span
+              title={rsvpLabel}
+              aria-label={`אישור הגעה: ${rsvpLabel}`}
+              className={`h-2 w-2 rounded-full ${rsvpDot}`}
+            />
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-label={`${open ? "סגירת" : "פתיחת"} פרטי ${g.name || "מוזמן"}`}
+          className="grid h-11 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+        >
+          <ChevronDown size={18} className={open ? "rotate-180 transition" : "transition"} />
+        </button>
         <button
           onClick={() => removeGuest(g.id)}
           aria-label={`מחיקת ${g.name || "מוזמן"}`}
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
+          className="grid h-11 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
         >
           <Trash2 size={18} />
         </button>
       </div>
 
+      {open && (
+      <>
       <div className="grid grid-cols-2 gap-2.5">
         <label className="col-span-2 text-xs font-medium text-slate-500">
           נייד
@@ -1554,6 +1591,8 @@ const GuestCard = memo(function GuestCard({
           </span>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 });
@@ -2162,8 +2201,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   const sourceColor = (s) => (s === "הורים" ? "sage" : "gold");
 
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-5">
+    <div className="space-y-4 sm:space-y-6">
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-5">
         <StatCard icon={Users} label="סה״כ רשומות" value={totals.count} tone="gold" />
         <StatCard
           icon={UserCheck}
@@ -2244,11 +2283,13 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         <>
       {/* RSVP summary */}
       <Card>
-        <div className="flex flex-wrap items-center gap-3">
+        {/*  \u05d1\u05e0\u05d9\u05d9\u05d3 \u05d4\u05db\u05d5\u05ea\u05e8\u05ea \u05d9\u05d5\u05e9\u05d1\u05ea \u05de\u05e2\u05dc \u05d4\u05e6\u05d9\u05e4\u05e1 \u05d5\u05dc\u05d0 \u05dc\u05e6\u05d9\u05d3\u05dd. \u05db\u05e9\u05d4\u05db\u05dc \u05d4\u05d9\u05d4 \u05d1\u05e9\u05d5\u05e8\u05d4
+            \u05d0\u05d7\u05ea \u05d4\u05db\u05d5\u05ea\u05e8\u05ea \u05d1\u05dc\u05e2\u05d4 \u05db-140px \u05d5\u05d4\u05e9\u05dc\u05d5\u05e9\u05d4 \u05e0\u05d3\u05d7\u05e7\u05d5 \u05dc\u05e2\u05de\u05d5\u05d3\u05d4 \u05e6\u05e8\u05d4 \u05d1\u05e6\u05d3 \u05d4\u05e9\u05e0\u05d9.  */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
             <CheckCheck size={18} className="text-sage-500" /> סטטוס אישורי הגעה
           </div>
-          <div className="flex flex-1 flex-wrap gap-2">
+          <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-1 sm:flex-wrap">
             {[
               { key: "confirmed", label: "אישרו הגעה", value: totals.confirmedPeople, records: totals.confirmedCount, color: "sage" },
               { key: "pending", label: "ממתינים", value: totals.pendingPeople, records: totals.pendingCount, color: "gold" },
@@ -2263,19 +2304,19 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   }
                   aria-pressed={active}
                   title={`סינון לפי ${s.label}`}
-                  className={`flex flex-1 items-center justify-between gap-2 rounded-2xl border px-4 py-2.5 text-sm transition min-w-[150px] ${
+                  className={`flex min-w-0 flex-col items-center gap-1 rounded-2xl border px-2 py-2 text-sm transition sm:min-w-[150px] sm:flex-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-4 sm:py-2.5 ${
                     active
                       ? "border-slate-400 bg-slate-50 ring-2 ring-slate-200"
                       : "border-slate-200 bg-white hover:bg-slate-50"
                   }`}
                 >
-                  <span className="flex flex-col text-right">
-                    <span className="font-medium text-slate-600">{s.label}</span>
+                  <span className="flex min-w-0 flex-col text-center sm:text-right">
+                    <span className="truncate text-xs font-medium text-slate-600 sm:text-sm">{s.label}</span>
                     <span className="text-[11px] text-slate-400">{s.records} רשומות</span>
                   </span>
                   <span className="flex items-baseline gap-1">
                     <Badge color={s.color}>{s.value}</Badge>
-                    <span className="text-[11px] text-slate-400">אנשים</span>
+                    <span className="hidden text-[11px] text-slate-400 sm:inline">אנשים</span>
                   </span>
                 </button>
               );
@@ -2332,7 +2373,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
 
         <form
           onSubmit={addGuest}
-          className="mb-5 rounded-2xl border border-gold-200 bg-gradient-to-l from-gold-50/70 to-white p-4 shadow-sm"
+          className="mb-4 rounded-2xl border border-gold-200 bg-gradient-to-l from-gold-50/70 to-white p-3 shadow-sm sm:mb-5 sm:p-4"
         >
           <div className="mb-3 flex items-center gap-2.5">
             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gold-500 text-white shadow-md shadow-gold-500/30">
@@ -2343,13 +2384,16 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               <p className="text-xs text-slate-500">מלאו את הפרטים ולחצו “הוסף לרשימה”</p>
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,1fr)_auto_auto]">
+          {/*  בנייד שתי עמודות ולא אחת. שבעה שדות ברוחב מלא הפכו טופס אחד
+              ל-330px של גלילה, ושדות כמו "כיסאות" קיבלו שורה שלמה כדי להציג
+              ספרה אחת.  */}
+          <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3 2xl:grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,1fr)_auto_auto]">
           <input
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             placeholder="שם האורח / משפחה"
             aria-label="שם האורח או המשפחה"
-            className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-200"
+            className="col-span-2 min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-200 lg:col-span-1"
           />
           <input
             value={form.phone}
@@ -2364,21 +2408,25 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             value={formCategory}
             onChange={(e) => setForm({ ...form, category: e.target.value })}
             aria-label="קטגוריה"
-            className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400"
+            className="min-w-0 rounded-xl border border-slate-200 bg-white px-2 py-2.5 text-sm outline-none focus:border-gold-400 sm:px-3"
           >
             {categories.map((c) => (
               <option key={c}>{c}</option>
             ))}
           </select>
-          <input
-            type="number"
-            min="1"
-            value={form.seats}
-            onChange={(e) => setForm({ ...form, seats: e.target.value })}
-            placeholder="כיסאות"
-            aria-label="מספר כיסאות"
-            className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400"
-          />
+          {/*  התווית צמודה לשדה ולא מעליו: בעמודה צרה המספר "1" לבדו לא
+              אומר כלום, ותווית נפרדת הייתה מוסיפה שורה.  */}
+          <label className="flex min-w-0 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 focus-within:border-gold-400">
+            <span className="shrink-0 text-xs text-slate-400">כיסאות</span>
+            <input
+              type="number"
+              min="1"
+              value={form.seats}
+              onChange={(e) => setForm({ ...form, seats: e.target.value })}
+              aria-label="מספר כיסאות"
+              className="w-full min-w-0 bg-transparent text-sm outline-none"
+            />
+          </label>
           <input
             value={form.mention}
             onChange={(e) => setForm({ ...form, mention: e.target.value })}
@@ -2400,7 +2448,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           </label>
           <button
             type="submit"
-            className="flex items-center justify-center gap-1.5 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:bg-gold-600"
+            className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:bg-gold-600 lg:col-span-1"
           >
             <Plus size={18} /> הוסף לרשימה
           </button>
@@ -2408,18 +2456,22 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         </form>
 
         {/* Search & Filters */}
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-          <div className="mb-3 flex items-center gap-2.5">
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-slate-600 text-white shadow-md shadow-slate-500/20">
-              <Search size={18} />
+        <div className="mb-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3 sm:mb-4 sm:p-4">
+          <div className="mb-2.5 flex items-center gap-2.5 sm:mb-3">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-slate-600 text-white shadow-md shadow-slate-500/20 sm:h-9 sm:w-9">
+              <Search size={16} />
             </span>
             <div>
               <p className="text-sm font-bold text-slate-800">חיפוש וסינון מוזמנים</p>
-              <p className="text-xs text-slate-500">אתרו רשומות קיימות לפי שם, קטגוריה או סטטוס</p>
+              {/*  המשפט המסביר נשבר לשתי שורות בנייד ואינו מוסיף מידע
+                  מעבר למה שהשדות עצמם מראים.  */}
+              <p className="hidden text-xs text-slate-500 sm:block">אתרו רשומות קיימות לפי שם, קטגוריה או סטטוס</p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative flex-1 min-w-[200px]">
+          {/*  בנייד גריד של שתי עמודות במקום flex-wrap: ה-select הראשון היה
+              רחב מדי ודחף את שני האחרים לשורות נפרדות.  */}
+          <div className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap">
+            <div className="relative col-span-2 sm:min-w-[200px] sm:flex-1">
               <Search
                 size={18}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
@@ -2435,7 +2487,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               value={filters.category}
               onChange={(e) => setFilters({ ...filters, category: e.target.value })}
               title="סינון לפי קטגוריה"
-              className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium outline-none focus:border-slate-400"
+              className="min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
             >
               <option value="all">כל הקטגוריות</option>
               {categories.map((c) => (
@@ -2448,7 +2500,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               value={filters.source}
               onChange={(e) => setFilters({ ...filters, source: e.target.value })}
               title="סינון לפי מקור ההזמנה"
-              className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium outline-none focus:border-slate-400"
+              className="min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
             >
               <option value="all">כל המקורות</option>
               {GUEST_SOURCES.map((s) => (
@@ -2461,7 +2513,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               value={filters.rsvp}
               onChange={(e) => setFilters({ ...filters, rsvp: e.target.value })}
               title="סינון לפי אישור הגעה"
-              className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium outline-none focus:border-slate-400"
+              className="min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
             >
               <option value="all">כל הסטטוסים</option>
               <option value="confirmed">אישרו הגעה</option>
@@ -3389,7 +3441,7 @@ function Vendors({ vendors, setVendors, weddingId = null, canEdit = true }) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <Card>
         <SectionTitle
           icon={Briefcase}
@@ -3978,7 +4030,7 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <Card>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
@@ -4476,7 +4528,7 @@ function VendorPortal({ vendors, setVendors, weddingName = "", coupleTitle = "" 
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <Card>
         <SectionTitle
           icon={Smartphone}
@@ -6164,7 +6216,19 @@ function WeddingApp({
           מתחת לרוחב התוכן שלו, והמסך היה נהיה רחב מהחלון.  */}
       <main className="min-w-0 flex-1 overflow-x-clip">
         {/* Top bar (mobile) */}
-        <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-white/40 bg-white/60 px-5 py-4 backdrop-blur-xl lg:px-8">
+        <header className="sticky top-0 z-20 flex items-center gap-2 border-b border-white/40 bg-white/60 px-4 py-3 backdrop-blur-xl sm:gap-3 lg:px-8 lg:py-4">
+          {/*  ההמבורגר ראשון, כלומר בצד ימין ב-RTL - באותו צד שממנו נפתחת
+              המגירה. כשהוא ישב בקצה הנגדי הפתיחה נראתה כאילו היא מגיעה
+              מהכיוון הלא נכון.  */}
+          <button
+            onClick={() => setSidebarOpen(true)}
+            title="פתיחת התפריט"
+            aria-label="פתיחת תפריט הניווט"
+            aria-expanded={sidebarOpen}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 lg:hidden"
+          >
+            <Menu size={20} />
+          </button>
           <div className="flex min-w-0 flex-1 items-center gap-3">
             {sidebarCollapsed && (
               <button
@@ -6177,13 +6241,15 @@ function WeddingApp({
               </button>
             )}
             <div className="min-w-0">
-              <p className="truncate text-xs text-slate-400">{subtitleMap[active]}</p>
-              <h2 className="truncate font-[var(--font-display)] text-lg font-bold text-slate-800">
+              <p className="truncate text-[11px] text-slate-400 sm:text-xs">
+                {subtitleMap[active]}
+              </p>
+              <h2 className="truncate font-[var(--font-display)] text-base font-bold text-slate-800 sm:text-lg">
                 {titleMap[active]}
               </h2>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             {/* במצב ענן מחוון הענן כבר מספר את סיפור השמירה; שני מחוונים זה
                 רעש ודוחק את כותרת המסך. מציגים "נשמר" רק במצב מקומי. */}
             {isCloudConfigured ? (
@@ -6227,100 +6293,131 @@ function WeddingApp({
             />
             {/* גיבוי ושחזור נוגעים בכל מערכי הנתונים, ולכן מוצגים רק למי
                 שיש לו גישה לכל המסכים — אחרת שחזור היה מוחק מה שלא נראה. */}
-            {fullScope && (
-              <>
-                <div className="relative" ref={backupMenuRef}>
-                  <button
-                    onClick={() => setBackupMenuOpen((v) => !v)}
-                    title="ייצוא הנתונים – קובץ גיבוי או אקסל"
-                    aria-haspopup="menu"
-                    aria-expanded={backupMenuOpen}
-                    /*  בנייד הכפתורים האלה היו 32px — קטן מהמינימום של 44px
-                        שנדרש ללחיצה באצבע, והם צמודים זה לזה.  */
-                    className="flex min-h-11 items-center gap-1.5 rounded-xl bg-gold-500 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-gold-600 sm:min-h-0"
+            {(fullScope || (isCloudConfigured && session)) && (
+              <div className="relative" ref={backupMenuRef}>
+                {/*  בנייד זה תפריט גלישה אחד שמרכז את כל הפעולות המשניות.
+                    חמישה כפתורים נפרדים ברוחב 390px הותירו לכותרת המסך כ-100px,
+                    והיא הוצגה כ-"דאשבור...".  */}
+                <button
+                  onClick={() => setBackupMenuOpen((v) => !v)}
+                  title="פעולות נוספות – גיבוי, אקסל ויציאה"
+                  aria-label="פעולות נוספות"
+                  aria-haspopup="menu"
+                  aria-expanded={backupMenuOpen}
+                  /*  בנייד הכפתורים האלה היו 32px — קטן מהמינימום שנדרש
+                      ללחיצה באצבע.  */
+                  className="grid h-10 w-10 place-items-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 sm:flex sm:h-auto sm:w-auto sm:min-h-0 sm:items-center sm:gap-1.5 sm:bg-gold-500 sm:px-3 sm:py-2 sm:text-xs sm:font-semibold sm:text-white sm:ring-0 sm:hover:bg-gold-600"
+                >
+                  {excelBusy ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <>
+                      <MoreHorizontal size={20} className="sm:hidden" />
+                      <Download size={16} className="hidden sm:block" />
+                    </>
+                  )}
+                  <span className="hidden sm:inline">גיבוי</span>
+                  <ChevronDown size={13} className="hidden sm:block" />
+                </button>
+                {backupMenuOpen && (
+                  <div
+                    role="menu"
+                    className="animate-fade-in-up absolute left-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-2xl bg-white p-1.5 text-right shadow-xl ring-1 ring-slate-200"
                   >
-                    {excelBusy ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <Download size={16} />
+                    {fullScope && (
+                      <>
+                        <button
+                          role="menuitem"
+                          onClick={() => {
+                            setBackupMenuOpen(false);
+                            exportBackup();
+                          }}
+                          className="flex w-full items-start gap-2.5 rounded-xl p-2.5 transition hover:bg-slate-50"
+                        >
+                          <Download
+                            size={16}
+                            className="mt-0.5 shrink-0 text-gold-600"
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-xs font-semibold text-slate-700">
+                              קובץ גיבוי (JSON)
+                            </span>
+                            <span className="block text-[11px] text-slate-400">
+                              לשחזור מלא של הנתונים למערכת
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          role="menuitem"
+                          onClick={exportExcel}
+                          disabled={excelBusy}
+                          className="flex w-full items-start gap-2.5 rounded-xl p-2.5 transition hover:bg-slate-50 disabled:opacity-60"
+                        >
+                          <FileSpreadsheet
+                            size={16}
+                            className="mt-0.5 shrink-0 text-sage-600"
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-xs font-semibold text-slate-700">
+                              ייצוא לאקסל (XLSX)
+                            </span>
+                            <span className="block text-[11px] text-slate-400">
+                              גיליון לכל מסך: מוזמנים, ספקים, הושבה ותקציב
+                            </span>
+                          </span>
+                        </button>
+                      </>
                     )}
-                    <span className="hidden sm:inline">גיבוי</span>
-                    <ChevronDown size={13} />
-                  </button>
-                  {backupMenuOpen && (
-                    <div
-                      role="menu"
-                      className="animate-fade-in-up absolute left-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-2xl bg-white p-1.5 text-right shadow-xl ring-1 ring-slate-200"
-                    >
+                    {/*  בנייד אלה הפריטים היחידים שמובילים לשחזור וליציאה,
+                        כי הכפתורים הנפרדים מוסתרים מתחת ל-sm.  */}
+                    {fullScope && canEdit && (
                       <button
                         role="menuitem"
                         onClick={() => {
                           setBackupMenuOpen(false);
-                          exportBackup();
+                          backupInputRef.current?.click();
                         }}
-                        className="flex w-full items-start gap-2.5 rounded-xl p-2.5 transition hover:bg-slate-50"
+                        className="flex w-full items-center gap-2.5 rounded-xl p-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 sm:hidden"
                       >
-                        <Download size={16} className="mt-0.5 shrink-0 text-gold-600" />
-                        <span className="min-w-0">
-                          <span className="block text-xs font-semibold text-slate-700">
-                            קובץ גיבוי (JSON)
-                          </span>
-                          <span className="block text-[11px] text-slate-400">
-                            לשחזור מלא של הנתונים למערכת
-                          </span>
-                        </span>
+                        <Upload size={16} className="shrink-0 text-slate-400" />
+                        שחזור מקובץ גיבוי
                       </button>
+                    )}
+                    {isCloudConfigured && session && (
                       <button
                         role="menuitem"
-                        onClick={exportExcel}
-                        disabled={excelBusy}
-                        className="flex w-full items-start gap-2.5 rounded-xl p-2.5 transition hover:bg-slate-50 disabled:opacity-60"
+                        onClick={() => {
+                          setBackupMenuOpen(false);
+                          signOutAndWipe();
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-xl p-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 sm:hidden"
                       >
-                        <FileSpreadsheet
-                          size={16}
-                          className="mt-0.5 shrink-0 text-sage-600"
-                        />
-                        <span className="min-w-0">
-                          <span className="block text-xs font-semibold text-slate-700">
-                            ייצוא לאקסל (XLSX)
-                          </span>
-                          <span className="block text-[11px] text-slate-400">
-                            גיליון לכל מסך: מוזמנים, ספקים, הושבה ותקציב
-                          </span>
-                        </span>
+                        <LogOut size={16} className="shrink-0 text-slate-400" />
+                        יציאה מהחשבון
                       </button>
-                    </div>
-                  )}
-                </div>
-                {canEdit && (
-                  <button
-                    onClick={() => backupInputRef.current?.click()}
-                    title="שחזור נתונים מקובץ גיבוי"
-                    className="flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:min-h-0 sm:min-w-0"
-                  >
-                    <Upload size={16} /> <span className="hidden sm:inline">שחזור</span>
-                  </button>
+                    )}
+                  </div>
                 )}
-              </>
+              </div>
+            )}
+            {fullScope && canEdit && (
+              <button
+                onClick={() => backupInputRef.current?.click()}
+                title="שחזור נתונים מקובץ גיבוי"
+                className="hidden items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:flex"
+              >
+                <Upload size={16} /> <span className="hidden sm:inline">שחזור</span>
+              </button>
             )}
             {isCloudConfigured && session && (
               <button
                 onClick={signOutAndWipe}
                 title="התנתקות (מנקה את הנתונים השמורים בדפדפן)"
-                className="flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:min-h-0 sm:min-w-0"
+                className="hidden items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:flex"
               >
                 <LogOut size={16} /> <span className="hidden sm:inline">יציאה</span>
               </button>
             )}
-            <button
-              onClick={() => setSidebarOpen(true)}
-              title="פתיחת התפריט"
-              aria-label="פתיחת תפריט הניווט"
-              aria-expanded={sidebarOpen}
-              className="grid h-11 w-11 place-items-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 lg:hidden"
-            >
-              <Menu size={20} />
-            </button>
           </div>
         </header>
 
@@ -6357,7 +6454,7 @@ function WeddingApp({
           </div>
         )}
 
-        <div key={active} className="animate-fade-in-up p-5 lg:p-8">
+        <div key={active} className="animate-fade-in-up p-3 sm:p-5 lg:p-8">
           {/* הרשאת viewer: fieldset מושבת מנטרל כל input/select/button שבתוכו.
               זו שכבת UX בלבד — הגבול האמיתי הוא מדיניות ה-RLS ב-CockroachDB. */}
           <fieldset disabled={!canEdit} className="contents">

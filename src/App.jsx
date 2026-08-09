@@ -4942,11 +4942,12 @@ function AuthCard({ title, subtitle, onSubmit, children }) {
         noValidate
         className="w-full max-w-sm space-y-5 rounded-3xl bg-white/80 p-8 shadow-xl ring-1 ring-white/60 backdrop-blur-xl"
       >
-        <div className="flex flex-col items-center gap-2 text-center">
-          <Logo className="h-24 w-24" rounded="rounded-3xl" />
-          <h1 className="font-[var(--font-display)] text-xl font-bold text-slate-800">
-            {title}
-          </h1>
+        <div className="flex flex-col items-center gap-3 text-center">
+          <Logo className="h-32 w-32" rounded="rounded-3xl" />
+          {/*  הלוגו כבר נושא את שם המערכת, ולכן הכותרת מוסתרת ויזואלית.
+              היא נשארת בקוד כי היא ה-h1 היחיד במסך: בלעדיה קורא מסך
+              מקבל טופס בלי שם, והלוגו עצמו מסומן aria-hidden.  */}
+          <h1 className="sr-only">{title}</h1>
           <p className="text-xs text-slate-400">{subtitle}</p>
         </div>
         {children}

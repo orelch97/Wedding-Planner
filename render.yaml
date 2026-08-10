@@ -5,9 +5,20 @@
 #
 #  מה שמסומן `sync: false` לא נשמר בקובץ ולא נכנס ל-git — יש להזין אותו
 #  ידנית ב-Dashboard → Environment. אלה סודות.
+#
+#  ── למה שני שירותים ולא אחד ────────────────────────────────────────────────
+#  שירות Web בתוכנית החינם נרדם אחרי 15 דקות ללא תנועה. כל עוד אותו שירות
+#  הגיש גם את דף ה-HTML, כל כניסה אחרי שקט נתפסה אצל Render עוד לפני
+#  שהקוד שלנו רץ, והמשתמש ראה את מסך הטעינה השחור של Render למשך כדקה.
+#  אי אפשר לעקוף את זה מתוך האפליקציה — הדף שלנו כלל לא הגיע לדפדפן.
+#
+#  לכן הממשק עבר ל-Static Site: הוא יושב על CDN, לא נרדם לעולם ונטען מיד,
+#  כך שמסך הפתיחה הממותג שלנו הוא הדבר הראשון שרואים. השירות שמריץ את
+#  ה-API עדיין עשוי להירדם, ובזמן הזה מוצג מסך ההמתנה שלנו ולא של Render.
 # =============================================================================
 
 services:
+  # ── ה-API ─────────────────────────────────────────────────────────────────
   - type: web
     name: wedding-planner
     runtime: node
@@ -32,10 +43,13 @@ services:
 
       #  Render יושב מאחורי reverse proxy. בלי זה req.ip הוא כתובת ה-proxy,
       #  וכל התוקפים נספרים יחד בהגבלת הקצב על ניסיונות התחברות.
+      #  הערך = מספר הקפיצות המהימנות. הבקשות מגיעות דרך ה-CDN של האתר
+      #  הסטטי ואז דרך מאזן העומסים של Render — שתי קפיצות.
       - key: TRUST_PROXY
-        value: "1"
+        value: "2"
 
-      #  נצרב לתוך ה-build. השרת מגיש גם את ה-API וגם את הקבצים — אותו origin.
+      #  נצרב לתוך ה-build. השירות הזה ממשיך להגיש גם עותק של הממשק, כדי
+      #  שהכתובת הישנה תמשיך לעבוד ולא תשבור קישורים שכבר נשלחו.
       - key: VITE_API_URL
         value: /api
 
@@ -49,6 +63,10 @@ services:
 
       #  כתובת הבסיס לקישורי איפוס סיסמה, כולל הסכמה:
       #  https://<the-service>.onrender.com
+      #
+      #  חשוב: מאז הפיצול זו הכתובת של האתר הסטטי, לא של שירות ה-API.
+      #  מלבד קישורי האיפוס, בדיקת ה-CSRF מאשרת בקשות שה-Origin שלהן
+      #  מתאים ל-APP_URL — ובקשה שעברה דרך ה-CDN מגיעה עם ה-Origin שלו.
       - key: APP_URL
         sync: false
 
@@ -63,3 +81,68 @@ services:
         sync: false
       - key: SMTP_FROM
         sync: false
+
+  # ── הממשק ─────────────────────────────────────────────────────────────────
+  #  אתר סטטי על CDN. אין כאן מכונה שנרדמת, ולכן אין מסך המתנה של Render.
+  - type: web
+    name: wedding-planner-web
+    runtime: static
+    buildCommand: npm ci --include=dev && npm run build
+    staticPublishPath: ./dist
+
+    envVars:
+      #  הדפדפן פונה תמיד לכתובת יחסית, וה-CDN מעביר ל-API בכתובת שלמטה.
+      #  כך הכול נשאר same-origin: עוגיית הסשן (SameSite=Strict) ממשיכה
+      #  לעבוד, ואין צורך ב-CORS ובהרפיית הגדרות העוגייה.
+      - key: VITE_API_URL
+        value: /api
+
+    routes:
+      #  חייב להופיע לפני כלל ה-SPA. Render מחילה את הכלל המתאים הראשון.
+      #  היעד הוא הכתובת המלאה של שירות ה-API — עדכנו אותה אם שם השירות
+      #  משתנה, כאן אי אפשר להשתמש בהפניה לוגית לשירות.
+      - type: rewrite
+        source: /api/*
+        destination: https://wedding-planner-vixy.onrender.com/api/*
+
+      #  ניתוב צד-לקוח: כל נתיב שאין לו קובץ מקבל את index.html.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+    #  Render אינה קוראת את public/_headers (זה פורמט של Netlify /
+    #  Cloudflare Pages). לאתר הסטטי הכותרות חייבות לצאת מכאן, ולשרת ה-API
+    #  הן מוגדרות ב-server/index.js. שלושת המקומות צריכים להישאר תואמים.
+    headers:
+      - path: /*
+        name: Content-Security-Policy
+        value: >-
+          default-src 'self'; script-src 'self'; worker-src 'self';
+          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+          font-src 'self' data: https://fonts.gstatic.com;
+          img-src 'self' data: blob:;
+          connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com;
+          object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=63072000; includeSubDomains; preload
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin
+      #  ה-Service Worker חייב להיבדק מול השרת בכל טעינה, אחרת תיקון
+      #  בלוגיקת המטמון עצמו לא מגיע למי שכבר ביקר באתר.
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache

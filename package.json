@@ -16,7 +16,8 @@
     "test:api": "node scripts/api-test.mjs",
     "test:excel": "node scripts/excel-test.mjs",
     "test:backup": "node scripts/backup-test.mjs",
-    "test:import": "node scripts/import-test.mjs"
+    "test:import": "node scripts/import-test.mjs",
+    "test:cleanup": "node scripts/test-cleanup.mjs"
   },
   "engines": {
     "node": ">=22"

@@ -573,6 +573,13 @@ await withAdmin((q) =>
 r = await A("/auth/reset", { method: "POST", body: { token: expired, password: "YetAnother999" } });
 check("טוקן שפג תוקפו נדחה", r.data?.error === "invalid_reset_token", JSON.stringify(r.data));
 
+/*  ניקוי אחרי עצמנו: הבדיקה נרשמת כמשתמשת אמיתית, וכל ריצה משאירה כ-13
+    חשבונות במסד. מוחקים רק את מה שהריצה הזו יצרה (לפי ה-stamp), כך שריצה
+    מקבילה של מישהו אחר לא נפגעת. ריצה שקרסה באמצע מנוקה ב-npm run test:cleanup.  */
+const { purgeTestData } = await import("./test-cleanup.mjs");
+const purged = await purgeTestData({ stamp });
+console.log(`\nניקוי: נמחקו ${purged.users} חשבונות בדיקה ו-${purged.invites} הזמנות מהריצה הזו.`);
+
 await closePool();
 
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}${passed}/${passed + failed} עברו\x1b[0m\n`);

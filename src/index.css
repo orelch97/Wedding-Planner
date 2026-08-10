@@ -104,6 +104,14 @@ select,
   touch-action: manipulation;
 }
 
+/*  ידית גרירה חייבת למנוע גלילה בזמן הגרירה. הכלל שמעליו אינו יושב בתוך
+    @layer, ולכן הוא גובר על מחלקות Tailwind — בלי החריגה כאן הידית הייתה
+    מקבלת touch-action: manipulation, הדפדפן היה מפרש את התנועה כגלילה
+    ושולח pointercancel, והגרירה בנייד הייתה נקטעת מיד.  */
+.touch-none {
+  touch-action: none;
+}
+
 @media (max-width: 640px) {
   /* iOS auto-zooms when a focused field is under 16px – keep inputs at 16px
      on phones while the visual scale stays compact. */

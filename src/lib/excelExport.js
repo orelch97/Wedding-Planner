@@ -262,6 +262,104 @@ export function workbookFileName(weddingName) {
   return `${clean || "החתונה שלי"} - ${new Date().toISOString().slice(0, 10)}.xlsx`;
 }
 
+/* =========================================================================
+ *  גיליון השחזור
+ * -------------------------------------------------------------------------
+ *  ארבעת הגיליונות שלמעלה נועדו לקריאה אנושית, ולכן הם מאבדים מידע: סדר
+ *  ההושבה משכפל מוזמנים, משימות הספק נדחסות לתא טקסט אחד, ואין בהם בכלל
+ *  יעד תקציב, תוויות או קטגוריות. שחזור מהם היה יוצר חתונה דומה — לא זהה.
+ *
+ *  לכן נוסף גיליון חמישי שמכיל את בדיוק אותו payload של גיבוי ה-JSON,
+ *  מקודד ב-base64 ומפוצל לשורות. התוצאה: קובץ אחד שגם נקרא בעיניים וגם
+ *  משחזר ב-100%. הקידוד (ולא JSON גולמי) נבחר כדי שהתא יכיל אך ורק תווי
+ *  base64 — בלי רווחים שאקסל עלול לגזום ובלי תו פתיחה שנראה כמו נוסחה.
+ * ====================================================================== */
+
+export const BACKUP_SHEET_NAME = "גיבוי לשחזור";
+
+const BACKUP_SHEET_NOTE =
+  "אל תמחקו ואל תערכו את הגיליון הזה — הוא מה שמאפשר לשחזר את החתונה מהקובץ.";
+
+//  מתחת למגבלת 32,767 התווים לתא, עם מרווח ביטחון.
+const BACKUP_CHUNK_SIZE = 20000;
+
+function toBase64(str) {
+  const bytes = new TextEncoder().encode(str);
+  let binary = "";
+  //  apply על מערך ענק חורג ממגבלת הארגומנטים ומפיל את הלשונית.
+  const STEP = 0x8000;
+  for (let i = 0; i < bytes.length; i += STEP) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + STEP));
+  }
+  return btoa(binary);
+}
+
+function fromBase64(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+/** מקודד payload של גיבוי למערך מחרוזות, שורה לכל תא בגיליון. טהורה. */
+export function encodeBackupChunks(payload) {
+  const encoded = toBase64(JSON.stringify(payload));
+  const chunks = [];
+  for (let i = 0; i < encoded.length; i += BACKUP_CHUNK_SIZE) {
+    chunks.push(encoded.slice(i, i + BACKUP_CHUNK_SIZE));
+  }
+  return chunks;
+}
+
+/** מחזיר את ה-payload מתוך מערך המחרוזות. זורק Error עם code בכשל. טהורה. */
+export function decodeBackupChunks(chunks) {
+  const joined = (Array.isArray(chunks) ? chunks : []).join("");
+  if (!joined) throw Object.assign(new Error("empty backup"), { code: "no_backup_sheet" });
+  let payload;
+  try {
+    payload = JSON.parse(fromBase64(joined));
+  } catch {
+    throw Object.assign(new Error("corrupt backup"), { code: "corrupt_backup" });
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw Object.assign(new Error("corrupt backup"), { code: "corrupt_backup" });
+  }
+  return payload;
+}
+
+/**
+ * קורא את גיליון השחזור מקובץ אקסל שהמשתמש בחר ומחזיר את ה-payload.
+ * @param {File|Blob} file
+ */
+export async function readWorkbookBackup(file) {
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+  try {
+    await wb.xlsx.load(await file.arrayBuffer());
+  } catch {
+    throw Object.assign(new Error("unreadable"), { code: "unreadable_file" });
+  }
+
+  const ws = wb.getWorksheet(BACKUP_SHEET_NAME);
+  if (!ws) throw Object.assign(new Error("missing sheet"), { code: "no_backup_sheet" });
+
+  //  קוראים לפי מספר השורה ולא לפי סדר האיטרציה, כדי ששורה שנמחקה או
+  //  מיון שבוצע בטעות ייתפסו כקובץ פגום במקום להרכיב JSON מעורבב.
+  const chunks = [];
+  let expected = 1;
+  for (let r = 1; r <= ws.rowCount; r++) {
+    const index = Number(ws.getRow(r).getCell(1).value);
+    if (!Number.isInteger(index) || index <= 0) continue;
+    if (index !== expected) {
+      throw Object.assign(new Error("out of order"), { code: "corrupt_backup" });
+    }
+    const cell = ws.getRow(r).getCell(2).value;
+    chunks.push(typeof cell === "string" ? cell : String(cell?.text ?? cell ?? ""));
+    expected += 1;
+  }
+  return decodeBackupChunks(chunks);
+}
+
 /** בונה חוברת ExcelJS מהגדרות הגיליונות ומחזיר Buffer/ArrayBuffer. */
 export async function buildWorkbookBuffer(data) {
   const ExcelJS = (await import("exceljs")).default;
@@ -307,6 +405,26 @@ export async function buildWorkbookBuffer(data) {
       from: { row: 1, column: 1 },
       to: { row: 1, column: sheet.columns.length },
     };
+  }
+
+  //  גיליון השחזור נכתב אחרון, אחרי הגיליונות שהמשתמש בא לקרוא.
+  if (data?.backup && typeof data.backup === "object") {
+    const ws = wb.addWorksheet(BACKUP_SHEET_NAME, {
+      views: [{ rightToLeft: true }],
+    });
+    ws.columns = [
+      { header: "מס׳", key: "index", width: 8 },
+      { header: BACKUP_SHEET_NOTE, key: "chunk", width: 90 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    ws.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFF3E7C9" },
+    };
+    encodeBackupChunks(data.backup).forEach((chunk, i) => {
+      ws.addRow({ index: i + 1, chunk });
+    });
   }
 
   return wb.xlsx.writeBuffer();

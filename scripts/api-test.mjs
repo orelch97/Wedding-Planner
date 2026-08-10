@@ -242,6 +242,23 @@ r = await A(`/weddings/${AW}/members`);
 check("אליס רואה 2 חברים", r.data?.length === 2, JSON.stringify(r.data));
 check("המיילים מוחזרים", r.data?.some((m) => m.email === bob.email));
 
+//  נוכחות. בעל החתונה צריך לדעת שני דברים: מי בכלל נכנס לחתונה שלו, ומי
+//  עובד בה ברגע זה. שתי השאלות נענות מעמודה אחת — last_seen_at — שהשרת
+//  מעדכן כשהחבר קורא נתונים או שומר. בוב קרא נתונים כמה שורות מעל.
+const bobRow = r.data?.find((m) => m.email === bob.email);
+const aliceRow = r.data?.find((m) => m.email === alice.email);
+check("הבעלים מקבל את זמן הפעילות של החבר", !!bobRow?.lastSeenAt, JSON.stringify(bobRow));
+check(
+  "זמן הפעילות נרשם ברגע שהחבר קרא נתונים",
+  Date.now() - new Date(bobRow?.lastSeenAt ?? 0).getTime() < 5 * 60_000,
+  String(bobRow?.lastSeenAt)
+);
+check("הבעלים רואה גם את הפעילות של עצמו", !!aliceRow?.lastSeenAt, JSON.stringify(aliceRow));
+
+r = await B(`/weddings/${AW}/members`);
+check("חבר רגיל מקבל רק את השורה של עצמו", r.data?.length === 1 && r.data[0].email === bob.email, JSON.stringify(r.data));
+check("חבר רגיל לא מקבל פעילות של אחרים", !r.data?.some((m) => m.email === alice.email), JSON.stringify(r.data));
+
 /* ── 5b. הגדרות החתונה ────────────────────────────────────────────────────── */
 //  יעד התקציב, הקטגוריות וכותרות מסך התקציב היו שמורים ב-localStorage בלבד
 //  ולכן נמחקו בכל יציאה מהמערכת. עכשיו הם ב-DB, ולכן חייבים גם בידוד וגם

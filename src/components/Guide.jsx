@@ -152,11 +152,13 @@ export function Tour({ steps, onClose }) {
   return createPortal(
     <>
       {/*  חוסם קליקים על המסך שמתחת — בלי זה אפשר לשנות את המסך
-          באמצע ההסבר והזרקור מצביע על אלמנט שכבר לא שם.  */}
+          באמצע ההסבר והזרקור מצביע על אלמנט שכבר לא שם.
+          לחיצה על הרקע סוגרת את הסיור: בלי זה משתמש שלא מזהה את הסיור
+          חווה מסך תקוע שלא מגיב לכלום.  */}
       <div
         className="fixed inset-0 z-[119]"
         style={spot ? undefined : { background: "rgba(15,23,42,0.62)" }}
-        onClick={(e) => e.stopPropagation()}
+        onClick={onClose}
       />
       {spot && (
         <div
@@ -305,12 +307,15 @@ export function ScreenIntro({ guide, onStartTour, onDismiss }) {
             )}
           </div>
 
+          {/*  השלושה הם קישורי טקסט בגובה של שורה אחת — 17px בפועל, קטן מכדי
+              ללחיצה באצבע. min-h-11 מגדיל את אזור המגע בלבד, ורק במסך צר:
+              במסך רחב יש עכבר, ושורה של 44px היתה מנפחת את ההסבר בלי צורך.  */}
           <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
             <button
               type="button"
               onClick={() => setMore((v) => !v)}
               aria-expanded={more}
-              className="text-[11px] font-semibold text-slate-500 underline-offset-4 transition hover:text-slate-700 hover:underline sm:hidden"
+              className="inline-flex min-h-11 items-center text-[11px] font-semibold text-slate-500 underline-offset-4 transition hover:text-slate-700 hover:underline sm:hidden"
             >
               {more ? "פחות" : "מה בדיוק מזינים כאן?"}
             </button>
@@ -318,7 +323,7 @@ export function ScreenIntro({ guide, onStartTour, onDismiss }) {
               <button
                 type="button"
                 onClick={onStartTour}
-                className="text-[11px] font-semibold text-gold-600 underline-offset-4 transition hover:underline sm:text-xs"
+                className="inline-flex min-h-11 items-center text-[11px] font-semibold text-gold-600 underline-offset-4 transition hover:underline sm:min-h-0 sm:text-xs"
               >
                 סיור מודרך במערכת
               </button>
@@ -326,7 +331,7 @@ export function ScreenIntro({ guide, onStartTour, onDismiss }) {
             <button
               type="button"
               onClick={onDismiss}
-              className="text-[11px] font-medium text-slate-400 underline-offset-4 transition hover:text-slate-600 hover:underline sm:text-xs"
+              className="inline-flex min-h-11 items-center text-[11px] font-medium text-slate-400 underline-offset-4 transition hover:text-slate-600 hover:underline sm:min-h-0 sm:text-xs"
             >
               הבנתי, אפשר להסתיר
             </button>

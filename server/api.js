@@ -205,6 +205,44 @@ function sanitizeSettings(raw, allowed = null) {
   return out;
 }
 
+/* ── נוכחות חברים ──────────────────────────────────────────────────────────
+ *  wedding_members.last_seen_at עונה על שאלה אחת של בעל החתונה: מי נכנס
+ *  בפועל, ומי עובד כאן ברגע זה. הכתיבה מווסתת ויוצאת מהטרנזקציה מאותה סיבה
+ *  בדיוק שתוארה ב-server/auth.js לגבי app.sessions.last_seen_at — הדפדפן
+ *  שולח כמה בקשות סנכרון במקביל, וכתיבה של שדה סטטיסטי בתוך טרנזקציית
+ *  Serializable הפילה שמירות אמיתיות ב-40001. שדה תצוגה לא מפיל שמירה.
+ *  המפה מונעת כתיבה חוזרת; היא נמחקת מעצמה כדי שלא תגדל ללא גבול.
+ */
+const MEMBER_TOUCH_MS = 5 * 60_000;
+const memberTouched = new Map();
+
+function touchMembership(wid, userId) {
+  const key = `${wid}:${userId}`;
+  const now = Date.now();
+  if (now - (memberTouched.get(key) ?? 0) < MEMBER_TOUCH_MS) return;
+  //  מסמנים לפני הכתיבה ולא אחריה, אחרת כמה בקשות מקבילות ייצאו יחד.
+  memberTouched.set(key, now);
+  withAdmin((q) =>
+    q(
+      `UPDATE public.wedding_members SET last_seen_at = now()
+        WHERE wedding_id = $1 AND user_id = $2`,
+      [wid, userId]
+    )
+  ).then(
+    //  0 שורות = הפונה אינו חבר בחתונה (ה-RLS כבר לא החזיר לו כלום). אסור
+    //  שהניסיון הזה יחסום את הרישום האמיתי אם הוא יצטרף בדקות הקרובות.
+    (result) => {
+      if (!result?.rowCount) memberTouched.delete(key);
+    },
+    () => memberTouched.delete(key)
+  );
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - MEMBER_TOUCH_MS;
+  for (const [key, at] of memberTouched) if (at < cutoff) memberTouched.delete(key);
+}, MEMBER_TOUCH_MS).unref();
+
 /** ההיקפים של המשתמש הנוכחי בחתונה. `null` (או 'all') = גישה מלאה. */
 async function memberScopes(q, wid, userId) {
   const { rows } = await q(
@@ -294,7 +332,7 @@ const MAX_ATTEMPTS = 20;
  * `countAlways` נועד לנתיבים שבהם *כל* פנייה היא ניסיון: שכחתי סיסמה
  * (שמחזיר 200 תמיד בכוונה, ואחרת הופך למכונת שליחת מיילים) ומימוש טוקן.
  */
-function makeRateLimit(countAlways = false) {
+function makeRateLimit(countAlways = false, extraCodes = []) {
   return function rateLimit(req, res, next) {
     const key = req.ip || "unknown";
     const now = Date.now();
@@ -305,7 +343,11 @@ function makeRateLimit(countAlways = false) {
     }
 
     res.on("finish", () => {
-      if (!countAlways && res.statusCode !== 401) return;
+      const counted =
+        countAlways ||
+        res.statusCode === 401 ||
+        extraCodes.includes(res.statusCode);
+      if (!counted) return;
       const cur = attempts.get(key);
       if (!cur || Date.now() > cur.resetAt) {
         attempts.set(key, { count: 1, resetAt: Date.now() + WINDOW_MS });
@@ -320,6 +362,9 @@ function makeRateLimit(countAlways = false) {
 
 const rateLimit = makeRateLimit();
 const rateLimitAlways = makeRateLimit(true);
+//  בהרשמה, 409 “המייל כבר רשום” הוא מידע שימושי למשתמש אמיתי, אבל
+//  בלולאה הוא הופך לסורק שמגלה אילו כתובות רשומות במערכת.
+const rateLimitRegister = makeRateLimit(false, [409]);
 
 setInterval(() => {
   const now = Date.now();
@@ -361,7 +406,7 @@ setInterval(() => {
 
 router.post(
   "/auth/register",
-  rateLimit,
+  rateLimitRegister,
   route(async (req, res) => {
     const creds = validateCredentials(req.body?.email, req.body?.password, {
       isRegistration: true,
@@ -594,7 +639,8 @@ router.get(
     //  ה-RLS מחזיר אפס שורות אם המשתמש אינו חבר — זו בדיקת ההרשאה עצמה.
     const members = await withUser(req.user.userId, async (q) => {
       const { rows } = await q(
-        `SELECT user_id, role, scopes, created_at FROM public.wedding_members
+        `SELECT user_id, role, scopes, created_at, last_seen_at
+           FROM public.wedding_members
           WHERE wedding_id = $1 ORDER BY created_at`,
         [wid]
       );
@@ -610,6 +656,13 @@ router.get(
       return new Map(rows.map((r) => [r.id, r.email]));
     });
 
+    //  זמן הפעילות הוא מידע על אנשים אחרים, ולכן הוא נשלח לבעל החתונה בלבד.
+    //  ה-RLS ממילא מחזיר לחבר רגיל רק את השורה שלו, אבל תנאי מפורש כאן שומר
+    //  שהמידע לא ידלוף אם המדיניות תשתנה מתישהו.
+    const viewerIsOwner = members.some(
+      (m) => m.user_id === req.user.userId && m.role === "owner"
+    );
+
     res.json(
       members.map((m) => ({
         userId: m.user_id,
@@ -617,6 +670,7 @@ router.get(
         role: m.role,
         scopes: m.scopes?.length ? m.scopes : ["all"],
         createdAt: m.created_at,
+        lastSeenAt: viewerIsOwner || m.user_id === req.user.userId ? m.last_seen_at : null,
       }))
     );
   })
@@ -832,6 +886,8 @@ router.get(
       return out;
     });
 
+    //  אחרי ה-RLS: מי שלא חבר בחתונה לא מגיע לכאן בכלל.
+    touchMembership(wid, req.user.userId);
     res.json(data);
   })
 );
@@ -930,7 +986,9 @@ router.post(
     if (!wid) return;
 
     const key = req.body?.key;
-    const cfg = ENTITIES[key];
+    //  גישה ישירה לאובייקט מחזירה גם תכונות שירשה (“__proto__”, “toString”)
+    //  ומעבירה קלט פסול הלאה עד לכשל 500 במקום להידחות כאן.
+    const cfg = Object.hasOwn(ENTITIES, key) ? ENTITIES[key] : null;
     if (!cfg) return fail(res, 400, "invalid_dataset");
 
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
@@ -952,6 +1010,7 @@ router.post(
       }
     });
 
+    touchMembership(wid, req.user.userId);
     res.json({ ok: true });
   })
 );

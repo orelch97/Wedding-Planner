@@ -30,6 +30,7 @@ import {
   TrendingUp,
   TrendingDown,
   AlertCircle,
+  AlertTriangle,
   ListTodo,
   Save,
   Settings2,
@@ -114,9 +115,10 @@ import {
   encryptBackup,
   decryptBackup,
   isEncryptedBackup,
+  validateEncryptedBackup,
   isCryptoAvailable,
 } from "./lib/backupCrypto";
-import { exportWeddingWorkbook } from "./lib/excelExport";
+import { exportWeddingWorkbook, readWorkbookBackup } from "./lib/excelExport";
 import { readGuestRows, rowsToGuests, ImportError } from "./lib/guestImport";
 import logoUrl from "./assets/logo.jpg";
 
@@ -557,25 +559,24 @@ function newVendorBudgetRow(vendor, budgetRows) {
   };
 }
 
-/*  השלמה חד-פעמית בטעינת החתונה: חתונות שנוצרו לפני התכונה מחזיקות ספקים
- *  בלי סעיף תקציב, ולהפך — סעיף שהספק שלו נמחק במכשיר אחר. מחזיר את המערך
- *  המקורי כשאין מה לתקן, כדי לא להפעיל סנכרון ענן מיותר בכל טעינה.  */
+/*  ניקוי יתומים בטעינת החתונה: סעיף שמצביע על ספק שנמחק במכשיר אחר.
+ *
+ *  ⚠ בכוונה אין כאן השלמה רטרואקטיבית של סעיף לכל ספק שאינו מקושר: בחתונה
+ *  שנוצרה לפני התכונה כבר יש סעיפים שהוקלדו ידנית לאותם ספקים, והשלמה
+ *  אוטומטית היתה מכפילה אותם ומנפחת את הסיכומים. סעיף נוצר רק כפעולה
+ *  מודעת של המשתמש — הוספת ספק בלשונית ספקים.
+ *
+ *  מחזיר את המערך המקורי כשאין מה לתקן, כדי לא להפעיל סנכרון ענן מיותר.  */
 function reconcileVendorBudgetRows(budgetRows, vendors) {
   //  רשימת ספקים ריקה אינה ראיה לכך שהספקים נמחקו — היא גם המצב של טעינה
   //  חלקית או של חוסר הרשאה. ניקוי יתומים על סמך רשימה ריקה היה מוחק את כל
   //  סעיפי הספקים, ולכן הוא נעשה רק כשיש ספקים בפועל.
   const vendorIds = new Set(vendors.map((v) => v.id));
-  const linked = new Set(
-    budgetRows.map((b) => b.vendorId).filter((id) => id != null)
+  if (!vendorIds.size) return budgetRows;
+  const kept = budgetRows.filter(
+    (b) => b.vendorId == null || vendorIds.has(b.vendorId)
   );
-  const kept = vendorIds.size
-    ? budgetRows.filter((b) => b.vendorId == null || vendorIds.has(b.vendorId))
-    : budgetRows;
-  const missing = vendors.filter((v) => !linked.has(v.id));
-  if (kept.length === budgetRows.length && !missing.length) return budgetRows;
-  const next = [...kept];
-  for (const v of missing) next.push(newVendorBudgetRow(v, next));
-  return next;
+  return kept.length === budgetRows.length ? budgetRows : kept;
 }
 
 //  נרמול שורות מקובץ גיבוי: מחיל טרנספורמציה, ומשלים id ייחודי לכל שורה
@@ -1112,9 +1113,11 @@ function Countdown({ date, couple = null, canEditSettings = false, onOpenSetting
           </p>
         )}
         {canEditSettings && incomplete && (
+          //  min-h-11 במסך צר: זהו הקישור שמוביל להשלמת התאריך והשמות, והוא
+          //  היה בגובה 16px בלבד — קטן מדי ללחיצה באצבע.
           <button
             onClick={onOpenSettings}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-white/70 underline decoration-white/30 underline-offset-4 transition hover:text-white"
+            className="inline-flex min-h-11 items-center gap-1.5 text-xs font-medium text-white/70 underline decoration-white/30 underline-offset-4 transition hover:text-white sm:min-h-0"
           >
             <Settings2 size={13} />
             להשלמת פרטי החתונה
@@ -1145,9 +1148,11 @@ function Overview({
         const seats = g.seats || 1;
         return s + (g.attendingCount != null ? Math.min(g.attendingCount, seats) : seats);
       }, 0);
+    //  מי שסימן “לא מגיע” אינו “כנראה יבוא” גם אם הסימון נשאר מקודם —
+    //  אחרת “כנראה יבואו” גדול מ“הוזמנו” וסרגל ההתקדמות נחתך בשקט.
     const probably = guests
-      .filter((g) => g.probablyComing)
-      .reduce((s, g) => s + (g.seats || 0), 0);
+      .filter((g) => g.probablyComing && g.rsvp !== "declined")
+      .reduce((s, g) => s + (g.seats || 1), 0);
     const considering = guests.filter((g) => g.considering).length;
     const openTasks = vendors.reduce(
       (s, v) => s + v.tasks.filter((t) => t.status !== "done").length,
@@ -1859,13 +1864,14 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
 
   const totals = useMemo(() => {
     const notDeclined = guests.filter((g) => g.rsvp !== "declined");
+    //  “כנראה יבוא” נספר רק על מי שלא סירב להגיע, ובאותה ברירת מחדל
+    //  של כיסא אחד כמו בשאר המונים, כדי שהמספרים יושווו ביניהם.
+    const probablyGuests = notDeclined.filter((g) => g.probablyComing);
     return {
       count: guests.length,
       seatsTotal: notDeclined.reduce((s, g) => s + (g.seats || 0), 0),
-      probablySeats: guests
-        .filter((g) => g.probablyComing)
-        .reduce((s, g) => s + (g.seats || 0), 0),
-      probablyCount: guests.filter((g) => g.probablyComing).length,
+      probablySeats: probablyGuests.reduce((s, g) => s + (g.seats || 1), 0),
+      probablyCount: probablyGuests.length,
       consideringCount: guests.filter((g) => g.considering).length,
       glattCount: guests.filter((g) => g.glatt).length,
       glattSeats: notDeclined
@@ -2219,9 +2225,26 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     setImporting(true);
     try {
       const rows = await readGuestRows(file);
-      const { guests: parsed, newCategories, skipped } = rowsToGuests(rows, {
+      const {
+        guests: parsed,
+        newCategories,
+        skipped,
+        hasHeader,
+      } = rowsToGuests(rows, {
         categories,
       });
+
+      /*  בלי שורת כותרת מזוהה העמודות נקראות לפי מיקום, וקובץ מקור אחר
+          (רשימה מהאולם, ייצוא מווטסאפ) נכנס עם טלפונים בעמודת הקטגוריה
+          ומספרים אקראיים בעמודת הכיסאות. עדיף לעצור ולהפנות לתבנית.  */
+      if (!hasHeader) {
+        notify(
+          "הקובץ אינו תואם לתבנית המוזמנים של המערכת. הורידו את התבנית " +
+            "בכפתור “תבנית”, מלאו אותה והעלו שוב.",
+          { tone: "error", duration: 9000 }
+        );
+        return;
+      }
 
       if (!parsed.length) {
         notify("לא נמצאו רשומות תקינות בקובץ – ודאו שיש עמודת שם או טלפון", {
@@ -3154,13 +3177,22 @@ function Seating({ guests, tables, setTables }) {
   function assign(tableId, guestId) {
     if (!guestId) return;
     const gid = Number(guestId);
+    const table = tables.find((t) => t.id === tableId);
+    if (!table) return;
+    //  הגנה מפני כפילות: id כפול היה נספר פעמיים בתפוסה ונותן מפתח React כפול.
+    if (table.guestIds.includes(gid)) return;
+    //  בדיקת קיבולת גם כאן ולא רק ברשימת הבחירה: שתי לחיצות מהירות או שני
+    //  מכשירים שמשבצים באותו רגע יכולים לחרוג מהקיבולת.
+    if (seatsUsed(table) + guestSeats(guestById[gid]) > tableCapacity(table.type)) {
+      notify(`אין מספיק מקום פנוי בשולחן “${table.name}”`, { tone: "error" });
+      return;
+    }
     setTables((prev) =>
-      prev.map((t) => {
-        if (t.id !== tableId) return t;
-        //  הגנה מפני כפילות: id כפול היה נספר פעמיים בתפוסה ונותן מפתח React כפול.
-        if (t.guestIds.includes(gid)) return t;
-        return { ...t, guestIds: [...t.guestIds, gid] };
-      })
+      prev.map((t) =>
+        t.id === tableId && !t.guestIds.includes(gid)
+          ? { ...t, guestIds: [...t.guestIds, gid] }
+          : t
+      )
     );
   }
 
@@ -3322,14 +3354,25 @@ function Seating({ guests, tables, setTables }) {
                 <span className="text-slate-500">
                   תפוסה: {used}/{cap}
                 </span>
-                <Badge color={left === 0 ? "rose" : left <= 3 ? "gold" : "sage"}>
-                  {left} מקומות פנויים
+                <Badge color={left <= 0 ? "rose" : left <= 3 ? "gold" : "sage"}>
+                  {left < 0 ? `חריגה של ${-left} מקומות` : `${left} מקומות פנויים`}
                 </Badge>
               </div>
+              {/*  חריגה נוצרת כשמגדילים “כיסאות” למוזמן שכבר משובץ. בלי
+                  ההודעה הזו השולחן עובר את הקיבולת בשקט ואיש לא שם לב.  */}
+              {left < 0 && (
+                <p className="mb-2 flex items-start gap-1.5 rounded-xl bg-rose-50 px-2.5 py-1.5 text-right text-[11px] leading-relaxed text-rose-700">
+                  <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                  <span>
+                    השולחן חורג מהקיבולת — כנראה עודכן מספר הכיסאות של מוזמן
+                    שכבר משובץ כאן. העבירו מוזמנים לשולחן אחר.
+                  </span>
+                </p>
+              )}
               <ProgressBar
                 value={used}
                 max={cap}
-                tone={left === 0 ? "rose" : "sage"}
+                tone={left <= 0 ? "rose" : "sage"}
               />
 
               <ul className="mt-3 space-y-1.5">
@@ -3638,11 +3681,12 @@ function Vendors({
       }
       if (attached.length) reloadFiles();
 
-      setVendors((prev) => {
-        const next = prev.filter((v) => v.id !== id);
-        setOpenId((cur) => (cur === id ? next[0]?.id ?? null : cur));
-        return next;
-      });
+      //  setOpenId מחושב מראש ולא מתוך ה-updater של setVendors: עדכון state
+      //  של קומפוננטה אחת בתוך updater של אחרת מפיק אזהרת React ועלול
+      //  להישבר בגרסאות עתידיות.
+      const remaining = vendors.filter((v) => v.id !== id);
+      setVendors(remaining);
+      setOpenId((cur) => (cur === id ? remaining[0]?.id ?? null : cur));
       //  אותו שיקול של מיחזור מזהים: סעיף שנשאר מאחוריו היה נראה
       //  כשייך לספק הבא שיקבל את אותו מספר.
       if (setBudget) setBudget((prev) => prev.filter((b) => b.vendorId !== id));
@@ -5419,9 +5463,10 @@ function LoginScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
-  //  הדרכה ראשונית: עולה לבד בביקור הראשון בלבד, ומי שהגיע דרך
-  //  קישור הזמנה מדלג עליה — הוא כבר באמצע משימה.
-  const [tourOn, setTourOn] = useState(() => !hasInvite && !guideSeen("auth"));
+  //  ההדרכה אינה נפתחת לבד: השכבה שלה חוסמת את כפתור ההתחברות,
+  //  ומשתמש חוזר שרק רוצה להתחבר נתקל במסך שנראה תקוע. הכפתור
+  //  “הדרכה: איך פותחים חשבון” נשאר זמין למי שמעוניין.
+  const [tourOn, setTourOn] = useState(false);
   //  זהות יציבה: הסיור מודד מחדש בכל שינוי של אובייקט השלב, ומערך
   //  חדש בכל רנדור היה מכניס אותו ללולאת מדידה אינסופית.
   const authSteps = useMemo(() => authTourSteps(setMode), []);
@@ -5585,12 +5630,13 @@ function LoginScreen() {
         {forgot ? "שליחת קישור לאיפוס" : signup ? "הרשמה" : "התחברות"}
       </button>
 
-      <div className="space-y-2">
+      {/*  min-h-11: קישורי טקסט בגובה של שורה אחת קטנים מדי ללחיצה באצבע.  */}
+      <div className="space-y-1">
         <button
           type="button"
           onClick={() => switchMode(signup || forgot ? "signin" : "signup")}
           data-tour="auth-toggle"
-          className="w-full text-center text-xs font-medium text-slate-500 underline-offset-4 transition hover:text-gold-600 hover:underline"
+          className="flex min-h-11 w-full items-center justify-center text-center text-xs font-medium text-slate-500 underline-offset-4 transition hover:text-gold-600 hover:underline"
         >
           {signup || forgot ? "יש לי כבר חשבון – להתחברות" : "אין לי חשבון – להרשמה"}
         </button>
@@ -5599,7 +5645,7 @@ function LoginScreen() {
           <button
             type="button"
             onClick={() => switchMode("forgot")}
-            className="w-full text-center text-xs font-medium text-slate-400 underline-offset-4 transition hover:text-gold-600 hover:underline"
+            className="flex min-h-11 w-full items-center justify-center text-center text-xs font-medium text-slate-400 underline-offset-4 transition hover:text-gold-600 hover:underline"
           >
             שכחתי סיסמה
           </button>
@@ -5610,7 +5656,7 @@ function LoginScreen() {
         <button
           type="button"
           onClick={() => setTourOn(true)}
-          className="flex w-full items-center justify-center gap-1.5 pt-1 text-xs font-medium text-gold-600 underline-offset-4 transition hover:underline"
+          className="flex min-h-11 w-full items-center justify-center gap-1.5 text-xs font-medium text-gold-600 underline-offset-4 transition hover:underline"
         >
           <HelpCircle size={14} />
           הדרכה: איך פותחים חשבון
@@ -5801,9 +5847,14 @@ function WeddingShell({ session }) {
             notify(inviteErrorMessage(err), { tone: "error", duration: 8000 });
           }
         }
-        const list = await refreshWeddings();
+        //  קוראים ישירות ולא דרך refreshWeddings, כדי ששתי ההשמות — הרשימה
+        //  והחתונה הפעילה — יקרו יחד ואחרי בדיקת הביטול. אחרת הרשימה נקבעת
+        //  גם בריצה מבוטלת בזמן שהמזהה הפעיל נשאר ריק, ומסך "בואו ניצור את
+        //  החתונה שלכם" מהבהב למי שכבר יש לו חתונה.
+        const list = await listWeddings();
         if (cancelled) return;
         setRetrying(false);
+        setWeddings(list);
         setActiveWeddingId((cur) => {
           if (target && list.some((w) => w.id === target)) return target;
           if (cur && list.some((w) => w.id === cur)) return cur;
@@ -5841,7 +5892,7 @@ function WeddingShell({ session }) {
       if (timer) clearTimeout(timer);
     };
     //  attempt בכוונה ברשימה — הגדלתו היא שמפעילה ניסיון טעינה נוסף.
-  }, [refreshWeddings, attempt]);
+  }, [attempt]);
 
   useEffect(() => {
     try {
@@ -6233,6 +6284,19 @@ function WeddingApp({
     }, 5000);
   }, []);
 
+  /*  תור סדרתי לכל הסנכרונים. ארבעת ה-effects נדלקים באותו רגע ושולחים
+   *  בקשות במקביל, וסעיף תקציב שמצביע על ספק היה יכול להגיע לשרת לפני הספק
+   *  עצמו. התור מבטיח סדר קבוע — לפי סדר ה-effects בקובץ — ומונע גם עומס
+   *  של ארבע בקשות בו-זמנית על תוכנית חינמית.  */
+  const syncChainRef = useRef(Promise.resolve());
+  const enqueueSync = useCallback((task) => {
+    const run = syncChainRef.current.then(task, task);
+    //  שרשרת התור לא נשברת מכישלון של משימה בודדת: כל אחת מטפלת בשגיאה
+    //  שלה בעצמה, וכאן רק בולעים כדי שלא ייווצר unhandled rejection.
+    syncChainRef.current = run.catch(() => {});
+    return run;
+  }, []);
+
   // Initial cloud load: seed an empty wedding from local data, then pull the truth.
   useEffect(() => {
     if (!cloudEnabled) return;
@@ -6320,21 +6384,23 @@ function WeddingApp({
   // צופה (viewer) לעולם לא כותב – ה-DB גם ידחה אותו, ואין טעם ברעש.
   useEffect(() => {
     if (!cloudEnabled || !canEdit || !mayGuests || !cloudReadyRef.current) return;
-    const timer = setTimeout(async () => {
-      try {
-        setCloudStatus("saving");
-        prevIdsRef.current.guests = await cloudSyncDataset(
-          weddingId,
-          "guests",
-          guests,
-          prevIdsRef.current.guests
-        );
-        setCloudStatus("synced");
-      } catch (err) {
-        console.error("Cloud sync failed (guests):", err);
-        setCloudStatus("error");
-        scheduleSyncRetry();
-      }
+    const timer = setTimeout(() => {
+      enqueueSync(async () => {
+        try {
+          setCloudStatus("saving");
+          prevIdsRef.current.guests = await cloudSyncDataset(
+            weddingId,
+            "guests",
+            guests,
+            prevIdsRef.current.guests
+          );
+          setCloudStatus("synced");
+        } catch (err) {
+          console.error("Cloud sync failed (guests):", err);
+          setCloudStatus("error");
+          scheduleSyncRetry();
+        }
+      });
     }, 800);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6342,21 +6408,23 @@ function WeddingApp({
 
   useEffect(() => {
     if (!cloudEnabled || !canEdit || !mayGuests || !cloudReadyRef.current) return;
-    const timer = setTimeout(async () => {
-      try {
-        setCloudStatus("saving");
-        prevIdsRef.current.tables = await cloudSyncDataset(
-          weddingId,
-          "tables",
-          tables,
-          prevIdsRef.current.tables
-        );
-        setCloudStatus("synced");
-      } catch (err) {
-        console.error("Cloud sync failed (tables):", err);
-        setCloudStatus("error");
-        scheduleSyncRetry();
-      }
+    const timer = setTimeout(() => {
+      enqueueSync(async () => {
+        try {
+          setCloudStatus("saving");
+          prevIdsRef.current.tables = await cloudSyncDataset(
+            weddingId,
+            "tables",
+            tables,
+            prevIdsRef.current.tables
+          );
+          setCloudStatus("synced");
+        } catch (err) {
+          console.error("Cloud sync failed (tables):", err);
+          setCloudStatus("error");
+          scheduleSyncRetry();
+        }
+      });
     }, 800);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6364,21 +6432,23 @@ function WeddingApp({
 
   useEffect(() => {
     if (!cloudEnabled || !canEdit || !mayVendors || !cloudReadyRef.current) return;
-    const timer = setTimeout(async () => {
-      try {
-        setCloudStatus("saving");
-        prevIdsRef.current.vendors = await cloudSyncDataset(
-          weddingId,
-          "vendors",
-          vendors,
-          prevIdsRef.current.vendors
-        );
-        setCloudStatus("synced");
-      } catch (err) {
-        console.error("Cloud sync failed (vendors):", err);
-        setCloudStatus("error");
-        scheduleSyncRetry();
-      }
+    const timer = setTimeout(() => {
+      enqueueSync(async () => {
+        try {
+          setCloudStatus("saving");
+          prevIdsRef.current.vendors = await cloudSyncDataset(
+            weddingId,
+            "vendors",
+            vendors,
+            prevIdsRef.current.vendors
+          );
+          setCloudStatus("synced");
+        } catch (err) {
+          console.error("Cloud sync failed (vendors):", err);
+          setCloudStatus("error");
+          scheduleSyncRetry();
+        }
+      });
     }, 800);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6386,21 +6456,23 @@ function WeddingApp({
 
   useEffect(() => {
     if (!cloudEnabled || !canEdit || !mayFinance || !cloudReadyRef.current) return;
-    const timer = setTimeout(async () => {
-      try {
-        setCloudStatus("saving");
-        prevIdsRef.current.budget = await cloudSyncDataset(
-          weddingId,
-          "budget",
-          budget,
-          prevIdsRef.current.budget
-        );
-        setCloudStatus("synced");
-      } catch (err) {
-        console.error("Cloud sync failed (budget):", err);
-        setCloudStatus("error");
-        scheduleSyncRetry();
-      }
+    const timer = setTimeout(() => {
+      enqueueSync(async () => {
+        try {
+          setCloudStatus("saving");
+          prevIdsRef.current.budget = await cloudSyncDataset(
+            weddingId,
+            "budget",
+            budget,
+            prevIdsRef.current.budget
+          );
+          setCloudStatus("synced");
+        } catch (err) {
+          console.error("Cloud sync failed (budget):", err);
+          setCloudStatus("error");
+          scheduleSyncRetry();
+        }
+      });
     }, 800);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6473,15 +6545,15 @@ function WeddingApp({
   }
 
   //  ייצוא לאקסל: גיליון נפרד לכל מערך נתונים (מוזמנים, ספקים, סדר הושבה,
-  //  ניהול תקציב). בניגוד לגיבוי ה-JSON זהו פלט לקריאה בלבד — הוא לא נועד
-  //  לשחזור, ולכן אין בו קבצים מצורפים.
+  //  ניהול תקציב), ולצדם גיליון שחזור שמכיל את אותו payload של גיבוי
+  //  ה-JSON. כך קובץ אחד משמש גם לקריאה וגם לשחזור מלא בחזרה למערכת.
   const [excelBusy, setExcelBusy] = useState(false);
   async function exportExcel() {
     setBackupMenuOpen(false);
     setExcelBusy(true);
     try {
       await exportWeddingWorkbook(
-        { guests, tables, vendors, budget, budgetGoal },
+        { guests, tables, vendors, budget, budgetGoal, backup: backupPayload() },
         coupleTitle || activeWedding?.name
       );
       notify("קובץ האקסל הורד", { tone: "success" });
@@ -6493,18 +6565,36 @@ function WeddingApp({
     }
   }
 
-  // קובץ הגיבוי מכיל שמות וטלפונים של כל המוזמנים. מציעים הצפנה בסיסמה
+  //  קובץ הגיבוי מכיל שמות וטלפונים של כל המוזמנים. מציעים הצפנה בסיסמה
   // (PBKDF2 → AES-GCM) לפני שהוא יורד לדיסק. ראו src/lib/backupCrypto.js.
-  async function exportBackup() {
-    const payload = {
+  //
+  //  ⚠ כל נתון שנשמר במערכת חייב להיכנס לכאן. קודם ההגדרות (יעד התקציב,
+  //  תוויות מסך התקציב וקטגוריות המוזמנים) לא נכנסו, ומי ששיחזר איבד אותן בשקט.
+  function backupPayload() {
+    return {
       app: "wedding-planner",
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       guests,
       tables,
       vendors,
       budget,
+      settings: {
+        budgetGoal,
+        financeLabels,
+        categories,
+        partnerA: couple.partnerA,
+        partnerB: couple.partnerB,
+        //  מחרוזת 'YYYY-MM-DD' כמו ב-DB, ולא אובייקט Date שמשתנה לפי אזור זמן.
+        weddingDate: activeWedding?.weddingDate
+          ? String(activeWedding.weddingDate).slice(0, 10)
+          : null,
+      },
     };
+  }
+
+  async function exportBackup() {
+    const payload = backupPayload();
 
     if (!isCryptoAvailable) {
       downloadJson(payload);
@@ -6566,21 +6656,40 @@ function WeddingApp({
       });
       return;
     }
+    const s = data.settings || {};
     const summary = [
       Array.isArray(data.guests) ? `${data.guests.length} מוזמנים` : null,
       Array.isArray(data.tables) ? `${data.tables.length} שולחנות` : null,
       Array.isArray(data.vendors) ? `${data.vendors.length} ספקים` : null,
       Array.isArray(data.budget) ? `${data.budget.length} סעיפי תקציב` : null,
+      data.settings ? "הגדרות החתונה" : null,
     ]
       .filter(Boolean)
       .join(" · ");
+    const created = data.exportedAt
+      ? new Date(data.exportedAt).toLocaleString("he-IL")
+      : null;
     confirmDialog({
       title: "שחזור גיבוי יחליף את כל הנתונים",
-      message: `הקובץ מכיל: ${summary}\n\nכל הנתונים הנוכחיים יוחלפו. להמשיך?`,
+      message:
+        `הקובץ מכיל: ${summary}` +
+        (created ? `\nנוצר בתאריך: ${created}` : "") +
+        "\n\n⚠ כל הנתונים הקיימים בחתונה יוחלפו במה שבקובץ — כולל שינויים " +
+        "שבן/בת הזוג או שותפים אחרים ביצעו אחרי שהגיבוי נוצר.\n\n" +
+        "לפני השחזור יורד אוטומטית קובץ גיבוי של המצב הנוכחי, כדי שתמיד " +
+        "תהיה דרך חזרה.\n\nלהמשיך?",
       confirmLabel: "שחזר נתונים",
       tone: "danger",
     }).then((ok) => {
       if (!ok) return;
+      //  רשת ביטחון: שחזור הוא פעולה בלתי הפיכה שדורסת גם עבודה של שותפים.
+      //  הקובץ יורד לא מוצפן בכוונה — הוא נוצר בלי אינטראקציה ואי אפשר
+      //  לבקש סיסמה באמצע, ומטרתו לשמש דקה אחורה ולא ארכיון ארוך טווח.
+      try {
+        downloadJson(backupPayload(), "-before-restore");
+      } catch (err) {
+        console.error("Safety backup failed:", err);
+      }
       //  קובץ גיבוי הוא קלט חיצוני: שדה חסר או בטיפוס לא צפוי היה מפיל
       //  את כל המסך (למשל v.tasks.map על undefined). מנרמלים בגבול המערכת.
       if (Array.isArray(data.guests))
@@ -6617,15 +6726,65 @@ function WeddingApp({
             vendorId: b.vendorId == null ? null : Number(b.vendorId),
           }))
         );
+
+      //  הגדרות: גיבויים בגרסה 1 לא הכילו אותן, ולכן כל שדה מוחל רק אם קיים
+      //  בפועל — אחרת שחזור מקובץ ישן היה מאפס את יעד התקציב והתוויות.
+      if (typeof s.budgetGoal === "number") setBudgetGoal(s.budgetGoal);
+      if (s.financeLabels && typeof s.financeLabels === "object")
+        setFinanceLabels((prev) => ({ ...prev, ...s.financeLabels }));
+      if (Array.isArray(s.categories)) setCategories(s.categories);
+      //  שמות בני הזוג והתאריך יושבים על רשומת החתונה עצמה, שרק הבעלים
+      //  רשאי לעדכן. לעורך פשוט מדלגים במקום להציג לו כישלון.
+      if (isOwner && (s.partnerA != null || s.partnerB != null || s.weddingDate != null)) {
+        saveWeddingBasics({
+          partnerA: s.partnerA ?? couple.partnerA,
+          partnerB: s.partnerB ?? couple.partnerB,
+          date: s.weddingDate ?? activeWedding?.weddingDate ?? null,
+        }).catch((err) => console.error("Restore of wedding basics failed:", err));
+      }
       notify("הגיבוי שוחזר בהצלחה", { tone: "success" });
     });
   }
+
+  //  תקרה לקובץ שנטען: גיבוי של אלף מוזמנים שוקל מאות קילובייטים, ולכן כל
+  //  דבר מעבר לזה הוא קובץ שגוי — ו-FileReader טוען את כולו לזיכרון ומקפיא
+  //  את הלשונית לפני שבכלל הגענו לבדיקת התוכן.
+  const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 
   function importBackup(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    if (file.size > MAX_BACKUP_BYTES) {
+      notify("הקובץ גדול מדי (מעל 20MB). ודאו שזהו קובץ גיבוי של המערכת.", {
+        tone: "error",
+      });
+      return;
+    }
+
+    //  קובץ אקסל שיוצא מהמערכת נושא גיליון שחזור עם אותו payload בדיוק.
+    //  קובץ אקסל אחר — למשל רשימת מוזמנים שהמשתמש בנה בעצמו — אינו גיבוי,
+    //  ומפנים אותו לייבוא המוזמנים במקום להיכשל בשקט.
+    if (/\.(xlsx|xlsm)$/i.test(file.name || "")) {
+      readWorkbookBackup(file)
+        .then((data) => applyBackup(data))
+        .catch((err) => {
+          console.error("Excel backup read failed:", err);
+          notify(
+            err?.code === "no_backup_sheet"
+              ? "קובץ האקסל הזה לא יוצא מהמערכת ואינו מכיל גיבוי לשחזור. " +
+                  "לייבוא רשימת מוזמנים השתמשו בכפתור הייבוא במסך המוזמנים."
+              : err?.code === "unreadable_file"
+                ? "לא הצלחנו לקרוא את קובץ האקסל. ודאו שהוא לא פגום."
+                : "גיליון השחזור בקובץ פגום. נסו קובץ גיבוי אחר.",
+            { tone: "error", duration: 9000 }
+          );
+        });
+      return;
+    }
+
     const reader = new FileReader();
+    reader.onerror = () => notify("קריאת הקובץ נכשלה.", { tone: "error" });
     reader.onload = async () => {
       let data;
       try {
@@ -6636,8 +6795,26 @@ function WeddingApp({
         });
         return;
       }
+      if (!data || typeof data !== "object" || Array.isArray(data)) {
+        notify("קובץ הגיבוי אינו תקין. ודא שזהו קובץ שיוצא מהמערכת.", {
+          tone: "error",
+        });
+        return;
+      }
 
       if (isEncryptedBackup(data)) {
+        //  אימות המבנה לפני בקשת הסיסמה: אין טעם לבקש סיסמה לקובץ שממילא
+        //  לא נוכל לפענח, ובלי הבדיקה iterations מנופח מקפיא את הלשונית.
+        const invalid = validateEncryptedBackup(data);
+        if (invalid) {
+          notify(
+            invalid === "corrupt_backup"
+              ? "קובץ הגיבוי פגום ולא ניתן לפענוח."
+              : "הקובץ אינו קובץ גיבוי תקין של המערכת.",
+            { tone: "error" }
+          );
+          return;
+        }
         const pass = await promptDialog({
           title: "קובץ גיבוי מוצפן",
           message: "הזינו את הסיסמה שבה הוצפן הקובץ.",
@@ -6651,6 +6828,15 @@ function WeddingApp({
           notify("הסיסמה שגויה או שהקובץ פגום.", { tone: "error" });
           return;
         }
+      } else if (
+        !Array.isArray(data.guests) &&
+        !Array.isArray(data.tables) &&
+        !Array.isArray(data.vendors) &&
+        !Array.isArray(data.budget)
+      ) {
+        //  JSON תקין שאינו הקובץ שלנו. בלי הבדיקה השחזור "מצליח" ולא משנה כלום.
+        notify("הקובץ אינו קובץ גיבוי של המערכת.", { tone: "error" });
+        return;
       }
 
       applyBackup(data);
@@ -6813,7 +6999,7 @@ function WeddingApp({
             <input
               ref={backupInputRef}
               type="file"
-              accept="application/json,.json"
+              accept="application/json,.json,.xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="hidden"
               onChange={importBackup}
             />
@@ -6888,7 +7074,7 @@ function WeddingApp({
                               ייצוא לאקסל (XLSX)
                             </span>
                             <span className="block text-[11px] text-slate-400">
-                              גיליון לכל מסך: מוזמנים, ספקים, הושבה ותקציב
+                              גיליון לכל מסך — וגם גיבוי מלא לשחזור
                             </span>
                           </span>
                         </button>
@@ -6906,7 +7092,7 @@ function WeddingApp({
                         className="flex w-full items-center gap-2.5 rounded-xl p-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 sm:hidden"
                       >
                         <Upload size={16} className="shrink-0 text-slate-400" />
-                        שחזור מקובץ גיבוי
+                        שחזור מקובץ גיבוי או אקסל
                       </button>
                     )}
                     {isCloudConfigured && session && (
@@ -6929,7 +7115,7 @@ function WeddingApp({
             {fullScope && canEdit && (
               <button
                 onClick={() => backupInputRef.current?.click()}
-                title="שחזור נתונים מקובץ גיבוי"
+                title="שחזור נתונים מקובץ גיבוי (JSON) או מקובץ אקסל שיצא מהמערכת"
                 className="hidden items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:flex"
               >
                 <Upload size={16} /> <span className="hidden sm:inline">שחזור</span>
@@ -7160,9 +7346,11 @@ function WeddingSwitcher({ weddings, activeWedding, onSwitch, onCreate, onOpenMe
           </div>
         )}
 
+        {/*  min-h-11 רק במסך צר: בנייד התפריט הוא מגירה שנפתחת באצבע,
+            ושתי השורות האלה היו 28–31px — קטן מדי לפתיחת מסך שלם.  */}
         <button
           onClick={onOpenMembers}
-          className="mt-1 flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-right text-xs font-medium text-slate-500 transition hover:bg-slate-50 hover:text-gold-600"
+          className="mt-1 flex min-h-11 w-full items-center gap-2 rounded-xl px-2 py-1.5 text-right text-xs font-medium text-slate-500 transition hover:bg-slate-50 hover:text-gold-600 lg:min-h-0"
         >
           <Share2 size={14} /> שיתוף וחברים
           <RoleBadge role={activeWedding.role} />
@@ -7172,7 +7360,7 @@ function WeddingSwitcher({ weddings, activeWedding, onSwitch, onCreate, onOpenMe
             התקציב. כאן ולא בתוך מסכי העבודה, כי אלה נתונים חד-פעמיים.  */}
         <button
           onClick={onOpenSettings}
-          className="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-right text-xs font-medium text-slate-500 transition hover:bg-slate-50 hover:text-gold-600"
+          className="flex min-h-11 w-full items-center gap-2 rounded-xl px-2 py-1.5 text-right text-xs font-medium text-slate-500 transition hover:bg-slate-50 hover:text-gold-600 lg:min-h-0"
         >
           <Settings2 size={14} /> הגדרות החתונה
         </button>
@@ -7470,6 +7658,41 @@ function WeddingSettingsModal({
   );
 }
 
+/* =========================================================================
+ *  מי מחובר לחתונה
+ *  ------------------------------------------------------------------------
+ *  למערכת אין חיבור קבוע פתוח מול הדפדפן, ולכן “מחובר” כאן =
+ *  “נגע בחתונה הזו לאחרונה”. השרת מעדכן את החותמת לכל היותר פעם
+ *  ב-5 דקות, ולכן החלון כאן רחב ממנו — אחרת מי שיושב ועובד היה
+ *  מהבהב בין “מחובר” ל”לא מחובר” בכל רענון.
+ * ====================================================================== */
+const ONLINE_WINDOW_MS = 10 * 60_000;
+
+function presenceLabel(lastSeenAt) {
+  if (!lastSeenAt) return { online: false, text: "טרם נכנס/ה לחתונה" };
+  const at = new Date(lastSeenAt).getTime();
+  if (Number.isNaN(at)) return { online: false, text: "" };
+
+  const diff = Date.now() - at;
+  if (diff < ONLINE_WINDOW_MS) return { online: true, text: "מחובר/ת עכשיו" };
+
+  const minutes = Math.round(diff / 60_000);
+  if (minutes < 60) return { online: false, text: `פעיל/ה לפני ${minutes} דקות` };
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 24)
+    return { online: false, text: hours === 1 ? "פעיל/ה לפני שעה" : `פעיל/ה לפני ${hours} שעות` };
+
+  const days = Math.round(hours / 24);
+  if (days < 30)
+    return { online: false, text: days === 1 ? "פעיל/ה אתמול" : `פעיל/ה לפני ${days} ימים` };
+
+  return {
+    online: false,
+    text: `נכנס/ה לאחרונה ב-${new Date(at).toLocaleDateString("he-IL")}`,
+  };
+}
+
 function MembersModal({
   weddingId,
   isOwner,
@@ -7487,12 +7710,14 @@ function MembersModal({
   const [lastEmail, setLastEmail] = useState("");
   const [editing, setEditing] = useState(null); // userId שנמצא בעריכת הרשאות
 
+  const onlineCount =
+    members?.filter((m) => presenceLabel(m.lastSeenAt).online).length ?? 0;
+
   //  אין שליחת מיילים אוטומטית להזמנות, ולכן ההזמנה נשלחת על ידי המשתמש
   //  עצמו: ווטסאפ, אימייל או העתקה. כשההזמנה נצמדה לכתובת מייל ההודעה
   //  מזכירה אותה, אחרת הנמען מנסה להתחבר עם חשבון אחר והקישור נכשל.
   const eventLabel = weddingName || "החתונה שלנו";
-  const shareSubject = `הזמנה לתכנון ${eventLabel}`;
-  const shareMessage =
+  const shareSubject = `הזמנה לתכנון ${eventLabel}`;  const shareMessage =
     `היי! שיתפתי אותך במערכת לתכנון ${eventLabel}.\n` +
     `להצטרפות: ${lastLink}\n` +
     (lastEmail ? `הקישור ממתין לכתובת המייל: ${lastEmail}\n` : "") +
@@ -7526,6 +7751,15 @@ function MembersModal({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
+
+  //  הרשימה מציגה מי מחובר *עכשיו*, ולכן היא מתרעננת מעצמה כל עוד
+  //  החלון פתוח. רק לבעלים — לחבר רגיל השרת מחזיר רק את עצמו,
+  //  ואין שום דבר שישתנה בין רענונים.
+  useEffect(() => {
+    if (!isOwner) return;
+    const timer = setInterval(load, 30_000);
+    return () => clearInterval(timer);
+  }, [isOwner, load]);
 
   async function invite(e) {
     e.preventDefault();
@@ -7630,6 +7864,8 @@ function MembersModal({
         {isOwner && (
           <form onSubmit={invite} noValidate className="mb-5 space-y-3">
             <div className="flex flex-wrap gap-2">
+              {/*  w-full במסך צר: שלושת הפקדים בשורה אחת כווצו את שדה המייל
+                  ל-48px בטלפון, כלומר אי-אפשר היה לראות מה מקלידים בו.  */}
               <input
                 type="email"
                 autoCapitalize="none"
@@ -7642,7 +7878,7 @@ function MembersModal({
                 }}
                 placeholder="name@example.com (רשות)"
                 aria-label="כתובת מייל להזמנה – רשות"
-                className="min-w-0 flex-1 rounded-xl bg-white px-3 py-2.5 text-sm outline-none ring-1 ring-slate-200 focus:ring-gold-400"
+                className="w-full min-w-0 rounded-xl bg-white px-3 py-2.5 text-sm outline-none ring-1 ring-slate-200 focus:ring-gold-400 sm:w-auto sm:flex-1"
               />
               <select
                 value={role}
@@ -7766,53 +8002,100 @@ function MembersModal({
               <Loader2 className="animate-spin text-gold-500" size={22} />
             </div>
           )}
-          {members?.map((m) => (
-            <div key={m.userId} className="rounded-2xl bg-slate-50 px-3 py-2.5">
-              <div className="flex items-center gap-2">
+          {/*  לא-בעלים רואה ברשימה רק את עצמו, וזו הגבלת אבטחה במסד ולא תקלה.
+              בלי המשפט הזה נראה כאילו הוא לבדו בחתונה.  */}
+          {members !== null && !isOwner && (
+            <p className="rounded-2xl bg-sage-50 px-3 py-2 text-right text-[12px] leading-relaxed text-sage-800">
+              החתונה שותפה איתך. רשימת השותפים המלאה גלויה לבעלי החתונה בלבד —
+              כאן מוצגת ההרשאה שלך.
+            </p>
+          )}
+          {/*  שורת הסיכום עונה על השאלה בלי לקרוא את כל הרשימה: האם מישהו
+              נמצא כאן איתי ברגע זה.  */}
+          {isOwner && !!members?.length && (
+            <div className="rounded-2xl bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
+              <p className="flex items-center gap-2 text-[12px] font-semibold text-slate-700">
                 <span
-                  className="min-w-0 flex-1 truncate text-sm text-slate-700"
-                  dir="ltr"
-                >
-                  {m.email}
-                </span>
-                <RoleBadge role={m.role} />
-                {isOwner && m.role !== "owner" && (
-                  <button
-                    onClick={() => setEditing(editing === m.userId ? null : m.userId)}
-                    title="עריכת הרשאות"
-                    aria-label="עריכת הרשאות"
-                    className="rounded-lg p-1.5 text-slate-400 transition hover:bg-white hover:text-gold-600"
+                  aria-hidden
+                  className={`h-2 w-2 shrink-0 rounded-full ${
+                    onlineCount ? "animate-pulse bg-emerald-500" : "bg-slate-300"
+                  }`}
+                />
+                {onlineCount === 0
+                  ? "אף אחד לא מחובר כרגע"
+                  : onlineCount === 1
+                    ? "משתמש אחד מחובר כרגע"
+                    : `${onlineCount} משתמשים מחוברים כרגע`}
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+                “מחובר” = פתח את החתונה או שמר בה שינוי בעשר הדקות האחרונות.
+                הרשימה מתעדכנת מעצמה כל חצי דקה.
+              </p>
+            </div>
+          )}
+          {members?.map((m) => {
+            const presence = presenceLabel(m.lastSeenAt);
+            return (
+              <div key={m.userId} className="rounded-2xl bg-slate-50 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="min-w-0 flex-1 truncate text-sm text-slate-700"
+                    dir="ltr"
                   >
-                    <Pencil size={15} />
-                  </button>
+                    {m.email}
+                  </span>
+                  <RoleBadge role={m.role} />
+                  {isOwner && m.role !== "owner" && (
+                    <button
+                      onClick={() => setEditing(editing === m.userId ? null : m.userId)}
+                      title="עריכת הרשאות"
+                      aria-label="עריכת הרשאות"
+                      className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-white hover:text-gold-600"
+                    >
+                      <Pencil size={15} />
+                    </button>
+                  )}
+                  {(isOwner || m.userId === currentUserId) && m.role !== "owner" && (
+                    <button
+                      onClick={() => revoke(m)}
+                      title="הסרה"
+                      aria-label="הסרת חבר"
+                      className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
+                </div>
+
+                {isOwner && presence.text && (
+                  <p className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
+                    <span
+                      aria-hidden
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                        presence.online ? "bg-emerald-500" : "bg-slate-300"
+                      }`}
+                    />
+                    {presence.text}
+                    {m.userId === currentUserId && " · זה אתם"}
+                  </p>
                 )}
-                {(isOwner || m.userId === currentUserId) && m.role !== "owner" && (
-                  <button
-                    onClick={() => revoke(m)}
-                    title="הסרה"
-                    aria-label="הסרת חבר"
-                    className="rounded-lg p-1.5 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
-                  >
-                    <Trash2 size={15} />
-                  </button>
+
+                {m.role !== "owner" && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    <ScopeChips scopes={m.scopes} />
+                  </div>
+                )}
+
+                {editing === m.userId && (
+                  <MemberPermissionEditor
+                    member={m}
+                    onCancel={() => setEditing(null)}
+                    onSave={saveMember}
+                  />
                 )}
               </div>
-
-              {m.role !== "owner" && (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  <ScopeChips scopes={m.scopes} />
-                </div>
-              )}
-
-              {editing === m.userId && (
-                <MemberPermissionEditor
-                  member={m}
-                  onCancel={() => setEditing(null)}
-                  onSave={saveMember}
-                />
-              )}
-            </div>
-          ))}
+            );
+          })}
           {members?.length === 0 && (
             <p className="py-4 text-center text-sm text-slate-400">אין חברים עדיין</p>
           )}

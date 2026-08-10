@@ -81,17 +81,54 @@ export function isEncryptedBackup(obj) {
   return !!obj && obj.format === BACKUP_FORMAT && typeof obj.data === "string";
 }
 
+//  קובץ מוצפן תקין מיוצר תמיד עם אותם ערכים. כל חריגה מהם היא קובץ פגום או
+//  קובץ שאינו שלנו, ועדיף לומר זאת מיד מאשר לשרוף שניות על גזירת מפתח
+//  שממילא תיכשל — או, במקרה של iterations מנופח, להקפיא את הלשונית.
+const MAX_ITERATIONS = 600_000;
+const MIN_ITERATIONS = 1_000;
+
+/**
+ *  אימות מבנה המעטפת לפני הפענוח. מחזיר מחרוזת שגיאה או null אם תקין.
+ */
+export function validateEncryptedBackup(envelope) {
+  if (!isEncryptedBackup(envelope)) return "not_backup_file";
+  if (envelope.app !== "wedding-planner") return "not_backup_file";
+  if (envelope.cipher !== "AES-GCM") return "unsupported_backup";
+  if (envelope.kdf?.name !== "PBKDF2" || envelope.kdf?.hash !== "SHA-256") {
+    return "unsupported_backup";
+  }
+  const iterations = Number(envelope.kdf?.iterations);
+  if (
+    !Number.isInteger(iterations) ||
+    iterations < MIN_ITERATIONS ||
+    iterations > MAX_ITERATIONS
+  ) {
+    return "unsupported_backup";
+  }
+  //  base64 בלבד, ובאורך שמתאים ל-salt/IV שאנחנו מייצרים. קלט אחר יפיל את
+  //  atob בחריגה לא מובנת במקום בהודעה ברורה.
+  const b64 = /^[A-Za-z0-9+/]+={0,2}$/;
+  if (!b64.test(envelope.salt || "") || !b64.test(envelope.iv || "")) {
+    return "corrupt_backup";
+  }
+  if (!b64.test(envelope.data || "")) return "corrupt_backup";
+  try {
+    if (fromBase64(envelope.salt).length !== SALT_BYTES) return "corrupt_backup";
+    if (fromBase64(envelope.iv).length !== IV_BYTES) return "corrupt_backup";
+  } catch {
+    return "corrupt_backup";
+  }
+  return null;
+}
+
 /** מפענח מעטפת גיבוי. זורק 'bad_passphrase' אם הסיסמה שגויה. */
 export async function decryptBackup(envelope, passphrase) {
   if (!isCryptoAvailable) throw new Error("crypto_unavailable");
+  const invalid = validateEncryptedBackup(envelope);
+  if (invalid) throw new Error(invalid);
   //  מספר הסיבובים נקרא מהקובץ כדי שגיבויים ישנים ימשיכו להיפתח אחרי
-  //  שנעלה את ברירת המחדל. הקובץ מגיע מהמשתמש, ולכן הוא יכול להכיל
-  //  iterations עצום שמקפיא את הלשונית — לכן יש תקרה. סיבובים מעטים
-  //  אינם מחלישים דבר: הקובץ כבר מוצפן, ומי ששולט בערך שולט גם בתוכן.
-  const iterations = Math.min(
-    Math.max(Math.trunc(Number(envelope.kdf?.iterations)) || PBKDF2_ITERATIONS, 1),
-    2_000_000
-  );
+  //  שנעלה את ברירת המחדל. הטווח נאכף למעלה ב-validateEncryptedBackup.
+  const iterations = Math.trunc(Number(envelope.kdf.iterations));
   const salt = fromBase64(envelope.salt);
   const iv = fromBase64(envelope.iv);
   const key = await deriveKey(passphrase, salt, iterations);

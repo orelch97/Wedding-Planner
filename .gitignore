@@ -20,6 +20,9 @@ dist-ssr
 # PostgreSQL זמני של npm run test:db
 .pgdata
 
+# קבצי עבודה זמניים של בדיקות ידניות (קוקיז, פלטי סקריפטים, קבצי דוגמה)
+tmp/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

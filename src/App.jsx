@@ -962,7 +962,7 @@ function StatCard({ icon: Icon, label, value, sub, tone = "gold", children }) {
 const DEFAULT_FINANCE_LABELS = {
   goalTitle: "יעד התקציב הכולל",
   goalSubtitle: "קבעו את התקרה הכוללת לחתונה",
-  statPlanned: "תקציב מתוכנן",
+  statPlanned: "תכנון נוכחי",
   statActual: "הוצאה בפועל",
   statIncome: "הכנסות (מתנות)",
   statBalance: "מאזן סופי",
@@ -982,6 +982,7 @@ function EditableText({
   className = "",
   inputClassName = "",
   placeholder = "",
+  title = "לחצו לעריכת הכותרת",
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -1021,7 +1022,7 @@ function EditableText({
     <button
       type="button"
       onClick={() => setEditing(true)}
-      title="לחצו לעריכת הכותרת"
+      title={title}
       aria-label={`עריכת ${value || placeholder}`}
       /*  בנייד הכותרות האלה היו מטרות לחיצה בגובה 17px בלבד. `py-2 -my-2`
        *  מגדיל את אזור המגע בלי לשנות את הפריסה החזותית, ובלי לדחוף את
@@ -4413,6 +4414,15 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
     );
   }
 
+  /*  שם הסעיף נערך במקום, בדיוק כמו הסכומים שלצדו. סעיף שנוצר מספק אינו
+      נערך כאן — השם שלו נגרר אחרי שם הספק, ועריכה כאן הייתה נמחקת בשינוי
+      השם הבא בלשונית ספקים.  */
+  function renameItem(id, value) {
+    setBudget((prev) =>
+      prev.map((b) => (b.id === id ? { ...b, category: value } : b))
+    );
+  }
+
   // Reorder budget rows – the array order IS the display order (persisted).
   function moveItem(id, dir) {
     setBudget((prev) => {
@@ -4514,7 +4524,11 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                 : "עוד לא הוגדר יעד תקציב לחתונה הזו."}
               <br />
               <span className="text-slate-500">
-                תכנון נוכחי (סכום הסעיפים):{" "}
+                תכנון נוכחי (סכום הסעיפים{" "}
+                <span className="font-semibold text-slate-700 underline decoration-gold-400 decoration-2 underline-offset-2">
+                  הצפוי
+                </span>
+                ):{" "}
                 <b className="tabular-nums text-slate-700">{fmt(totals.expected)}</b>
                 {" · "}
                 הוצאה בפועל:{" "}
@@ -4525,7 +4539,11 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
             <>
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <span className="text-slate-500">
-                  תכנון נוכחי (סכום הסעיפים):{" "}
+                  תכנון נוכחי (סכום הסעיפים{" "}
+                  <span className="font-semibold text-slate-700 underline decoration-gold-400 decoration-2 underline-offset-2">
+                    הצפוי
+                  </span>
+                  ):{" "}
                   <b className="tabular-nums text-slate-700">{fmt(totals.expected)}</b>
                 </span>
                 <span
@@ -4753,7 +4771,15 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                     </td>
                     <td className="px-3 py-3 font-semibold text-slate-800">
                       <span className="flex flex-wrap items-center gap-1.5">
-                        {b.category}
+                        {canEdit && !vendor ? (
+                          <EditableText
+                            value={b.category}
+                            onCommit={(v) => renameItem(b.id, v)}
+                            title="לחצו לעריכת שם הסעיף"
+                          />
+                        ) : (
+                          b.category
+                        )}
                         {vendor && <VendorSourceTag vendorName={vendor.name} />}
                       </span>
                       {mismatch && (
@@ -4884,7 +4910,15 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <p className="flex flex-wrap items-center gap-1.5 font-semibold text-slate-800">
-                      {b.category}
+                      {canEdit && !vendor ? (
+                        <EditableText
+                          value={b.category}
+                          onCommit={(v) => renameItem(b.id, v)}
+                          title="לחצו לעריכת שם הסעיף"
+                        />
+                      ) : (
+                        b.category
+                      )}
                       {vendor && <VendorSourceTag vendorName={vendor.name} />}
                     </p>
                     {mismatch && (

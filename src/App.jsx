@@ -1095,6 +1095,7 @@ function Overview({
   couple,
   canEditSettings,
   onOpenSettings,
+  onOpenVendor,
 }) {
   const stats = useMemo(() => {
     const totalExpected = budget.reduce((s, b) => s + b.expected, 0);
@@ -1180,17 +1181,18 @@ function Overview({
         <SectionTitle
           icon={Briefcase}
           title="הספקים שלנו במבט מהיר"
-          subtitle="סטטוס משימות ויתרת תשלום"
+          subtitle={
+            onOpenVendor
+              ? "סטטוס משימות ויתרת תשלום · לחצו על ספק לפתיחת הכרטיס המלא שלו"
+              : "סטטוס משימות ויתרת תשלום"
+          }
         />
         <div className="grid gap-3 sm:grid-cols-2">
           {vendors.map((v) => {
             const done = v.tasks.filter((t) => t.status === "done").length;
             const balance = v.contractCost - v.deposit;
-            return (
-              <div
-                key={v.id}
-                className="flex items-center justify-between rounded-2xl bg-white/60 p-4 ring-1 ring-slate-200/70"
-              >
+            const content = (
+              <>
                 <div>
                   <p className="font-semibold text-slate-800">{v.name}</p>
                   <p className="text-xs text-slate-500">{v.type}</p>
@@ -1203,7 +1205,30 @@ function Overview({
                     יתרה: {fmt(balance)}
                   </p>
                 </div>
-              </div>
+              </>
+            );
+            /*  כרטיס הספק בדאשבורד הוא הדבר הראשון שמנסים ללחוץ עליו כדי
+                לראות פרטים. כשאין הרשאה למסך הספקים אין לאן לנווט, ואז
+                הכרטיס נשאר תצוגה בלבד ולא מתחזה לכפתור.  */
+            if (!onOpenVendor)
+              return (
+                <div
+                  key={v.id}
+                  className="flex items-center justify-between rounded-2xl bg-white/60 p-4 ring-1 ring-slate-200/70"
+                >
+                  {content}
+                </div>
+              );
+            return (
+              <button
+                key={v.id}
+                type="button"
+                onClick={() => onOpenVendor(v.id)}
+                title={`מעבר לכרטיס הספק “${v.name}”`}
+                className="flex w-full items-center justify-between rounded-2xl bg-white/60 p-4 text-right ring-1 ring-slate-200/70 transition hover:bg-white hover:ring-gold-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
+              >
+                {content}
+              </button>
             );
           })}
         </div>
@@ -3422,8 +3447,22 @@ function Seating({ guests, tables, setTables }) {
  *  VENDORS + TASK MANAGEMENT MODULE
  * ====================================================================== */
 
-function Vendors({ vendors, setVendors, weddingId = null, canEdit = true }) {
-  const [openId, setOpenId] = useState(vendors[0]?.id ?? null);
+function Vendors({
+  vendors,
+  setVendors,
+  weddingId = null,
+  canEdit = true,
+  focusId = null,
+}) {
+  //  focusId מגיע מלחיצה על ספק בדאשבורד. תוכן הלשונית נבנה מחדש בכל מעבר
+  //  מסך, ולכן די בערך ההתחלתי — אין צורך ב-effect שידרוס את הבחירה של
+  //  המשתמש אחרי שנכנס.
+  const [openId, setOpenId] = useState(
+    () =>
+      (focusId != null && vendors.some((v) => v.id === focusId)
+        ? focusId
+        : vendors[0]?.id) ?? null
+  );
   const [taskInput, setTaskInput] = useState("");
 
   //  כל הקבצים של החתונה נטענים פעם אחת (מטא-דאטה בלבד) ומסוננים לפי ספק.
@@ -5794,6 +5833,21 @@ function WeddingApp({
   const active = navItems.some((n) => n.key === requestedView)
     ? requestedView
     : navItems[0]?.key ?? "guests";
+  //  לחיצה על ספק בדאשבורד מעבירה למסך הספקים ופותחת בדיוק את אותו ספק,
+  //  במקום לזרוק את המשתמש לספק הראשון ולתת לו לחפש שוב את מי שלחץ עליו.
+  const [vendorFocusId, setVendorFocusId] = useState(null);
+  const canOpenVendors = navItems.some((n) => n.key === "vendors");
+  const openVendor = useCallback((id) => {
+    setVendorFocusId(id);
+    setActive("vendors");
+  }, []);
+  //  ברגע שיוצאים ממסך הספקים הבחירה שהגיעה מהדאשבורד כבר לא רלוונטית.
+  //  בלי האיפוס הזה כניסה מאוחרת למסך הספקים מהתפריט הייתה פותחת שוב את
+  //  הספק שנלחץ פעם, במקום את הראשון ברשימה.
+  const goTo = useCallback((key) => {
+    setActive(key);
+    if (key !== "vendors") setVendorFocusId(null);
+  }, []);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   useDrawerSwipe(sidebarOpen, setSidebarOpen);
   //  כשמגירת הניווט פתוחה בנייד היא מכסה את המסך, אבל הדף שמאחוריה עדיין
@@ -6454,7 +6508,7 @@ function WeddingApp({
       )}
       <Sidebar
         active={active}
-        onChange={setActive}
+        onChange={goTo}
         open={sidebarOpen}
         setOpen={setSidebarOpen}
         collapsed={sidebarCollapsed}
@@ -6753,6 +6807,7 @@ function WeddingApp({
               couple={couple}
               canEditSettings={cloudEnabled ? isOwner : true}
               onOpenSettings={() => setSettingsOpen(true)}
+              onOpenVendor={canOpenVendors ? openVendor : null}
             />
           )}
           {active === "guests" && (
@@ -6773,6 +6828,7 @@ function WeddingApp({
               setVendors={setVendors}
               weddingId={cloudEnabled ? weddingId : null}
               canEdit={canEdit}
+              focusId={vendorFocusId}
             />
           )}
           {active === "finance" && (

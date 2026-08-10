@@ -100,12 +100,16 @@ export const ENTITIES = {
       category: b.category,
       expected: Number(b.expected) || 0,
       actual: Number(b.actual) || 0,
+      //  סעיף שנוצר מספק שומר את מזהה הספק; סעיף ידני שומר NULL.
+      //  Number(null) הוא 0, ולכן חייבים לבדוק ריקנות במפורש.
+      vendor_id: b.vendorId == null ? null : Number(b.vendorId),
     }),
     fromRow: (r) => ({
       id: Number(r.id),
       category: r.category,
       expected: Number(r.expected) || 0,
       actual: Number(r.actual) || 0,
+      vendorId: r.vendor_id == null ? null : Number(r.vendor_id),
     }),
   },
 };

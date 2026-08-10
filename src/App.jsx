@@ -540,6 +540,44 @@ function nextRowId(list) {
   return list.reduce((m, x) => Math.max(m, Number(x.id) || 0), 0) + 1;
 }
 
+/* ── קישור בין ספק לסעיף תקציב ─────────────────────────────────────────────
+ *  כל ספק מקבל סעיף משלו ב"מעקב תקציב מפורט", מסומן ב-vendorId. הסעיף נוצר
+ *  ברגע הוספת הספק (גם ב-0 ₪), נגרר אחרי שינויי שם ועלות, ונמחק יחד איתו.
+ *  ה-id של הסעיף עצמאי — שני המספרים מגיעים מ-nextRowId על אוספים שונים
+ *  ובוודאות יתנגשו, ולכן אסור להשתמש ב-id של הספק כ-id של הסעיף.
+ */
+function newVendorBudgetRow(vendor, budgetRows) {
+  const cost = Number(vendor.contractCost) || 0;
+  return {
+    id: nextRowId(budgetRows),
+    category: vendor.name,
+    expected: cost,
+    actual: cost,
+    vendorId: vendor.id,
+  };
+}
+
+/*  השלמה חד-פעמית בטעינת החתונה: חתונות שנוצרו לפני התכונה מחזיקות ספקים
+ *  בלי סעיף תקציב, ולהפך — סעיף שהספק שלו נמחק במכשיר אחר. מחזיר את המערך
+ *  המקורי כשאין מה לתקן, כדי לא להפעיל סנכרון ענן מיותר בכל טעינה.  */
+function reconcileVendorBudgetRows(budgetRows, vendors) {
+  //  רשימת ספקים ריקה אינה ראיה לכך שהספקים נמחקו — היא גם המצב של טעינה
+  //  חלקית או של חוסר הרשאה. ניקוי יתומים על סמך רשימה ריקה היה מוחק את כל
+  //  סעיפי הספקים, ולכן הוא נעשה רק כשיש ספקים בפועל.
+  const vendorIds = new Set(vendors.map((v) => v.id));
+  const linked = new Set(
+    budgetRows.map((b) => b.vendorId).filter((id) => id != null)
+  );
+  const kept = vendorIds.size
+    ? budgetRows.filter((b) => b.vendorId == null || vendorIds.has(b.vendorId))
+    : budgetRows;
+  const missing = vendors.filter((v) => !linked.has(v.id));
+  if (kept.length === budgetRows.length && !missing.length) return budgetRows;
+  const next = [...kept];
+  for (const v of missing) next.push(newVendorBudgetRow(v, next));
+  return next;
+}
+
 //  נרמול שורות מקובץ גיבוי: מחיל טרנספורמציה, ומשלים id ייחודי לכל שורה
 //  שהגיעה בלי id תקין (id כפול היה גורם למחיקה למחוק שתי שורות).
 function withIds(rows, transform) {
@@ -3450,6 +3488,7 @@ function Seating({ guests, tables, setTables }) {
 function Vendors({
   vendors,
   setVendors,
+  setBudget = null,
   weddingId = null,
   canEdit = true,
   focusId = null,
@@ -3483,7 +3522,30 @@ function Vendors({
   }, [reloadFiles]);
 
   function updateVendor(id, patch) {
+    const before = vendors.find((v) => v.id === id);
     setVendors((prev) => prev.map((v) => (v.id === id ? { ...v, ...patch } : v)));
+
+    if (!setBudget || !before) return;
+    const nameChanged = patch.name !== undefined && patch.name !== before.name;
+    const costChanged =
+      patch.contractCost !== undefined && patch.contractCost !== before.contractCost;
+    if (!nameChanged && !costChanged) return;
+
+    setBudget((prev) =>
+      prev.map((b) => {
+        if (b.vendorId !== id) return b;
+        const next = { ...b };
+        if (nameChanged) next.category = patch.name;
+        //  הסכומים נגררים אחרי החוזה רק כל עוד לא נגעו בהם במסך
+        //  התקציב. מי שערך שם סכום אחר התכוון לכך, ודריסה שקטה שלו
+        //  היא איבוד נתונים. במקום זה הפער מסומן באדום במסך התקציב.
+        if (costChanged) {
+          if (b.expected === before.contractCost) next.expected = patch.contractCost;
+          if (b.actual === before.contractCost) next.actual = patch.contractCost;
+        }
+        return next;
+      })
+    );
   }
 
   function addTask(vendorId) {
@@ -3557,6 +3619,9 @@ function Vendors({
         "כל הפרטים והמשימות של הספק יימחקו לצמיתות." +
         (attached.length
           ? `\n\nיימחקו גם ${attached.length} קבצים מצורפים.`
+          : "") +
+        (setBudget
+          ? "\n\nיוסר גם סעיף התקציב של הספק במסך ניהול תקציב."
           : ""),
       confirmLabel: "מחק ספק",
       tone: "danger",
@@ -3578,6 +3643,9 @@ function Vendors({
         setOpenId((cur) => (cur === id ? next[0]?.id ?? null : cur));
         return next;
       });
+      //  אותו שיקול של מיחזור מזהים: סעיף שנשאר מאחוריו היה נראה
+      //  כשייך לספק הבא שיקבל את אותו מספר.
+      if (setBudget) setBudget((prev) => prev.filter((b) => b.vendorId !== id));
       notify("הספק נמחק", { tone: "success" });
     });
   }
@@ -3586,21 +3654,27 @@ function Vendors({
     //  ה-id הוא גם המפתח הראשי ב-DB, ומשמש לקישור הקבצים המצורפים.
     //  nextRowId מבטיח ייחודיות גם כשנוספים שני ספקים באותה מילישנייה.
     const id = nextRowId(vendors);
-    setVendors((prev) => [
-      ...prev,
-      {
-        id,
-        name: "ספק חדש",
-        type: "כללי",
-        phone: "",
-        email: "",
-        contractCost: 0,
-        deposit: 0,
-        notes: "",
-        tasks: [],
-      },
-    ]);
+    const vendor = {
+      id,
+      name: "ספק חדש",
+      type: "כללי",
+      phone: "",
+      email: "",
+      contractCost: 0,
+      deposit: 0,
+      notes: "",
+      tasks: [],
+    };
+    setVendors((prev) => [...prev, vendor]);
     setOpenId(id);
+
+    if (setBudget) {
+      setBudget((prev) => [...prev, newVendorBudgetRow(vendor, prev)]);
+      notify(
+        `“${vendor.name}” נוסף גם למעקב התקציב. מילוי “עלות בחוזה” יעדכן שם את הסכום.`,
+        { tone: "success", duration: 6000 }
+      );
+    }
   }
 
   return (
@@ -3724,19 +3798,26 @@ function Vendors({
                   </label>
 
                   <div className="grid grid-cols-2 gap-3">
-                    <label className="text-xs font-semibold text-slate-500">
-                      עלות בחוזה
-                      <input
-                        type="number"
-                        value={v.contractCost}
-                        onChange={(e) =>
-                          updateVendor(v.id, {
-                            contractCost: Number(e.target.value) || 0,
-                          })
-                        }
-                        className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
-                      />
-                    </label>
+                    <div>
+                      <label className="text-xs font-semibold text-slate-500">
+                        עלות בחוזה
+                        <input
+                          type="number"
+                          value={v.contractCost}
+                          onChange={(e) =>
+                            updateVendor(v.id, {
+                              contractCost: Number(e.target.value) || 0,
+                            })
+                          }
+                          className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
+                        />
+                      </label>
+                      {setBudget && (
+                        <p className="mt-1 text-xs text-slate-400">
+                          מסונכרן לסעיף של הספק במעקב התקציב
+                        </p>
+                      )}
+                    </div>
                     <label className="text-xs font-semibold text-slate-500">
                       מקדמה ששולמה
                       <input
@@ -4114,12 +4195,41 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
  *  FINANCE MODULE
  * ====================================================================== */
 
-function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, financeLabels, setFinanceLabels }) {
+/*  תגית מקור לסעיף תקציב. בלעדיה שורה שנוצרה לבד נראית כמו
+    שורה שמישהו הקליד, ואז מוחקים אותה או מוסיפים לידה עוד אחת.  */
+function VendorSourceTag({ vendorName }) {
+  return (
+    <span
+      title={`הסעיף נוצר אוטומטית מהספק “${vendorName}” בלשונית ספקים ומשימות`}
+      className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-sage-100 px-2 py-0.5 text-[11px] font-semibold text-sage-700 ring-1 ring-inset ring-sage-300"
+    >
+      <Briefcase size={11} />
+      מלשונית ספקים
+    </span>
+  );
+}
+
+function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudgetGoal, financeLabels, setFinanceLabels }) {
   const canEdit = useCanEdit();
   const [form, setForm] = useState({ category: "", expected: "", actual: "" });
   const [goalDraft, setGoalDraft] = useState(budgetGoal);
   const [dragId, setDragId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
+
+  /*  סעיף שנוצר מספק מחזיק סכומים משלו, ולכן הוא עשוי להיפרד
+      מהעלות בחוזה — בין אם ערכו אותו כאן ובין אם החוזה התעדכן
+      בלשונית ספקים. הפער מוצג ולא נסתם: שני המספרים אמיתיים.  */
+  const vendorById = useMemo(
+    () => new Map(vendors.map((v) => [v.id, v])),
+    [vendors]
+  );
+
+  //  שיוך לספק שכבר אינו קיים (מחיקה במכשיר אחר, או חוסר הרשאה
+  //  ללשונית ספקים) מוצג כסעיף רגיל במקום להפיל את המסך.
+  const vendorOf = (b) =>
+    b.vendorId == null ? null : vendorById.get(b.vendorId) ?? null;
+
+  const contractOf = (v) => Number(v.contractCost) || 0;
 
   const L = { ...DEFAULT_FINANCE_LABELS, ...financeLabels };
   const updateLabel = (key, val) =>
@@ -4195,6 +4305,16 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
 
   function removeItem(id) {
     const b = budget.find((x) => x.id === id);
+    const vendor = b ? vendorOf(b) : null;
+    //  מחיקה כאן הייתה מתבטלת מעצמה: הסעיף נוצר מחדש בטעינה הבאה
+    //  כל עוד הספק קיים, והמשתמש היה חווה את זה כתקלה.
+    if (vendor) {
+      notify(
+        `“${b.category}” הוא סעיף של ספק. כדי להסיר אותו, מחקו את הספק בלשונית “ספקים ומשימות”. כדי שלא ייספר בתקציב, אפסו את הסכומים.`,
+        { tone: "error", duration: 7000 }
+      );
+      return;
+    }
     confirmDialog({
       title: `למחוק את הסעיף “${b?.category || ""}”?`,
       message: "סעיף התקציב יוסר לצמיתות.",
@@ -4203,6 +4323,13 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
     }).then((ok) => {
       if (ok) setBudget((prev) => prev.filter((b) => b.id !== id));
     });
+  }
+
+  //  יישור הפער בלחיצה אחת, לפי העלות שרשומה בכרטיס הספק.
+  function matchVendor(id, cost) {
+    setBudget((prev) =>
+      prev.map((b) => (b.id === id ? { ...b, expected: cost, actual: cost } : b))
+    );
   }
 
   return (
@@ -4375,6 +4502,16 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
           }
         />
 
+        {budget.some((b) => vendorOf(b)) && (
+          <p className="mb-3 flex items-start gap-2 rounded-xl bg-sage-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-sage-200 sm:mb-4">
+            <Briefcase size={14} className="mt-0.5 shrink-0 text-sage-600" />
+            <span>
+              סעיפים שמסומנים “מלשונית ספקים” נוצרים אוטומטית מכרטיסי הספקים.
+              עדכון “עלות בחוזה” שם מעדכן גם את הסעיף כאן, ומחיקת הספק מסירה אותו.
+            </span>
+          </p>
+        )}
+
         {canEdit && (
         <form
           onSubmit={addItem}
@@ -4444,6 +4581,10 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
             <tbody>
               {budget.map((b, idx) => {
                 const diff = b.expected - b.actual;
+                const vendor = vendorOf(b);
+                const cost = vendor ? contractOf(vendor) : 0;
+                const mismatch =
+                  vendor && (b.expected !== cost || b.actual !== cost);
                 return (
                   <tr
                     key={b.id}
@@ -4457,7 +4598,11 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
                       handleDrop(b.id);
                     }}
                     className={`border-b border-slate-100 transition ${
-                      dragId === b.id ? "opacity-40" : "hover:bg-white/60"
+                      dragId === b.id
+                        ? "opacity-40"
+                        : mismatch
+                          ? "bg-rose-50/70 hover:bg-rose-50"
+                          : "hover:bg-white/60"
                     } ${
                       dragOverId === b.id && dragId !== b.id
                         ? "border-t-2 border-t-gold-400 bg-gold-50/40"
@@ -4477,7 +4622,25 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
                       <GripVertical size={16} />
                     </td>
                     <td className="px-3 py-3 font-semibold text-slate-800">
-                      {b.category}
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        {b.category}
+                        {vendor && <VendorSourceTag vendorName={vendor.name} />}
+                      </span>
+                      {mismatch && (
+                        <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-normal text-rose-600">
+                          העלות בחוזה של הספק היא{" "}
+                          <b className="tabular-nums">{fmt(cost)}</b>
+                          {canEdit && (
+                            <button
+                              type="button"
+                              onClick={() => matchVendor(b.id, cost)}
+                              className="rounded-lg bg-white px-2 py-0.5 font-semibold text-rose-600 ring-1 ring-rose-200 transition hover:bg-rose-50"
+                            >
+                              עדכון לפי הספק
+                            </button>
+                          )}
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-3">
                       <input
@@ -4565,15 +4728,40 @@ function Finance({ budget, setBudget, guests, budgetGoal, setBudgetGoal, finance
         <div className="space-y-3 lg:hidden">
           {budget.map((b, idx) => {
             const diff = b.expected - b.actual;
+            const vendor = vendorOf(b);
+            const cost = vendor ? contractOf(vendor) : 0;
+            const mismatch = vendor && (b.expected !== cost || b.actual !== cost);
             return (
               <div
                 key={b.id}
-                className="rounded-2xl border border-slate-200 bg-white/70 p-4"
+                className={`rounded-2xl border p-4 ${
+                  mismatch
+                    ? "border-rose-200 bg-rose-50/70"
+                    : "border-slate-200 bg-white/70"
+                }`}
               >
                 <div className="mb-3 flex items-start justify-between gap-2">
-                  <p className="min-w-0 flex-1 font-semibold text-slate-800">
-                    {b.category}
-                  </p>
+                  <div className="min-w-0 flex-1">
+                    <p className="flex flex-wrap items-center gap-1.5 font-semibold text-slate-800">
+                      {b.category}
+                      {vendor && <VendorSourceTag vendorName={vendor.name} />}
+                    </p>
+                    {mismatch && (
+                      <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-rose-600">
+                        העלות בחוזה של הספק היא{" "}
+                        <b className="tabular-nums">{fmt(cost)}</b>
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() => matchVendor(b.id, cost)}
+                            className="rounded-lg bg-white px-2 py-1 font-semibold text-rose-600 ring-1 ring-rose-200 transition hover:bg-rose-50"
+                          >
+                            עדכון לפי הספק
+                          </button>
+                        )}
+                      </p>
+                    )}
+                  </div>
                   <div className="flex shrink-0 items-center gap-0.5">
                     <button
                       onClick={() => moveItem(b.id, -1)}
@@ -6087,7 +6275,15 @@ function WeddingApp({
         setGuests(data.guests);
         setTables(data.tables);
         setVendors(data.vendors);
-        setBudget(data.budget);
+        //  השלמה חד-פעמית: חתונות שנוצרו לפני הקישור לתקציב מחזיקות
+        //  ספקים בלי סעיף משלהם. מותנה בהרשאה לשני המסכים: למי ששותף
+        //  לו מסך בודד רשימת הספקים מגיעה ריקה, והשלמה על סמך רשימה
+        //  ריקה הייתה מוחקת לבעלים את כל סעיפי הספקים בתקציב.
+        setBudget(
+          canEdit && mayVendors && mayFinance
+            ? reconcileVendorBudgetRows(data.budget, data.vendors)
+            : data.budget
+        );
         //  הגדרות החתונה (יעד תקציב, קטגוריות, כותרות מסך התקציב) חיות ב-DB
         //  ולא ב-localStorage, אחרת הן נמחקות בכל יציאה מהמערכת ולא קיימות
         //  במכשיר אחר. מחילים רק מפתחות שקיימים בפועל, כדי שחתונה חדשה תישאר
@@ -6417,6 +6613,8 @@ function WeddingApp({
             ...b,
             expected: Number(b.expected) || 0,
             actual: Number(b.actual) || 0,
+            //  גיבוי שנוצר לפני הקישור לספקים אינו מכיל את השדה.
+            vendorId: b.vendorId == null ? null : Number(b.vendorId),
           }))
         );
       notify("הגיבוי שוחזר בהצלחה", { tone: "success" });
@@ -6826,6 +7024,7 @@ function WeddingApp({
             <Vendors
               vendors={vendors}
               setVendors={setVendors}
+              setBudget={mayFinance ? setBudget : null}
               weddingId={cloudEnabled ? weddingId : null}
               canEdit={canEdit}
               focusId={vendorFocusId}
@@ -6835,6 +7034,7 @@ function WeddingApp({
             <Finance
               budget={budget}
               setBudget={setBudget}
+              vendors={vendors}
               guests={guests}
               budgetGoal={budgetGoal}
               setBudgetGoal={setBudgetGoal}

@@ -65,7 +65,8 @@ const ENTITIES = {
   },
   budget: {
     table: "budget_items",
-    columns: ["category", "expected", "actual"],
+    //  vendor_id = הספק שממנו נוצר הסעיף, או NULL לסעיף שהוקלד ידנית.
+    columns: ["category", "expected", "actual", "vendor_id"],
     jsonColumns: [],
     defaults: { category: "", expected: 0, actual: 0 },
   },

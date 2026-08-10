@@ -117,6 +117,7 @@ import {
   isCryptoAvailable,
 } from "./lib/backupCrypto";
 import { exportWeddingWorkbook } from "./lib/excelExport";
+import { readGuestRows, rowsToGuests, ImportError } from "./lib/guestImport";
 import logoUrl from "./assets/logo.jpg";
 
 /* =========================================================================
@@ -1294,6 +1295,12 @@ const GuestRow = memo(function GuestRow({
             g.category?.startsWith("צד כלה") ? "ring-2" : "ring-1"
           } ${categoryStyle(g.category)}`}
         >
+          {/*  ערך ריק הוא מצב חוקי (מוזמן שיובא בלי קטגוריה, או קטגוריה
+              שנמחקה) וחייבת להיות לו אפשרות מפורשת, אחרת ה-select נראה ריק
+              והמשתמש לא יכול לבחור בו בחזרה.  */}
+          <option value="" className="bg-white text-slate-700">
+            ללא קטגוריה
+          </option>
           {/*  קטגוריה שנמחקה מהרשימה או הגיעה מייבוא חייבת להישאר גלויה,
               אחרת השדה נראה ריק והנתון נראה כאילו אבד.  */}
           {!!g.category && !categories.includes(g.category) && (
@@ -1587,6 +1594,7 @@ const GuestCard = memo(function GuestCard({
             onChange={(e) => updateCategory(g.id, e.target.value)}
             className={field}
           >
+            <option value="">ללא קטגוריה</option>
             {!!g.category && !categories.includes(g.category) && (
               <option value={g.category}>{g.category}</option>
             )}
@@ -1724,6 +1732,9 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   const canEdit = useCanEdit();
   const fileRef = useRef(null);
   const [catManagerOpen, setCatManagerOpen] = useState(false);
+  //  קריאת קובץ Excel גדול לוקחת זמן מורגש בנייד. בלי חיווי המשתמש
+  //  לוחץ שוב ושוב על "ייבוא" וחושב שהכפתור לא עובד.
+  const [importing, setImporting] = useState(false);
   //  המסך מאחד שתי עבודות נפרדות. כשהן זו מתחת לזו, כל כניסה
   //  לסידור ההושבה דורשת לגלול דרך מאות מוזמנים — בלתי אפשרי בנייד.
   //  לכן נפרד לשני טאבים; כבונוס, רשימת 592 השורות לא מרונדרת כלל
@@ -2132,140 +2143,65 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     [selectedIds, setGuests]
   );
 
-  // --- Excel/CSV import (header-aware) ---
-  // Recognised columns (by header name, any order):
-  // שם, נייד, קטגוריה, אזכור, כיסאות, מקור, גלאט, כנראה יבוא, לשקול, אישור הגעה, כמה אישרו, מתנה
-  function handleFile(e) {
-    const file = e.target.files?.[0];
+  /*  ייבוא מוזמנים מקובץ Excel (.xlsx) או CSV/TSV. כל הלוגיקה של פענוח
+      הקידוד, פירוק השורות והמרתן לרשומות יושבת ב-lib/guestImport.js כדי
+      שאפשר יהיה לבדוק אותה מחוץ לדפדפן (npm run test:import).
+      העמודות מזוהות לפי שם הכותרת ולא לפי מיקום:
+      שם, נייד, קטגוריה, אזכור, כיסאות, מקור, גלאט, כנראה יבוא, לשקול,
+      אישור הגעה, כמה אישרו, מתנה.  */
+  async function handleFile(e) {
+    const input = e.target;
+    const file = input.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const text = String(ev.target?.result || "");
-        const rows = text
-          .split(/\r?\n/)
-          .map((r) => r.trim())
-          .filter(Boolean);
-        if (!rows.length) {
-          notify("לא נמצאו רשומות תקינות בקובץ", { tone: "error" });
-          e.target.value = "";
-          return;
-        }
+    setImporting(true);
+    try {
+      const rows = await readGuestRows(file);
+      const { guests: parsed, newCategories, skipped } = rowsToGuests(rows, {
+        categories,
+      });
 
-        const splitRow = (r) =>
-          r.split(/[,\t;]/).map((c) => c.replace(/^"|"$/g, "").trim());
-
-        const aliases = {
-          name: ["שם", "name"],
-          phone: ["נייד", "טלפון", "phone"],
-          category: ["קטגוריה", "category"],
-          mention: ["אזכור", "mention"],
-          seats: ["כיסאות", "seats"],
-          source: ["מקור", "source"],
-          glatt: ["גלאט", "glatt"],
-          probablyComing: ["כנראה", "probably"],
-          considering: ["לשקול", "considering"],
-          rsvp: ["אישור הגעה", "אישורי הגעה", "סטטוס", "rsvp"],
-          attendingCount: ["כמה אישרו", "מאושרים", "attending"],
-          gift: ["מתנה", "gift"],
-        };
-
-        const headerCells = splitRow(rows[0]);
-        const hasHeader = headerCells.some((c) => /שם|name/i.test(c));
-        const idx = {};
-        if (hasHeader) {
-          Object.entries(aliases).forEach(([key, names]) => {
-            idx[key] = headerCells.findIndex((c) =>
-              names.some((n) => c.toLowerCase().includes(n.toLowerCase()))
-            );
-          });
-        } else {
-          // positional fallback (canonical order)
-          [
-            "name",
-            "phone",
-            "category",
-            "mention",
-            "seats",
-            "source",
-            "glatt",
-            "probablyComing",
-            "considering",
-            "rsvp",
-            "attendingCount",
-            "gift",
-          ].forEach((k, i) => (idx[k] = i));
-        }
-
-        const dataRows = hasHeader ? rows.slice(1) : rows;
-        const get = (cells, key) => (idx[key] >= 0 ? cells[idx[key]] : undefined);
-        const truthy = (s) => /^(v|כן|yes|1|true|✓)$/i.test((s || "").trim());
-        const parseRsvp = (s) => {
-          const t = (s || "").trim();
-          if (/אישר|confirm|✓/i.test(t)) return "confirmed";
-          if (/לא מגיע|declin|no|^לא$/i.test(t)) return "declined";
-          return "pending";
-        };
-
-        const parsed = dataRows.map((row, i) => {
-          const cells = splitRow(row);
-          const category = get(cells, "category");
-          const source = get(cells, "source");
-          const seats = Math.max(1, Number(get(cells, "seats")) || 1);
-          const rsvp = parseRsvp(get(cells, "rsvp"));
-          let attendingCount = 0;
-          if (rsvp === "confirmed") {
-            const raw = get(cells, "attendingCount");
-            const n =
-              raw != null && String(raw).trim() !== ""
-                ? Math.round(Number(raw) || 0)
-                : seats;
-            attendingCount = Math.max(0, Math.min(seats, n));
-          }
-          return {
-            name: get(cells, "name") || `אורח ${i + 1}`,
-            phone: get(cells, "phone") || "",
-            category: categories.includes(category)
-              ? category
-              : category || categories[0] || "",
-            mention: get(cells, "mention") || "",
-            seats,
-            source: source || "",
-            glatt: truthy(get(cells, "glatt")),
-            probablyComing: truthy(get(cells, "probablyComing")),
-            considering: truthy(get(cells, "considering")),
-            rsvp,
-            attendingCount,
-            gift: Number(get(cells, "gift")) || 0,
-          };
+      if (!parsed.length) {
+        notify("לא נמצאו רשומות תקינות בקובץ – ודאו שיש עמודת שם או טלפון", {
+          tone: "error",
         });
-        if (parsed.length) {
-          //  קטגוריה שהגיעה מהקובץ ואינה ברשימה נשמרת על הרשומה, אבל בלעדיה
-          //  לרשימה ה-select של השורה מוצג ריק והערך אובד בעריכה הבאה.
-          const imported = [
-            ...new Set(parsed.map((p) => p.category).filter((c) => c && !categories.includes(c))),
-          ];
-          if (imported.length) setCategories((prev) => [...prev, ...imported.filter((c) => !prev.includes(c))]);
-          setGuests((prev) => {
-            let id = nextGuestId(prev) - 1;
-            const additions = parsed.map((p) => ({ ...p, id: ++id }));
-            return [...prev, ...additions];
-          });
-          notify(`יובאו ${parsed.length} רשומות בהצלחה`, { tone: "success" });
-        } else {
-          notify("לא נמצאו רשומות תקינות בקובץ", { tone: "error" });
-        }
-      } catch {
-        notify("שגיאה בקריאת הקובץ – ודאו שהפורמט תקין", { tone: "error" });
+        return;
       }
-      e.target.value = "";
-    };
-    //  בלי זה כשל קריאה שותק לגמרי, וה-input נשאר עם אותו קובץ כך שבחירה חוזרת לא מפעילה onChange.
-    reader.onerror = () => {
-      notify("לא ניתן לקרוא את הקובץ", { tone: "error" });
-      e.target.value = "";
-    };
-    reader.readAsText(file, "UTF-8");
+
+      if (newCategories.length)
+        setCategories((prev) => [
+          ...prev,
+          ...newCategories.filter((c) => !prev.includes(c)),
+        ]);
+
+      setGuests((prev) => {
+        let id = nextGuestId(prev) - 1;
+        return [...prev, ...parsed.map((p) => ({ ...p, id: ++id }))];
+      });
+
+      //  מדווחים גם על מה שלא נכנס, אחרת המשתמש סופר שורות בקובץ
+      //  ולא מבין למה המספר במסך שונה.
+      const extra = [
+        newCategories.length ? `${newCategories.length} קטגוריות חדשות` : "",
+        skipped ? `${skipped} שורות ריקות דולגו` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      notify(
+        `יובאו ${parsed.length} רשומות בהצלחה${extra ? ` (${extra})` : ""}`,
+        { tone: "success" }
+      );
+    } catch (err) {
+      notify(
+        err instanceof ImportError
+          ? err.message
+          : "שגיאה בקריאת הקובץ – ודאו שהוא קובץ Excel או CSV תקין",
+        { tone: "error" }
+      );
+    } finally {
+      setImporting(false);
+      //  איפוס ה-input, אחרת בחירה חוזרת באותו קובץ לא מפעילה onChange.
+      input.value = "";
+    }
   }
 
   function downloadTemplate() {
@@ -2474,7 +2410,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               <input
                 ref={fileRef}
                 type="file"
-                accept=".csv,.txt,.tsv"
+                accept=".csv,.txt,.tsv,.xlsx,.xlsm,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 className="hidden"
                 onChange={handleFile}
               />
@@ -2506,9 +2442,19 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               {canEdit && (
                 <button
                   onClick={() => fileRef.current?.click()}
-                  className="flex items-center gap-2 rounded-2xl bg-sage-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sage-500/30 transition hover:bg-sage-600"
+                  disabled={importing}
+                  title="ייבוא מוזמנים מקובץ Excel (.xlsx) או CSV"
+                  className="flex items-center gap-2 rounded-2xl bg-sage-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sage-500/30 transition hover:bg-sage-600 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <Upload size={18} /> ייבוא Excel / CSV
+                  {importing ? (
+                    <>
+                      <Loader2 size={18} className="animate-spin" /> מייבא…
+                    </>
+                  ) : (
+                    <>
+                      <Upload size={18} /> ייבוא Excel / CSV
+                    </>
+                  )}
                 </button>
               )}
             </div>
@@ -2752,8 +2698,9 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         </div>
 
         <p className="mb-3 text-xs text-slate-400">
-          מציג {filtered.length} מתוך {guests.length} רשומות · מבנה קובץ לייבוא: שם,
-          קטגוריה, כיסאות, מקור, "כנראה יבוא" (V), "להזמין" (?)
+          מציג {filtered.length} מתוך {guests.length} רשומות · עמודות שהמערכת
+          מזהה בקובץ Excel או CSV (בכל סדר): שם, נייד, קטגוריה, אזכור, כיסאות,
+          מקור, גלאט, "כנראה יבוא", "לשקול", "אישור הגעה", "כמה אישרו", מתנה
         </p>
 
         {/* Bulk action bar */}
@@ -2978,15 +2925,24 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
   const handleDelete = (name) => {
     const used = counts[name] || 0;
     const remaining = categories.filter((c) => c !== name);
+    /*  לאן עוברים המוזמנים ששויכו לקטגוריה. אם זו הקטגוריה האחרונה אין
+        לאן, והם נשארים בלי שיוך — צריך להגיד את זה במפורש ולא לרמוז
+        על קטגוריה בשם "ללא קטגוריה" שלא קיימת ברשימה.  */
     const fallback = remaining.includes("ללא קטגוריה")
       ? "ללא קטגוריה"
       : remaining[0] ?? "";
     confirmDialog({
-      title: `למחוק את הקטגוריה “${name}”?`,
+      title: used
+        ? `שימו לב – לקטגוריה “${name}” משויכות רשומות`
+        : `למחוק את הקטגוריה “${name}”?`,
       message: used
-        ? `${used} מוזמנים ישויכו מחדש ל“${fallback || "ללא קטגוריה"}”.`
-        : "הקטגוריה תוסר מהרשימה.",
-      confirmLabel: "מחק קטגוריה",
+        ? `${used} ${used === 1 ? "רשומה משויכת" : "רשומות משויכות"} לקטגוריה הזו.\n` +
+          (fallback
+            ? `אם תמחקו אותה, ${used === 1 ? "היא תעבור" : "הן יעברו"} לקטגוריה “${fallback}”.`
+            : `אם תמחקו אותה, ${used === 1 ? "היא תישאר" : "הן יישארו"} ללא קטגוריה עד שתשייכו אותן מחדש.`) +
+          "\nהמוזמנים עצמם והשיבוץ לשולחנות לא יימחקו."
+        : "הקטגוריה תוסר מהרשימה. אין רשומות שמשויכות אליה.",
+      confirmLabel: used ? "מחק בכל זאת" : "מחק קטגוריה",
       tone: "danger",
     }).then((ok) => ok && onDelete(name, fallback));
   };
@@ -5079,8 +5035,10 @@ const INITIAL_RESET_TOKEN = captureResetToken();
 
 /*  מסך הטעינה של האפליקציה. הוא ממשיך ויזואלית את מסך הפתיחה שב-index.html,
     כך שהמעבר מה-HTML הסטטי ל-React אינו נראה כמו קפיצה. אחרי כמה שניות
-    מתווספת הודעה שמסבירה למה זה לוקח זמן — השרת בענן נכבה כשאין פעילות,
-    וההתעוררות שלו אורכת עשרות שניות. בלי ההסבר המשתמש חושב שהמערכת תקועה.  */
+    מתווספת הודעה שמסבירה למה זה לוקח זמן — השירות בענן נכבה כשאין פעילות,
+    וההתעוררות שלו אורכת עשרות שניות. בלי ההסבר המשתמש חושב שהמערכת תקועה.
+    הניסוח מדבר על "המערכת" ולא על "השרת", כי זה מונח שלא אומר כלום למי
+    שרק רוצה לתכנן חתונה.  */
 function BootScreen() {
   const [slow, setSlow] = useState(false);
   useEffect(() => {
@@ -5094,7 +5052,7 @@ function BootScreen() {
       <p className="text-lg font-bold text-slate-800">מכינים את החתונה שלכם…</p>
       <p className="max-w-sm text-sm leading-6 text-slate-500">
         {slow
-          ? "השרת מתעורר אחרי תקופת חוסר פעילות. זה עשוי לקחת עד דקה בפעם הראשונה — אין צורך לרענן."
+          ? "המערכת מתעוררת אחרי תקופת חוסר פעילות. זה עשוי לקחת עד דקה בפעם הראשונה — אין צורך לרענן."
           : "רק רגע, טוענים את הנתונים."}
       </p>
     </div>
@@ -5646,7 +5604,7 @@ function WeddingShell({ session }) {
         setRetrying(false);
         setError(
           transient
-            ? "השרת עדיין מתעורר. המתינו רגע ונסו שוב."
+            ? "המערכת עדיין מתעוררת. המתינו רגע ונסו שוב."
             : "טעינת רשימת החתונות נכשלה. נסו שוב."
         );
       }
@@ -5704,7 +5662,7 @@ function WeddingShell({ session }) {
       <div className="flex min-h-screen flex-col items-center justify-center gap-3">
         <Loader2 className="animate-spin text-gold-500" size={32} />
         {retrying && (
-          <p className="text-xs text-slate-400">השרת מתעורר, עוד רגע…</p>
+          <p className="text-xs text-slate-400">המערכת מתעוררת, עוד רגע…</p>
         )}
       </div>
     );
@@ -7342,8 +7300,8 @@ function MembersModal({
         invalid_scopes: "בחרו לפחות מסך אחד לשיתוף.",
         invalid_role: "רמת ההרשאה אינה תקינה.",
         forbidden: "רק בעלים של החתונה יכול להזמין.",
-        timeout: "השרת לא השיב בזמן. נסו שוב בעוד רגע.",
-        network_error: "אין חיבור לשרת. בדקו את האינטרנט ונסו שוב.",
+        timeout: "המערכת לא השיבה בזמן. נסו שוב בעוד רגע.",
+        network_error: "אין חיבור למערכת. בדקו את האינטרנט ונסו שוב.",
       };
       setFormError(byCode[err?.code] || "יצירת הקישור נכשלה");
     } finally {

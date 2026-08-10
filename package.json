@@ -14,7 +14,8 @@
     "db:migrate": "node db/migrate.mjs",
     "db:reset": "node db/reset.mjs",
     "test:api": "node scripts/api-test.mjs",
-    "test:excel": "node scripts/excel-test.mjs"
+    "test:excel": "node scripts/excel-test.mjs",
+    "test:import": "node scripts/import-test.mjs"
   },
   "engines": {
     "node": ">=22"

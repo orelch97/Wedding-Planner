@@ -65,7 +65,7 @@ import {
   MessageCircle,
   FileSpreadsheet,
 } from "lucide-react";
-import { SEED_GUESTS, GUEST_CATEGORIES, GUEST_SOURCES } from "./data/guestsData";
+import { SEED_GUESTS, GUEST_CATEGORIES } from "./data/guestsData";
 import { SEED_TABLES, SEED_VENDORS, SEED_BUDGET } from "./data/seedData";
 import {
   screenGuide,
@@ -1294,6 +1294,13 @@ const GuestRow = memo(function GuestRow({
             g.category?.startsWith("צד כלה") ? "ring-2" : "ring-1"
           } ${categoryStyle(g.category)}`}
         >
+          {/*  קטגוריה שנמחקה מהרשימה או הגיעה מייבוא חייבת להישאר גלויה,
+              אחרת השדה נראה ריק והנתון נראה כאילו אבד.  */}
+          {!!g.category && !categories.includes(g.category) && (
+            <option value={g.category} className="bg-white text-slate-700">
+              {g.category}
+            </option>
+          )}
           {categories.map((c) => (
             <option key={c} value={c} className="bg-white text-slate-700">
               {c}
@@ -1580,6 +1587,9 @@ const GuestCard = memo(function GuestCard({
             onChange={(e) => updateCategory(g.id, e.target.value)}
             className={field}
           >
+            {!!g.category && !categories.includes(g.category) && (
+              <option value={g.category}>{g.category}</option>
+            )}
             {categories.map((c) => (
               <option key={c} value={c}>
                 {c}
@@ -1812,8 +1822,21 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     };
   }, [guests]);
 
+  /*  "מקור" הוא שדה חופשי שמגיע מקובץ הייבוא של כל זוג. קודם הוצגה כאן רשימה
+      קבועה בקוד עם השמות של החתונה הראשונה, וכל משתמש חדש ראה סינון לפי אנשים
+      שאינם מכירים. עכשיו האפשרויות נגזרות מהנתונים שהוזנו בפועל.  */
+  const sourceOptions = useMemo(
+    () =>
+      [...new Set(guests.map((g) => (g.source || "").trim()).filter(Boolean))].sort(
+        (a, b) => a.localeCompare(b, "he")
+      ),
+    [guests]
+  );
+
   const filtered = useMemo(() => {
     const q = filters.search.trim().toLowerCase();
+    //  מקור שנעלם מהנתונים (נמחקו כל המוזמנים שלו) לא יכול להשאיר את הרשימה ריקה.
+    const source = sourceOptions.includes(filters.source) ? filters.source : "all";
     const assigned = filters.onlyUnassigned
       ? new Set(tables.flatMap((t) => t.guestIds))
       : null;
@@ -1822,7 +1845,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         const hay = `${g.name || ""} ${g.phone || ""} ${g.mention || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
-      if (filters.source !== "all" && g.source !== filters.source) return false;
+      if (source !== "all" && g.source !== source) return false;
       if (filters.category !== "all" && g.category !== filters.category) return false;
       if (filters.rsvp !== "all" && g.rsvp !== filters.rsvp) return false;
       if (filters.onlyProbably && !g.probablyComing) return false;
@@ -1831,7 +1854,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       if (assigned && assigned.has(g.id)) return false;
       return true;
     });
-  }, [guests, filters, tables]);
+  }, [guests, filters, tables, sourceOptions]);
 
   const guestTableMap = useMemo(() => {
     const m = {};
@@ -1916,7 +1939,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         category: formCategory,
         seats: Number(form.seats) || 1,
         mention: form.mention.trim(),
-        source: GUEST_SOURCES[0],
+        //  "מקור" הוא שדה חופשי שמגיע מייבוא בלבד; אין רשימה קבועה במערכת.
+        source: "",
         probablyComing: false,
         considering: false,
         glatt: form.glatt,
@@ -2206,7 +2230,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               : category || categories[0] || "",
             mention: get(cells, "mention") || "",
             seats,
-            source: GUEST_SOURCES.includes(source) ? source : GUEST_SOURCES[0],
+            source: source || "",
             glatt: truthy(get(cells, "glatt")),
             probablyComing: truthy(get(cells, "probablyComing")),
             considering: truthy(get(cells, "considering")),
@@ -2248,9 +2272,9 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     const header =
       "שם,נייד,קטגוריה,אזכור,כיסאות,מקור,גלאט,כנראה יבוא,לשקול,אישור הגעה,כמה אישרו,מתנה";
     const examples = [
-      `ישראל ישראלי,050-1234567,${categories[0] || ""},חבר של אבא,2,${GUEST_SOURCES[0]},,V,,אישרו הגעה,2,0`,
-      `דנה כהן,052-7654321,${categories[0] || ""},,4,${GUEST_SOURCES[0]},כן,,,אישרו הגעה,3,0`,
-      `משפחת לוי,,${categories[0] || ""},,3,${GUEST_SOURCES[0]},,,,ממתין,,0`,
+      `ישראל ישראלי,050-1234567,${categories[0] || ""},חבר של אבא,2,צד חתן,,V,,אישרו הגעה,2,0`,
+      `דנה כהן,052-7654321,${categories[0] || ""},,4,צד כלה,כן,,,אישרו הגעה,3,0`,
+      `משפחת לוי,,${categories[0] || ""},,3,,,,,ממתין,,0`,
     ];
     const blob = new Blob(["\uFEFF" + header + "\n" + examples.join("\n")], {
       type: "text/csv;charset=utf-8;",
@@ -2531,6 +2555,11 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             aria-label="קטגוריה"
             className="min-w-0 rounded-xl border border-slate-200 bg-white px-2 py-2.5 text-sm outline-none focus:border-gold-400 sm:px-3"
           >
+            {/*  חתונה חדשה מתחילה בלי קטגוריות. select ריק נראה כמו תקלה,
+                ולכן מסבירים בתוכו לאן ללכת כדי להגדיר אותן.  */}
+            {categories.length === 0 && (
+              <option value="">ללא קטגוריה — הוסיפו ב״קטגוריות״</option>
+            )}
             {categories.map((c) => (
               <option key={c}>{c}</option>
             ))}
@@ -2618,19 +2647,21 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 </option>
               ))}
             </select>
-            <select
-              value={filters.source}
-              onChange={(e) => setFilters({ ...filters, source: e.target.value })}
-              title="סינון לפי מקור ההזמנה"
-              className="min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
-            >
-              <option value="all">כל המקורות</option>
-              {GUEST_SOURCES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
+            {sourceOptions.length > 0 && (
+              <select
+                value={sourceOptions.includes(filters.source) ? filters.source : "all"}
+                onChange={(e) => setFilters({ ...filters, source: e.target.value })}
+                title="סינון לפי מקור ההזמנה"
+                className="min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
+              >
+                <option value="all">כל המקורות</option>
+                {sourceOptions.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            )}
             <select
               value={filters.rsvp}
               onChange={(e) => setFilters({ ...filters, rsvp: e.target.value })}
@@ -5046,6 +5077,30 @@ function captureResetToken() {
 
 const INITIAL_RESET_TOKEN = captureResetToken();
 
+/*  מסך הטעינה של האפליקציה. הוא ממשיך ויזואלית את מסך הפתיחה שב-index.html,
+    כך שהמעבר מה-HTML הסטטי ל-React אינו נראה כמו קפיצה. אחרי כמה שניות
+    מתווספת הודעה שמסבירה למה זה לוקח זמן — השרת בענן נכבה כשאין פעילות,
+    וההתעוררות שלו אורכת עשרות שניות. בלי ההסבר המשתמש חושב שהמערכת תקועה.  */
+function BootScreen() {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSlow(true), 4000);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gradient-to-b from-white to-gold-50 px-6 text-center">
+      <img src="/icon-192.png" alt="" className="h-16 w-16 rounded-2xl shadow-sm" />
+      <Loader2 className="animate-spin text-gold-500" size={30} />
+      <p className="text-lg font-bold text-slate-800">מכינים את החתונה שלכם…</p>
+      <p className="max-w-sm text-sm leading-6 text-slate-500">
+        {slow
+          ? "השרת מתעורר אחרי תקופת חוסר פעילות. זה עשוי לקחת עד דקה בפעם הראשונה — אין צורך לרענן."
+          : "רק רגע, טוענים את הנתונים."}
+      </p>
+    </div>
+  );
+}
+
 async function signOutAndWipe() {
   try {
     await signOut();
@@ -5085,11 +5140,7 @@ export default function App() {
   }
 
   if (isCloudConfigured && !authReady) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="animate-spin text-gold-500" size={32} />
-      </div>
-    );
+    return <BootScreen />;
   }
 
   if (isCloudConfigured && !session) {
@@ -5914,9 +5965,12 @@ function WeddingApp({
     "financeLabels",
     {}
   );
+  /*  קטגוריות המוזמנים הן נתון של החתונה, לא של המערכת. רשימת הזרעים
+      שייכת לחתונה אחת מסוימת, וכל חשבון חדש קיבל אותה כאילו היא שלו.
+      במצב ענן מתחילים ריק והמשתמש בונה את הקטגוריות שלו במסך "קטגוריות".  */
   const [categories, setCategories] = usePersistentState(
     "categories",
-    GUEST_CATEGORIES
+    cloudEnabled ? [] : GUEST_CATEGORIES
   );
   //  שמות בני הזוג. במצב ענן הם חיים על רשומת החתונה עצמה, ולכן הם מסתנכרנים
   //  בין מכשירים ונראים גם למי שהחתונה שותפה איתו. במצב localStorage בלבד אין
@@ -6029,7 +6083,9 @@ function WeddingApp({
         const s = data.settings || {};
         if (typeof s.budgetGoal === "number") setBudgetGoal(s.budgetGoal);
         if (s.financeLabels) setFinanceLabels(s.financeLabels);
-        if (Array.isArray(s.categories) && s.categories.length) setCategories(s.categories);
+        //  גם רשימה ריקה היא ערך תקף — משתמש שמחק את כל הקטגוריות שלו
+        //  לא אמור לקבל בחזרה את ברירת המחדל בטעינה הבאה.
+        if (Array.isArray(s.categories)) setCategories(s.categories);
         prevIdsRef.current = {
           guests: new Set(data.guests.map((g) => g.id)),
           tables: new Set(data.tables.map((t) => t.id)),

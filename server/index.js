@@ -41,7 +41,7 @@ app.disable("x-powered-by");
 //  לצאת מכאן, אחרת אין CSP ואין HSTS כלל. שמור על התאמה בין שני הקבצים.
 const SECURITY_HEADERS = {
   "Content-Security-Policy":
-    "default-src 'self'; script-src 'self'; " +
+    "default-src 'self'; script-src 'self'; worker-src 'self'; " +
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src 'self' data: https://fonts.gstatic.com; " +
     "img-src 'self' data: blob:; " +
@@ -131,7 +131,17 @@ app.use("/api", (_req, res) => res.status(404).json({ error: "not_found" }));
 // ── הגשת הבילד בייצור ───────────────────────────────────────────────────────
 const dist = join(ROOT, "dist");
 if (isProd && existsSync(dist)) {
-  app.use(express.static(dist, { maxAge: "1h", index: false }));
+  app.use(
+    express.static(dist, {
+      maxAge: "1h",
+      index: false,
+      setHeaders(res, filePath) {
+        //  ה-Service Worker חייב להיבדק מול השרת בכל טעינה. אם הדפדפן מחזיק
+        //  אותו במטמון לשעה, תיקון בלוגיקת המטמון עצמו לא מגיע למשתמשים.
+        if (filePath.endsWith("sw.js")) res.set("Cache-Control", "no-cache");
+      },
+    })
+  );
   //  ה-fallback של ה-SPA. ב-Express 5 הנתיב '*' כבר אינו חוקי (path-to-regexp
   //  זורק "Missing parameter name"), ולכן משתמשים ב-middleware רגיל.
   app.use((req, res, next) => {

@@ -24,13 +24,20 @@ function setSession(user) {
 /** נקרא פעם אחת בעליית האפליקציה. מחזיר את הסשן הקיים או null. */
 export async function loadSession() {
   if (!isCloudConfigured) return null;
-  try {
-    const data = await apiFetch("/auth/me");
-    return setSession(data.user);
-  } catch {
-    // 401 הוא מצב תקין לחלוטין — פשוט אין סשן.
-    return setSession(null);
+  /*  השרת בענן נכבה כשאין פעילות, והבקשה הראשונה אליו עלולה להיכשל בפסק
+      זמן בזמן שהוא מתעורר. בלי הניסיון החוזר משתמש מחובר היה נזרק למסך
+      ההתחברות רק בגלל שהשרת ישן. תשובת שרת אמיתית (למשל 401) אינה מנוסה שוב.  */
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const data = await apiFetch("/auth/me");
+      return setSession(data.user);
+    } catch (err) {
+      if (err?.status) return setSession(null);
+      if (attempt === 2) return setSession(null);
+      await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+    }
   }
+  return setSession(null);
 }
 
 export function getSession() {

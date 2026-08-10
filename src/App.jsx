@@ -4047,6 +4047,7 @@ function formatBytes(bytes) {
 function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
   const inputRef = useRef(null);
   const [busy, setBusy] = useState(false);
+  const [downloading, setDownloading] = useState(null);
 
   if (!weddingId) {
     return (
@@ -4090,6 +4091,36 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
         tone: "success",
       });
       onChanged();
+    }
+  }
+
+  /*  ההורדה עוברת דרך fetch ולא דרך <a href> ישיר. קישור ישיר מנווט את
+      הלשונית עצמה אל הקובץ, ובטלפון הדפדפן מציג את ה-PDF במציג המובנה
+      שלו — האפליקציה נעלמת מהמסך ואין כפתור חזרה שמחזיר אליה. משיכת
+      הקובץ ל-blob מקומי מורידה אותו בלי לעזוב את הכרטיס של הספק.  */
+  async function download(file) {
+    setDownloading(file.id);
+    try {
+      const res = await fetch(vendorFileUrl(weddingId, file.id, { download: true }), {
+        credentials: "same-origin",
+      });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name;
+      //  חלק מהדפדפנים מתעלמים מלחיצה על עוגן שאינו מחובר ל-DOM.
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      //  שחרור מיידי קוטע את ההורדה בחלק מהדפדפנים בנייד.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error("Download failed:", err);
+      notify("הורדת הקובץ נכשלה — נסו שוב", { tone: "error" });
+    } finally {
+      setDownloading(null);
     }
   }
 
@@ -4207,15 +4238,19 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
                     <ExternalLink size={16} />
                   </a>
                 )}
-                <a
-                  href={vendorFileUrl(weddingId, f.id, { download: true })}
-                  download={f.name}
+                <button
+                  onClick={() => download(f)}
+                  disabled={downloading === f.id}
                   title="הורדה"
                   aria-label={`הורדת ${f.name}`}
-                  className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-gold-600"
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-gold-600 disabled:opacity-60"
                 >
-                  <Download size={16} />
-                </a>
+                  {downloading === f.id ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <Download size={16} />
+                  )}
+                </button>
                 {canEdit && (
                   <button
                     onClick={() => remove(f)}
@@ -4253,12 +4288,73 @@ function VendorSourceTag({ vendorName }) {
   );
 }
 
+/*  מזיז פריט אחד למקומו של פריט אחר, בלי לשנות את סדר שאר הפריטים.
+    מחזיר את אותה רשימה כשאין מה לשנות, כדי לא לגרום רינדור מיותר.  */
+function moveBefore(list, id, targetId) {
+  const from = list.findIndex((b) => b.id === id);
+  const to = list.findIndex((b) => b.id === targetId);
+  if (from < 0 || to < 0 || from === to) return list;
+  const next = [...list];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
 function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudgetGoal, financeLabels, setFinanceLabels }) {
   const canEdit = useCanEdit();
   const [form, setForm] = useState({ category: "", expected: "", actual: "" });
   const [goalDraft, setGoalDraft] = useState(budgetGoal);
   const [dragId, setDragId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
+
+  /*  גרירה במגע. HTML5 drag-and-drop פשוט לא קיים בדפדפני נייד, ולכן
+      בתצוגת הכרטיסים הסידור נעשה ב-Pointer Events: אוחזים בידית,
+      הכרטיס עוקב אחרי האצבע, והיעד מסומן. הסידור מבוצע רק בשחרור —
+      כך סדר ה-DOM לא משתנה באמצע הגרירה ומאבד את לכידת המצביע.  */
+  const [touchDrag, setTouchDrag] = useState(null);
+  const cardRefs = useRef(new Map());
+  const dragRef = useRef(null);
+  const touchDragId = touchDrag?.id ?? null;
+
+  useEffect(() => {
+    if (touchDragId == null) return undefined;
+
+    function onMove(e) {
+      let overId = null;
+      for (const [id, el] of cardRefs.current) {
+        if (id === touchDragId) continue;
+        const rect = el.getBoundingClientRect();
+        if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+          overId = id;
+          break;
+        }
+      }
+      if (dragRef.current) dragRef.current.overId = overId;
+      setTouchDrag({
+        id: touchDragId,
+        overId,
+        dy: e.clientY - (dragRef.current?.startY ?? e.clientY),
+      });
+    }
+
+    function onEnd() {
+      const drag = dragRef.current;
+      dragRef.current = null;
+      setTouchDrag(null);
+      if (drag?.overId != null) {
+        setBudget((prev) => moveBefore(prev, drag.id, drag.overId));
+      }
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onEnd);
+    window.addEventListener("pointercancel", onEnd);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onEnd);
+      window.removeEventListener("pointercancel", onEnd);
+    };
+  }, [touchDragId, setBudget]);
 
   /*  סעיף שנוצר מספק מחזיק סכומים משלו, ולכן הוא עשוי להיפרד
       מהעלות בחוזה — בין אם ערכו אותו כאן ובין אם החוזה התעדכן
@@ -4331,19 +4427,9 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
 
   function handleDrop(targetId) {
     setDragOverId(null);
-    if (dragId == null || dragId === targetId) {
-      setDragId(null);
-      return;
+    if (dragId != null && dragId !== targetId) {
+      setBudget((prev) => moveBefore(prev, dragId, targetId));
     }
-    setBudget((prev) => {
-      const from = prev.findIndex((b) => b.id === dragId);
-      const to = prev.findIndex((b) => b.id === targetId);
-      if (from < 0 || to < 0) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
-      return next;
-    });
     setDragId(null);
   }
 
@@ -4770,18 +4856,29 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
 
         {/* Mobile card view – same data & actions without horizontal scrolling */}
         <div className="space-y-3 lg:hidden">
-          {budget.map((b, idx) => {
+          {budget.map((b) => {
             const diff = b.expected - b.actual;
             const vendor = vendorOf(b);
             const cost = vendor ? contractOf(vendor) : 0;
             const mismatch = vendor && (b.expected !== cost || b.actual !== cost);
+            const dragging = touchDrag?.id === b.id;
+            const dropTarget = touchDrag?.overId === b.id;
             return (
               <div
                 key={b.id}
+                ref={(el) => {
+                  if (el) cardRefs.current.set(b.id, el);
+                  else cardRefs.current.delete(b.id);
+                }}
+                style={dragging ? { transform: `translateY(${touchDrag.dy}px)` } : undefined}
                 className={`rounded-2xl border p-4 ${
-                  mismatch
-                    ? "border-rose-200 bg-rose-50/70"
-                    : "border-slate-200 bg-white/70"
+                  dragging
+                    ? "relative z-10 border-gold-400 bg-white shadow-xl"
+                    : dropTarget
+                      ? "border-gold-400 bg-gold-50/70"
+                      : mismatch
+                        ? "border-rose-200 bg-rose-50/70"
+                        : "border-slate-200 bg-white/70"
                 }`}
               >
                 <div className="mb-3 flex items-start justify-between gap-2">
@@ -4807,23 +4904,25 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                     )}
                   </div>
                   <div className="flex shrink-0 items-center gap-0.5">
+                    {/*  ידית גרירה במקום שני חצים: מזיזים את הכרטיס למקומו
+                        בתנועה אחת. במקלדת הידית מגיבה לחצי מעלה/מטה.  */}
                     <button
-                      onClick={() => moveItem(b.id, -1)}
-                      disabled={idx === 0}
-                      title="העברה למעלה"
-                      aria-label={`העברת ${b.category} למעלה`}
-                      className="grid h-11 w-11 place-items-center rounded-lg text-slate-400 transition hover:bg-gold-50 hover:text-gold-600 disabled:opacity-30"
+                      type="button"
+                      onPointerDown={(e) => {
+                        if (e.button > 0) return;
+                        dragRef.current = { id: b.id, startY: e.clientY, overId: null };
+                        setTouchDrag({ id: b.id, overId: null, dy: 0 });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+                        e.preventDefault();
+                        moveItem(b.id, e.key === "ArrowUp" ? -1 : 1);
+                      }}
+                      title="גררו כדי לשנות את סדר הסעיפים"
+                      aria-label={`שינוי מיקום של ${b.category} — גררו, או השתמשו בחצים למעלה ולמטה`}
+                      className="grid h-11 w-11 cursor-grab touch-none place-items-center rounded-lg text-slate-400 transition hover:bg-gold-50 hover:text-gold-600 active:cursor-grabbing"
                     >
-                      <ChevronUp size={18} />
-                    </button>
-                    <button
-                      onClick={() => moveItem(b.id, 1)}
-                      disabled={idx === budget.length - 1}
-                      title="העברה למטה"
-                      aria-label={`העברת ${b.category} למטה`}
-                      className="grid h-11 w-11 place-items-center rounded-lg text-slate-400 transition hover:bg-gold-50 hover:text-gold-600 disabled:opacity-30"
-                    >
-                      <ChevronDown size={18} />
+                      <GripVertical size={18} />
                     </button>
                     <button
                       onClick={() => removeItem(b.id)}

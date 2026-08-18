@@ -40,8 +40,6 @@ import {
   Search,
   Star,
   HelpCircle,
-  MapPin,
-  Filter,
   UtensilsCrossed,
   Cloud,
   CloudOff,
@@ -1093,7 +1091,7 @@ function EditableText({
       /*  בנייד הכותרות האלה היו מטרות לחיצה בגובה 17px בלבד. `py-2 -my-2`
        *  מגדיל את אזור המגע בלי לשנות את הפריסה החזותית, ובלי לדחוף את
        *  השורות זו מזו.  */
-      className={`group -my-2 inline-flex items-center gap-1 py-2 text-right align-baseline transition hover:text-gold-600 sm:my-0 sm:py-0 ${className}`}
+      className={`btn-unframed group -my-2 inline-flex items-center gap-1 py-2 text-right align-baseline transition hover:text-gold-600 sm:my-0 sm:py-0 ${className}`}
     >
       {/*  כשאין עדיין ערך מציגים את ה-placeholder בעמעום, כדי שגם מסך ריק
           לגמרי יזמין את המשתמש להקליד ולא ייראה כמו באג.  */}
@@ -2165,17 +2163,24 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   const ROW_H = 65;
   const OVERSCAN = 6;
   const scrollRef = useRef(null);
+  const resizeObsRef = useRef(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(550);
 
-  useEffect(() => {
-    const el = scrollRef.current;
+  /*  ref פונקציונלי ולא useEffect עם מערך תלויות ריק: המתג בין "רשימת
+      המוזמנים" ל"מחשבון אלכוהול" מפרק את הטבלה ומרכיב אותה מחדש, בעוד
+      שהאפקט רץ פעם אחת בלבד. התוצאה הייתה שה-ResizeObserver נשאר על
+      האלמנט הישן, מדד עליו 0 בזמן הפירוק — ואחרי חזרה לרשימה נותרו רק
+      שורות ה-overscan בתוך טבלה בגובה עשרות אלפי פיקסלים, כלומר רשימה
+      שנראית ריקה. כאן המדידה נקשרת מחדש בכל הרכבה, ואפס נדחה כערך.  */
+  const attachScroller = useCallback((el) => {
+    resizeObsRef.current?.disconnect();
+    scrollRef.current = el;
     if (!el) return;
-    const measure = () => setViewportH(el.clientHeight);
+    const measure = () => setViewportH((prev) => el.clientHeight || prev);
     measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
+    resizeObsRef.current = new ResizeObserver(measure);
+    resizeObsRef.current.observe(el);
   }, []);
 
   // Reset scroll to top whenever the filter or sort changes the result set
@@ -2592,8 +2597,6 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     notify(`יוצאו ${sorted.length} רשומות לקובץ CSV`, { tone: "success" });
   }
 
-  const sourceColor = (s) => (s === "הורים" ? "sage" : "gold");
-
   return (
     <div className="space-y-4 sm:space-y-6">
       <div className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-5">
@@ -2740,7 +2743,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   title="הוספה, עריכה ומחיקה של קטגוריות מוזמנים"
                   className="flex items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
                 >
-                  <Tag size={17} /> קטגוריות
+                  <Tag size={17} /> עריכת קטגוריות
                 </button>
               )}
               {canEdit && (
@@ -3091,7 +3094,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
 
         {/* Table (desktop) */}
         <div
-          ref={scrollRef}
+          ref={attachScroller}
           onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
           className="hidden max-h-[560px] overflow-auto rounded-2xl ring-1 ring-slate-200/70 lg:block"
         >
@@ -3581,16 +3584,21 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                   לא סימנתי — תעריכו בשבילי
                 </span>
                 <span className="mt-1.5 flex flex-wrap items-center gap-2">
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={percent}
-                    onChange={(e) => setPercent(e.target.value)}
-                    onFocus={() => setSource("percent")}
-                    className={fieldNarrow}
-                    aria-label="אחוז האורחים ששותים אלכוהול"
-                  />
+                  <span className="relative inline-block">
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={percent}
+                      onChange={(e) => setPercent(e.target.value)}
+                      onFocus={() => setSource("percent")}
+                      className={`${fieldNarrow} pl-7`}
+                      aria-label="אחוז האורחים ששותים אלכוהול"
+                    />
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400">
+                      %
+                    </span>
+                  </span>
                   <span className="text-sm text-slate-600">מהאורחים שותים</span>
                 </span>
                 {/*  ההסבר המילולי חשוב יותר מהמספר עצמו: בלעדיו אי אפשר
@@ -4585,17 +4593,6 @@ function Checklist({ items, setItems }) {
           icon={ListChecks}
           title="הצ׳קליסט של החתונה"
           subtitle="כל מה שצריך לסגור עד היום הגדול, במקום אחד"
-          action={
-            canEdit && (
-              <button
-                onClick={loadTemplate}
-                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:w-auto"
-              >
-                <Sparkles size={16} className="text-gold-500" />
-                הוספת הרשימה המומלצת
-              </button>
-            )
-          }
         />
 
         {items.length === 0 ? (

@@ -315,7 +315,7 @@ export function ScreenIntro({ guide, onStartTour, onDismiss }) {
               type="button"
               onClick={() => setMore((v) => !v)}
               aria-expanded={more}
-              className="inline-flex min-h-11 items-center text-[11px] font-semibold text-slate-500 underline-offset-4 transition hover:text-slate-700 hover:underline sm:hidden"
+              className="btn-unframed inline-flex min-h-11 items-center text-[11px] font-semibold text-slate-500 underline-offset-4 transition hover:text-slate-700 hover:underline sm:hidden"
             >
               {more ? "פחות" : "מה בדיוק מזינים כאן?"}
             </button>
@@ -323,7 +323,7 @@ export function ScreenIntro({ guide, onStartTour, onDismiss }) {
               <button
                 type="button"
                 onClick={onStartTour}
-                className="inline-flex min-h-11 items-center text-[11px] font-semibold text-gold-600 underline-offset-4 transition hover:underline sm:min-h-0 sm:text-xs"
+                className="btn-unframed inline-flex min-h-11 items-center text-[11px] font-semibold text-gold-600 underline-offset-4 transition hover:underline sm:min-h-0 sm:text-xs"
               >
                 סיור מודרך במערכת
               </button>
@@ -331,7 +331,7 @@ export function ScreenIntro({ guide, onStartTour, onDismiss }) {
             <button
               type="button"
               onClick={onDismiss}
-              className="inline-flex min-h-11 items-center text-[11px] font-medium text-slate-400 underline-offset-4 transition hover:text-slate-600 hover:underline sm:min-h-0 sm:text-xs"
+              className="btn-unframed inline-flex min-h-11 items-center text-[11px] font-medium text-slate-400 underline-offset-4 transition hover:text-slate-600 hover:underline sm:min-h-0 sm:text-xs"
             >
               הבנתי, אפשר להסתיר
             </button>

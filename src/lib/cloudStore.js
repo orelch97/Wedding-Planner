@@ -24,6 +24,9 @@ function requireCloud() {
 }
 
 /** הגדרת כל ישות: המפתח הלוגי + ממירים לשני הכיוונים. */
+//  מי אחראי על משימה בצ׳קליסט. רשימה סגורה — העמודה במסד היא TEXT.
+export const CHECKLIST_ASSIGNEES = ["both", "bride", "groom"];
+
 export const ENTITIES = {
   guests: {
     toRow: (g) => ({
@@ -37,6 +40,7 @@ export const ENTITIES = {
       probably_coming: !!g.probablyComing,
       considering: !!g.considering,
       glatt: !!g.glatt,
+      drinkers: Math.max(0, Number(g.drinkers) || 0),
       rsvp: g.rsvp ?? "pending",
       gift: Number(g.gift) || 0,
     }),
@@ -51,6 +55,7 @@ export const ENTITIES = {
       probablyComing: !!r.probably_coming,
       considering: !!r.considering,
       glatt: !!r.glatt,
+      drinkers: Math.max(0, Number(r.drinkers) || 0),
       rsvp: r.rsvp ?? "pending",
       gift: Number(r.gift) || 0,
     }),
@@ -100,6 +105,7 @@ export const ENTITIES = {
       category: b.category,
       expected: Number(b.expected) || 0,
       actual: Number(b.actual) || 0,
+      paid: Number(b.paid) || 0,
       //  סעיף שנוצר מספק שומר את מזהה הספק; סעיף ידני שומר NULL.
       //  Number(null) הוא 0, ולכן חייבים לבדוק ריקנות במפורש.
       vendor_id: b.vendorId == null ? null : Number(b.vendorId),
@@ -109,7 +115,27 @@ export const ENTITIES = {
       category: r.category,
       expected: Number(r.expected) || 0,
       actual: Number(r.actual) || 0,
+      paid: Number(r.paid) || 0,
       vendorId: r.vendor_id == null ? null : Number(r.vendor_id),
+    }),
+  },
+  checklist: {
+    toRow: (c) => ({
+      id: c.id,
+      title: String(c.title ?? ""),
+      category: String(c.category ?? ""),
+      //  רשימה לבנה: העמודה היא TEXT ולא ENUM, ולכן הנרמול נעשה כאן.
+      assignee: CHECKLIST_ASSIGNEES.includes(c.assignee) ? c.assignee : "both",
+      done: !!c.done,
+      position: Number(c.position) || 0,
+    }),
+    fromRow: (r) => ({
+      id: Number(r.id),
+      title: r.title ?? "",
+      category: r.category ?? "",
+      assignee: CHECKLIST_ASSIGNEES.includes(r.assignee) ? r.assignee : "both",
+      done: !!r.done,
+      position: Number(r.position) || 0,
     }),
   },
 };
@@ -299,6 +325,22 @@ export async function updateMember(weddingId, userId, role, scopes) {
   });
 }
 
+/**
+ *  צירוף בן/בת זוג (בעלים בלבד). להבדיל מהזמנה, אין כאן קישור למסירה:
+ *  השרת פותח לכתובת חשבון עם אותה סיסמה וגישה מלאה, ושולח לשם מייל יידוע.
+ *  @returns {Promise<{userId:string,email:string,created:boolean,alreadyMember:boolean}>}
+ */
+export async function addPartner(weddingId, email) {
+  requireWeddingId(weddingId);
+  requireCloud();
+  const clean = String(email || "").trim().toLowerCase();
+  if (!clean) throw new Error("cloudStore: email is required");
+  return apiFetch(`/weddings/${weddingId}/partner`, {
+    method: "POST",
+    body: { email: clean },
+  });
+}
+
 /* =========================================================================
  *  היקפי שיתוף (scopes)
  *  ------------------------------------------------------------------------
@@ -306,9 +348,11 @@ export async function updateMember(weddingId, userId, role, scopes) {
  * ====================================================================== */
 
 export const SCOPE_OPTIONS = [
-  { key: "guests", label: "מוזמנים והושבה" },
-  { key: "vendors", label: "ספקים ומשימות" },
+  //  היקף אחד שפותח שני מסכים — הרשימה וההושבה יושבות על אותם נתונים.
+  { key: "guests", label: "מוזמנים וסידור הושבה" },
+  { key: "vendors", label: "ספקים" },
   { key: "finance", label: "ניהול תקציב" },
+  { key: "checklist", label: "צ׳קליסט" },
 ];
 
 export const ALL_SCOPES = SCOPE_OPTIONS.map((s) => s.key);

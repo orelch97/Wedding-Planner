@@ -573,6 +573,76 @@ await withAdmin((q) =>
 r = await A("/auth/reset", { method: "POST", body: { token: expired, password: "YetAnother999" } });
 check("טוקן שפג תוקפו נדחה", r.data?.error === "invalid_reset_token", JSON.stringify(r.data));
 
+/* ── בן/בת זוג: חשבון שני עם אותה סיסמה ───────────────────────────────────── */
+console.log("\nבן/בת זוג");
+
+//  צירוף כבר בהרשמה: החשבון השני נפתח באותה טרנזקציה, עם אותו hash סיסמה.
+const groom = { email: `groom-${stamp}@test.local`, password: "CorrectHorse123" };
+const brideEmail = `bride-${stamp}@test.local`;
+const G = makeClient();
+r = await G("/auth/register", { method: "POST", body: { ...groom, partnerEmail: brideEmail } });
+check("הרשמה עם מייל בן/בת זוג", r.status < 300 && r.data?.partner?.created === true, JSON.stringify(r.data));
+
+const BR = makeClient();
+r = await BR("/auth/login", { method: "POST", body: { email: brideEmail, password: groom.password } });
+check("בן/בת הזוג נכנס/ת עם אותה סיסמה", r.status === 200 && r.data?.user?.email === brideEmail, JSON.stringify(r.data));
+
+r = await BR("/weddings");
+const GW = r.data?.[0]?.id;
+check("בן/בת הזוג רואה את החתונה", r.data?.length === 1, JSON.stringify(r.data));
+check("התפקיד הוא עורך", r.data?.[0]?.role === "editor", JSON.stringify(r.data?.[0]));
+check("ההיקף הוא גישה מלאה", r.data?.[0]?.scopes?.join() === "all", JSON.stringify(r.data?.[0]));
+
+r = await BR(`/weddings/${GW}/sync`, {
+  method: "POST",
+  body: { key: "guests", rows: [{ id: 1, name: "מוזמן של בן הזוג", seats: 2 }], removedIds: [] },
+});
+check("בן/בת הזוג יכול/ה לכתוב נתונים", r.status < 300, JSON.stringify(r.data));
+
+//  עריכת הגדרות החתונה שמורה לבעלים ברמת ה-RLS, ולא לתפקיד 'editor'.
+r = await BR(`/weddings/${GW}`, { method: "PATCH", body: { name: "ניסיון השתלטות" } });
+check("בן/בת הזוג לא עורך/ת את הגדרות החתונה", r.status === 403, `status=${r.status}`);
+
+r = await makeClient()("/auth/register", {
+  method: "POST",
+  body: { email: `self-${stamp}@test.local`, password: "CorrectHorse123", partnerEmail: `self-${stamp}@test.local` },
+});
+check("מייל בן/בת זוג זהה לשלי נדחה", r.data?.error === "partner_same_email", JSON.stringify(r.data));
+
+r = await makeClient()("/auth/register", {
+  method: "POST",
+  body: { email: `badp-${stamp}@test.local`, password: "CorrectHorse123", partnerEmail: "not-an-email" },
+});
+check("מייל בן/בת זוג פסול נדחה", r.data?.error === "invalid_partner_email", JSON.stringify(r.data));
+
+//  מי שאינו הבעלים לא מצרף אף אחד — גם לא חבר עם הרשאת עריכה מלאה.
+r = await BR(`/weddings/${GW}/partner`, { method: "POST", body: { email: `x2-${stamp}@test.local` } });
+check("מי שאינו בעלים לא מצרף בן/בת זוג", r.status === 403, `status=${r.status}`);
+
+//  צירוף בדיעבד ממסך ההגדרות.
+const laterEmail = `later-${stamp}@test.local`;
+r = await G(`/weddings/${GW}/partner`, { method: "POST", body: { email: laterEmail } });
+check("צירוף בן/בת זוג בדיעבד", r.status === 201 && r.data?.created === true, JSON.stringify(r.data));
+
+r = await makeClient()("/auth/login", { method: "POST", body: { email: laterEmail, password: groom.password } });
+check("החשבון שנוצר בדיעבד נכנס עם סיסמת הבעלים", r.status === 200, JSON.stringify(r.data));
+
+r = await G(`/weddings/${GW}/partner`, { method: "POST", body: { email: laterEmail } });
+check("צירוף חוזר לא משנה דבר", r.status === 201 && r.data?.alreadyMember === true, JSON.stringify(r.data));
+
+r = await G(`/weddings/${GW}/partner`, { method: "POST", body: { email: groom.email } });
+check("צירוף המייל של עצמי נדחה", r.data?.error === "cannot_invite_self", JSON.stringify(r.data));
+
+r = await G(`/weddings/${GW}/partner`, { method: "POST", body: { email: "nope" } });
+check("מייל פסול בצירוף נדחה", r.data?.error === "invalid_email", JSON.stringify(r.data));
+
+//  מייל שכבר רשום במערכת מצורף כחבר, בלי לגעת בחשבון הקיים.
+r = await G(`/weddings/${GW}/partner`, { method: "POST", body: { email: bob.email } });
+check("מייל קיים מצורף בלי ליצור חשבון", r.status === 201 && r.data?.created === false, JSON.stringify(r.data));
+
+r = await makeClient()("/auth/login", { method: "POST", body: { email: bob.email, password: bob.password } });
+check("הסיסמה של החשבון הקיים לא השתנתה", r.status === 200, JSON.stringify(r.data));
+
 /*  ניקוי אחרי עצמנו: הבדיקה נרשמת כמשתמשת אמיתית, וכל ריצה משאירה כ-13
     חשבונות במסד. מוחקים רק את מה שהריצה הזו יצרה (לפי ה-stamp), כך שריצה
     מקבילה של מישהו אחר לא נפגעת. ריצה שקרסה באמצע מנוקה ב-npm run test:cleanup.  */

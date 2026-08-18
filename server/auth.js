@@ -200,8 +200,49 @@ export async function purgeExpiredSessions() {
  *  פרטית עבורו הופכת אותו לבעלים עם גישה מלאה, וזה נראה בדיוק כמו כשל
  *  אבטחה — הוא רואה את כל תפריט המערכת אף שההזמנה שקיבל הוגבלה למסך אחד.
  */
+/**
+ *  מצרף בן/בת זוג לחתונה, בתוך טרנזקציה קיימת.
+ *
+ *  אם המייל עדיין לא רשום — נוצר עבורו חשבון אמיתי עם **אותו** hash הסיסמה
+ *  של בעל החתונה, כך שאפשר להיכנס עם שתי הכתובות ואותה סיסמה. זו העתקה של
+ *  ה-hash ולא גזירה מחדש, כי בנתיב ההגדרות אין לנו את הסיסמה בטקסט גלוי.
+ *  מרגע היצירה אלה שתי שורות נפרדות ב-app.users: שינוי סיסמה באחת (דרך
+ *  "שכחתי סיסמה") לא משפיע על השנייה.
+ *
+ *  התפקיד הוא 'editor' עם scopes=['all']: גישה מלאה לכל הנתונים, בלי עריכת
+ *  הגדרות החתונה ובלי הזמנת אנשים נוספים — אלה שמורים לבעלים ברמת ה-RLS
+ *  (weddings.owner_id). בנוסף, שורת role='owner' חסומה למחיקה במדיניות
+ *  wedding_members_delete, ולכן צירוף בטעות היה בלתי הפיך.
+ */
+async function linkPartner(q, { weddingId, ownerId, passwordHash, email }) {
+  const lower = email.toLowerCase();
+
+  const found = await q(`SELECT id FROM app.users WHERE email_lower = $1`, [lower]);
+  let userId = found.rows[0]?.id ?? null;
+  const created = !userId;
+
+  if (!userId) {
+    const { rows } = await q(
+      `INSERT INTO app.users (email, email_lower, password_hash)
+       VALUES ($1, $2, $3) RETURNING id`,
+      [lower, lower, passwordHash]
+    );
+    userId = rows[0].id;
+  }
+
+  //  כבר חבר (למשל דרך הזמנה קודמת)? לא דורסים לו את ההרשאות הקיימות.
+  const { rowCount } = await q(
+    `INSERT INTO public.wedding_members (wedding_id, user_id, owner_id, role, scopes)
+     VALUES ($1, $2, $3, 'editor', ARRAY['all'])
+     ON CONFLICT (wedding_id, user_id) DO NOTHING`,
+    [weddingId, userId, ownerId]
+  );
+
+  return { userId, email: lower, created, alreadyMember: rowCount === 0 };
+}
+
 export async function registerUser(email, password, weddingDate = null, options = {}) {
-  const { createWedding = true } = options;
+  const { createWedding = true, partnerEmail = null } = options;
   const passwordHash = await hashPassword(password);
 
   return withAdmin(async (q) => {
@@ -217,20 +258,64 @@ export async function registerUser(email, password, weddingDate = null, options 
     );
     const user = rows[0];
 
+    let weddingId = null;
+    let partner = null;
+
     if (createWedding) {
       const wedding = await q(
         `INSERT INTO public.weddings (name, owner_id, wedding_date)
          VALUES ($1, $2, $3::DATE) RETURNING id`,
         ["החתונה שלי", user.id, weddingDate]
       );
+      weddingId = wedding.rows[0].id;
       await q(
         `INSERT INTO public.wedding_members (wedding_id, user_id, owner_id, role)
          VALUES ($1, $2, $2, 'owner')`,
-        [wedding.rows[0].id, user.id]
+        [weddingId, user.id]
       );
+
+      if (partnerEmail && partnerEmail.toLowerCase() !== email.toLowerCase()) {
+        partner = await linkPartner(q, {
+          weddingId,
+          ownerId: user.id,
+          passwordHash,
+          email: partnerEmail,
+        });
+      }
     }
 
-    return { user: { id: user.id, email: user.email } };
+    return { user: { id: user.id, email: user.email }, weddingId, partner };
+  });
+}
+
+/**
+ * מצרף בן/בת זוג לחתונה קיימת. בעל החתונה בלבד.
+ *
+ * הבדיקה כאן מפורשת ולא נשענת על RLS, כי הפעולה חייבת לרוץ עם חיבור ה-admin:
+ * היא נוגעת ב-app.users, שחסומה לחלוטין בפני app_user.
+ */
+export async function addPartnerToWedding(weddingId, ownerId, partnerEmail) {
+  return withAdmin(async (q) => {
+    const wedding = await q(`SELECT owner_id FROM public.weddings WHERE id = $1`, [weddingId]);
+    if (!wedding.rows.length) return { error: "not_found" };
+    if (wedding.rows[0].owner_id !== ownerId) return { error: "not_allowed" };
+
+    const owner = await q(
+      `SELECT email_lower, password_hash FROM app.users WHERE id = $1`,
+      [ownerId]
+    );
+    if (!owner.rows.length) return { error: "not_allowed" };
+    if (owner.rows[0].email_lower === partnerEmail.toLowerCase()) {
+      return { error: "cannot_invite_self" };
+    }
+
+    const partner = await linkPartner(q, {
+      weddingId,
+      ownerId,
+      passwordHash: owner.rows[0].password_hash,
+      email: partnerEmail,
+    });
+    return { partner };
   });
 }
 

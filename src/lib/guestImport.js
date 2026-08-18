@@ -22,6 +22,7 @@ const ALIASES = {
   seats: ["כיסאות", "כסאות", "מספר אנשים", "כמות", "seats"],
   source: ["מקור", "source"],
   glatt: ["גלאט", "glatt", "kosher"],
+  drinkers: ["שותים", "שותה", "כמה שותים", "אלכוהול", "drinkers", "alcohol"],
   probablyComing: ["כנראה", "probably"],
   considering: ["לשקול", "considering"],
   rsvp: ["אישור הגעה", "אישורי הגעה", "סטטוס", "rsvp", "status"],
@@ -165,6 +166,17 @@ export function normalizePhone(raw) {
 const truthy = (s) =>
   /^(v|✓|כן|yes|y|1|true|כנראה)$/i.test(String(s ?? "").trim());
 
+/*  עמודת “שותים” נכתבת על ידינו כמספר, אבל קובץ שהוכן ביד עשוי להכיל “כן”
+    או “V”. סימון כללי כזה מתפרש כ“כל מי שברשומה”, בדיוק כמו תיבת הסימון
+    בטופס ההוספה. מספר גדול ממספר הכיסאות נקטם — אחרת המחשבון היה סופר
+    שותים שאינם קיימים ברשימה. */
+function drinkersOf(raw, seats) {
+  const t = String(raw ?? "").trim();
+  if (!t) return 0;
+  if (/^\d+$/.test(t)) return Math.max(0, Math.min(seats, Number(t)));
+  return truthy(t) ? seats : 0;
+}
+
 function parseRsvp(s) {
   const t = String(s ?? "").trim();
   if (!t) return "pending";
@@ -276,6 +288,9 @@ export function rowsToGuests(rows, { categories = [] } = {}) {
       seats,
       source,
       glatt: truthy(get(cells, "glatt")),
+      //  העמודה יוצאת כמספר, אבל קובץ שהוכן ביד עלול להכיל “כן” או “V”.
+      //  סימון כללי כזה משמעו “כל מי שבשורה”, כמו בטופס ההוספה.
+      drinkers: drinkersOf(get(cells, "drinkers"), seats),
       probablyComing: truthy(get(cells, "probablyComing")),
       considering: truthy(get(cells, "considering")),
       rsvp,

@@ -65,9 +65,13 @@ import {
   ExternalLink,
   MessageCircle,
   FileSpreadsheet,
+  Wine,
+  Minus,
+  ShoppingCart,
+  ListChecks,
 } from "lucide-react";
 import { SEED_GUESTS, GUEST_CATEGORIES } from "./data/guestsData";
-import { SEED_TABLES, SEED_VENDORS, SEED_BUDGET } from "./data/seedData";
+import { SEED_TABLES, SEED_VENDORS, SEED_BUDGET, CHECKLIST_TEMPLATE, CHECKLIST_CATEGORIES } from "./data/seedData";
 import {
   screenGuide,
   authTourSteps,
@@ -97,6 +101,7 @@ import {
   updateWedding,
   saveWeddingSettings,
   inviteMember,
+  addPartner,
   acceptInvite,
   listMembers,
   removeMember,
@@ -555,6 +560,8 @@ function newVendorBudgetRow(vendor, budgetRows) {
     category: vendor.name,
     expected: cost,
     actual: cost,
+    //  המקדמה שנרשמה בכרטיס הספק היא בדיוק מה שכבר שולם לו.
+    paid: Number(vendor.deposit) || 0,
     vendorId: vendor.id,
   };
 }
@@ -691,6 +698,44 @@ function ProgressBar({ value, max, tone = "gold" }) {
   );
 }
 
+/*  סרגל התקציב. סרגל אחד עם שני מקטעים עונה על שלוש שאלות במבט אחד: כמה כבר
+    יצא מהכיס (מלא כהה), כמה עוד מחכה לתשלום (מלא בהיר) וכמה מרווח נשאר עד
+    היעד (אפור). סרגל אחוזים רגיל היה מראה רק מספר אחד מתוך השלושה.
+
+    כשהסכום שנדרש לשלם עובר את היעד אין יותר מרווח להציג, ולכן הקנה מידה
+    עובר לסכום עצמו והמקטע שטרם שולם נצבע באדום — אחרת המקטעים היו נחתכים
+    בקצה והמשתמש לא היה רואה שהוא בחריגה.  */
+function BudgetSplitBar({ paid, remaining, max }) {
+  const due = Math.max(0, paid) + Math.max(0, remaining);
+  const over = max > 0 && due > max;
+  const scale = max > 0 ? (over ? due : max) : due;
+  const pct = (n) => (scale > 0 ? Math.max(0, (n / scale) * 100) : 0);
+  return (
+    <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-200/70">
+      <div
+        style={{ width: `${pct(paid)}%` }}
+        className="h-full bg-gradient-to-l from-gold-500 to-gold-600 transition-all duration-500"
+      />
+      <div
+        style={{ width: `${pct(remaining)}%` }}
+        className={`h-full transition-all duration-500 ${
+          over ? "bg-rose-300" : "bg-gold-200"
+        }`}
+      />
+    </div>
+  );
+}
+
+/*  מקרא לסרגל: נקודת צבע + שם + סכום. בלי המקרא הצבעים בסרגל חסרי משמעות.  */
+function SplitLegendItem({ color, label, value }) {
+  return (
+    <span className="flex items-center gap-1.5 text-xs text-slate-500">
+      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${color}`} />
+      {label}: <b className="tabular-nums text-slate-700">{value}</b>
+    </span>
+  );
+}
+
 function Card({ children, className = "" }) {
   return (
     <div
@@ -738,8 +783,14 @@ function SectionTitle({ icon: Icon, title, subtitle, action }) {
 //  hidden = המסך קיים בקוד אבל אינו מוצג. להחזרתו — מחיקת השורה הזו בלבד.
 const NAV = [
   { key: "overview", label: "דאשבורד ראשי", icon: LayoutDashboard, scope: null },
-  { key: "guests", label: "מוזמנים והושבה", icon: Users, scope: "guests" },
-  { key: "vendors", label: "ספקים ומשימות", icon: Briefcase, scope: "vendors" },
+  //  הצ׳קליסט יושב ראשון אחרי הדאשבורד: זו השאלה הראשונה
+  //  שזוג שואל כשהוא נכנס — “מה עוד נשאר לנו?”
+  { key: "checklist", label: "צ׳קליסט", icon: ListChecks, scope: "checklist" },
+  { key: "guests", label: "מוזמנים", icon: Users, scope: "guests" },
+  //  ההושבה יושבת על אותו היקף הרשאות כמו המוזמנים (אותה טבלה בפועל),
+  //  אבל היא מסך נפרד: היא נפתחת בשלב אחר של התכנון ודורשת מסך מלא.
+  { key: "seating", label: "סידור הושבה", icon: Armchair, scope: "guests" },
+  { key: "vendors", label: "ספקים", icon: Briefcase, scope: "vendors" },
   { key: "finance", label: "ניהול תקציב", icon: Wallet, scope: "finance" },
   { key: "portal", label: "פורטל ספקים", icon: Smartphone, scope: "vendors", hidden: true },
 ];
@@ -963,16 +1014,31 @@ const DEFAULT_FINANCE_LABELS = {
   goalTitle: "יעד התקציב הכולל",
   goalSubtitle: "קבעו את התקרה הכוללת לחתונה",
   statPlanned: "תכנון נוכחי",
-  statActual: "הוצאה בפועל",
+  statActual: "נדרש לשלם",
+  statPaid: "שולם",
+  statRemaining: "נותר לשלם",
   statIncome: "הכנסות (מתנות)",
   statBalance: "מאזן סופי",
   sectionTitle: "מעקב תקציב מפורט",
-  sectionSubtitle: "עלות צפויה מול עלות בפועל לכל סעיף",
+  sectionSubtitle: "כמה זה אמור לעלות, כמה סוכם, וכמה כבר שולם — לכל סעיף",
   colCategory: "סעיף",
-  colExpected: "צפוי",
-  colActual: "בפועל",
+  colExpected: "הוצאה צפויה",
+  colActual: "הוצאה בפועל",
+  colPaid: "סה״כ שולם",
+  colRemaining: "נותר לשלם",
   colDiff: "פער",
 };
+
+/*  העמודות שניתן להסתיר במעקב התקציב. “סעיף” אינו ברשימה — טבלה
+    בלי שמות אינה אומרת כלום. הבחירה נשמרת בהגדרות החתונה כמחרוזת
+    מופרדת בפסיקים, ולכן היא עוברת באותו ערוץ של שאר התוויות.  */
+const BUDGET_COLUMNS = [
+  { key: "expected", label: "colExpected" },
+  { key: "actual", label: "colActual" },
+  { key: "paid", label: "colPaid" },
+  { key: "remaining", label: "colRemaining" },
+  { key: "diff", label: "colDiff" },
+];
 
 // Inline click-to-edit label. Renders as text with a subtle pencil affordance;
 // clicking turns it into an input that commits on blur / Enter (Esc cancels).
@@ -1133,6 +1199,7 @@ function Overview({
   guests,
   vendors,
   budget,
+  checklist = [],
   weddingDate,
   couple,
   canEditSettings,
@@ -1142,6 +1209,7 @@ function Overview({
   const stats = useMemo(() => {
     const totalExpected = budget.reduce((s, b) => s + b.expected, 0);
     const totalSpent = budget.reduce((s, b) => s + b.actual, 0);
+    const totalPaid = budget.reduce((s, b) => s + (b.paid || 0), 0);
     const invited = guests.reduce((s, g) => s + (g.rsvp !== "declined" ? g.seats || 1 : 0), 0);
     const confirmed = guests
       .filter((g) => g.rsvp === "confirmed")
@@ -1163,6 +1231,8 @@ function Overview({
     return {
       totalExpected,
       totalSpent,
+      totalPaid,
+      totalRemaining: Math.max(0, totalSpent - totalPaid),
       invited,
       confirmed,
       probably,
@@ -1171,6 +1241,17 @@ function Overview({
       totalTasks,
     };
   }, [guests, vendors, budget]);
+
+  //  הצ׳קליסט בדאשבורד עונה על שתי שאלות: כמה נסגר בסך הכול,
+  //  ומי משנינו נשאר עם העבודה. בלי הפילוח השני המספר לא מסייע לאיש.
+  const checklistStats = useMemo(() => {
+    const done = checklist.filter((c) => c.done).length;
+    const open = ASSIGNEES.map((a) => ({
+      label: a.short,
+      count: checklist.filter((c) => !c.done && (c.assignee || "both") === a.key).length,
+    })).filter((x) => x.count > 0);
+    return { done, total: checklist.length, open };
+  }, [checklist]);
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -1187,12 +1268,16 @@ function Overview({
       <div className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-3">
         <StatCard
           icon={Wallet}
-          label="תקציב מול הוצאה"
-          value={fmt(stats.totalSpent)}
-          sub={`מתוך תקציב מתוכנן של ${fmt(stats.totalExpected)}`}
+          label="כמה כבר שולם"
+          value={fmt(stats.totalPaid)}
+          sub={`נותר לשלם ${fmt(stats.totalRemaining)} · תכנון ${fmt(stats.totalExpected)}`}
           tone="gold"
         >
-          <ProgressBar value={stats.totalSpent} max={stats.totalExpected} tone="gold" />
+          <BudgetSplitBar
+            paid={stats.totalPaid}
+            remaining={stats.totalRemaining}
+            max={stats.totalExpected}
+          />
         </StatCard>
 
         <StatCard
@@ -1216,6 +1301,26 @@ function Overview({
             value={stats.totalTasks - stats.openTasks}
             max={stats.totalTasks}
             tone="rose"
+          />
+        </StatCard>
+
+        <StatCard
+          icon={ListChecks}
+          label="הצ׳קליסט שלנו"
+          value={`${checklistStats.done}/${checklistStats.total}`}
+          sub={
+            checklistStats.total === 0
+              ? "עדיין לא נוספו משימות לצ׳קליסט"
+              : checklistStats.open.length
+              ? `נותרו: ${checklistStats.open.map((x) => `${x.label} ${x.count}`).join(" · ")}`
+              : "הכול סגור בצ׳קליסט"
+          }
+          tone="sage"
+        >
+          <ProgressBar
+            value={checklistStats.done}
+            max={checklistStats.total}
+            tone="sage"
           />
         </StatCard>
       </div>
@@ -1285,6 +1390,79 @@ function Overview({
  *  GUESTS + SEATING MODULE
  * ====================================================================== */
 
+/*  סימון “כמה שותים” ברשומה אחת. רשומה של איש אחד מתנהגת כמו תיבת סימון
+    רגילה — זה 95% מהמקרים ואין סיבה להטריח שם מונה. רשומה של שניים ומעלה
+    מקבלת מונה קטן, כי “משפחת כהן, 4 כיסאות” יכולה להיות 4 שותים או אחד.
+
+    סימון ראשוני מציב את מספר הכיסאות המלא: מי שטרח לסמן מתכוון בדרך כלל
+    ל“כולם”, וקל יותר להוריד משם מאשר לטפס מ-1.  */
+function DrinkersControl({ guest, canEdit, onChange, compact = false }) {
+  const seats = Math.max(1, Number(guest.seats) || 1);
+  const value = Math.min(seats, Math.max(0, Number(guest.drinkers) || 0));
+  const on = value > 0;
+
+  if (seats === 1) {
+    return (
+      <label
+        title="האם המוזמן שותה אלכוהול"
+        className="inline-flex cursor-pointer items-center justify-center"
+      >
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={!canEdit}
+          onChange={() => onChange(on ? 0 : 1)}
+          aria-label={`${guest.name || "מוזמן"} שותה אלכוהול`}
+          className="h-5 w-5 accent-gold-500"
+        />
+      </label>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center justify-center gap-1">
+      <input
+        type="checkbox"
+        checked={on}
+        disabled={!canEdit}
+        onChange={() => onChange(on ? 0 : seats)}
+        aria-label={`${guest.name || "מוזמן"} — שותים אלכוהול`}
+        title="סימון ראשוני מציב את כל הכיסאות ברשומה"
+        className="h-5 w-5 accent-gold-500"
+      />
+      {on && (
+        <span
+          className={`inline-flex items-center rounded-lg bg-white ring-1 ring-slate-200 ${
+            compact ? "" : "text-xs"
+          }`}
+        >
+          <button
+            type="button"
+            disabled={!canEdit || value <= 1}
+            onClick={() => onChange(value - 1)}
+            aria-label="פחות שותים"
+            className="grid h-7 w-6 place-items-center text-slate-400 transition hover:text-gold-600 disabled:opacity-30"
+          >
+            <Minus size={13} />
+          </button>
+          <span className="min-w-8 text-center text-xs font-semibold tabular-nums text-slate-700">
+            {value}/{seats}
+          </span>
+          <button
+            type="button"
+            disabled={!canEdit || value >= seats}
+            onClick={() => onChange(value + 1)}
+            aria-label="עוד שותים"
+            className="grid h-7 w-6 place-items-center text-slate-400 transition hover:text-gold-600 disabled:opacity-30"
+          >
+            <Plus size={13} />
+          </button>
+        </span>
+      )}
+    </span>
+  );
+}
+
 const GuestRow = memo(function GuestRow({
   g,
   tableLabel,
@@ -1296,6 +1474,7 @@ const GuestRow = memo(function GuestRow({
   updateMention,
   updateSeats,
   updateGift,
+  updateDrinkers,
   toggleFlag,
   updateRsvp,
   updateAttending,
@@ -1424,6 +1603,13 @@ const GuestRow = memo(function GuestRow({
           />
         </label>
       </td>
+      <td className="px-2 py-3 text-center">
+        <DrinkersControl
+          guest={g}
+          canEdit={canEdit}
+          onChange={(n) => updateDrinkers(g.id, n)}
+        />
+      </td>
       <td className="px-2 py-3">
         {tableLabel ? (
           <Badge color="sage">
@@ -1541,6 +1727,7 @@ const GuestCard = memo(function GuestCard({
   updateMention,
   updateSeats,
   updateGift,
+  updateDrinkers,
   toggleFlag,
   updateRsvp,
   updateAttending,
@@ -1785,6 +1972,14 @@ const GuestCard = memo(function GuestCard({
         >
           <UtensilsCrossed size={16} /> גלאט
         </button>
+        <span className="flex min-h-11 items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-500 ring-1 ring-slate-200 sm:min-h-0 sm:px-2.5 sm:py-1.5 sm:text-xs">
+          <Wine size={16} /> שותים
+          <DrinkersControl
+            guest={g}
+            canEdit={canEdit}
+            onChange={(n) => updateDrinkers(g.id, n)}
+          />
+        </span>
         {tableLabel && (
           <span className="flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-500">
             <Armchair size={14} /> {tableLabel}
@@ -1797,7 +1992,7 @@ const GuestCard = memo(function GuestCard({
   );
 });
 
-function Guests({ guests, setGuests, tables, setTables, categories, setCategories }) {
+function Guests({ guests, setGuests, tables, setTables, categories, setCategories, setBudget }) {
   const canEdit = useCanEdit();
   const fileRef = useRef(null);
   const [catManagerOpen, setCatManagerOpen] = useState(false);
@@ -1816,15 +2011,16 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     seats: 1,
     mention: "",
     glatt: false,
+    drinkers: false,
   });
   const [filters, setFilters] = useState({
     search: "",
-    source: "all",
     category: "all",
     rsvp: "all",
     onlyProbably: false,
     onlyConsidering: false,
     onlyGlatt: false,
+    onlyDrinkers: false,
     onlyUnassigned: false,
   });
 
@@ -1878,6 +2074,13 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       glattSeats: notDeclined
         .filter((g) => g.glatt)
         .reduce((s, g) => s + (g.seats || 0), 0),
+      //  שותים נספרים רק על מי שלא סירב להגיע — מחשבון האלכוהול
+      //  צריך לדעת כמה אנשים בפועל יעמדו מול הבר.
+      drinkers: notDeclined.reduce(
+        (s, g) => s + Math.min(g.seats || 1, Math.max(0, Number(g.drinkers) || 0)),
+        0
+      ),
+      drinkerRecords: guests.filter((g) => (Number(g.drinkers) || 0) > 0).length,
       gifts: guests.reduce((s, g) => s + (g.gift || 0), 0),
       confirmedCount: guests.filter((g) => g.rsvp === "confirmed").length,
       pendingCount: guests.filter((g) => g.rsvp === "pending").length,
@@ -1903,21 +2106,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     };
   }, [guests]);
 
-  /*  "מקור" הוא שדה חופשי שמגיע מקובץ הייבוא של כל זוג. קודם הוצגה כאן רשימה
-      קבועה בקוד עם השמות של החתונה הראשונה, וכל משתמש חדש ראה סינון לפי אנשים
-      שאינם מכירים. עכשיו האפשרויות נגזרות מהנתונים שהוזנו בפועל.  */
-  const sourceOptions = useMemo(
-    () =>
-      [...new Set(guests.map((g) => (g.source || "").trim()).filter(Boolean))].sort(
-        (a, b) => a.localeCompare(b, "he")
-      ),
-    [guests]
-  );
-
   const filtered = useMemo(() => {
     const q = filters.search.trim().toLowerCase();
-    //  מקור שנעלם מהנתונים (נמחקו כל המוזמנים שלו) לא יכול להשאיר את הרשימה ריקה.
-    const source = sourceOptions.includes(filters.source) ? filters.source : "all";
     const assigned = filters.onlyUnassigned
       ? new Set(tables.flatMap((t) => t.guestIds))
       : null;
@@ -1926,16 +2116,16 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         const hay = `${g.name || ""} ${g.phone || ""} ${g.mention || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
-      if (source !== "all" && g.source !== source) return false;
       if (filters.category !== "all" && g.category !== filters.category) return false;
       if (filters.rsvp !== "all" && g.rsvp !== filters.rsvp) return false;
       if (filters.onlyProbably && !g.probablyComing) return false;
       if (filters.onlyConsidering && !g.considering) return false;
       if (filters.onlyGlatt && !g.glatt) return false;
+      if (filters.onlyDrinkers && !(g.drinkers > 0)) return false;
       if (assigned && assigned.has(g.id)) return false;
       return true;
     });
-  }, [guests, filters, tables, sourceOptions]);
+  }, [guests, filters, tables]);
 
   const guestTableMap = useMemo(() => {
     const m = {};
@@ -1954,6 +2144,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         case "mention": return g.mention || "";
         case "seats": return g.seats || 0;
         case "glatt": return g.glatt ? 1 : 0;
+        case "drinkers": return Number(g.drinkers) || 0;
         case "table": return guestTableMap[g.id] || "";
         case "probablyComing": return g.probablyComing ? 1 : 0;
         case "considering": return g.considering ? 1 : 0;
@@ -2025,6 +2216,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         probablyComing: false,
         considering: false,
         glatt: form.glatt,
+        //  סימון “שותים” בטופס משמעו “כל מי שברשומה הזו׳”; מדרגים ברשימה.
+        drinkers: form.drinkers ? Math.max(1, Number(form.seats) || 1) : 0,
         rsvp: "pending",
         gift: 0,
       },
@@ -2036,6 +2229,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       seats: 1,
       mention: "",
       glatt: false,
+      drinkers: false,
     });
   }
 
@@ -2100,7 +2294,22 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         const n = Math.max(1, Number(seats) || 1);
         const attendingCount =
           g.attendingCount != null ? Math.min(g.attendingCount, n) : g.attendingCount;
-        return { ...g, seats: n, attendingCount };
+        //  הקטנת מספר הכיסאות חייבת לקטום גם את השותים, אחרת נשארת רשומה
+        //  עם 4 שותים ו-2 כיסאות ומחשבון האלכוהול סופר אנשים שלא קיימים.
+        const drinkers = Math.min(n, Math.max(0, Number(g.drinkers) || 0));
+        return { ...g, seats: n, attendingCount, drinkers };
+      })
+    );
+  }, [setGuests]);
+
+  /*  מספר השותים אף פעם לא גדול ממספר הכיסאות ברשומה — הקיטום כאן ולא רק
+      ב-UI, כי הקטנת מספר הכיסאות אחרי הסימון הייתה משאירה ערך גדול מדי.  */
+  const updateDrinkers = useCallback((id, n) => {
+    setGuests((prev) =>
+      prev.map((g) => {
+        if (g.id !== id) return g;
+        const seats = Math.max(1, Number(g.seats) || 1);
+        return { ...g, drinkers: Math.min(seats, Math.max(0, Math.round(Number(n) || 0))) };
       })
     );
   }, [setGuests]);
@@ -2209,6 +2418,30 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         })
       );
       notify(`עודכן סטטוס עבור ${ids.size} רשומות`, { tone: "success" });
+    },
+    [selectedIds, setGuests]
+  );
+
+  /*  סימון שותים באצווה. ברשימה של מאות רשומות סימון אחד-אחד אינו
+      מעשי, ולכן הסימון ההמוני מציב “כל מי שברשומה” (seats) או 0.
+      כוונון עדין לשורה בודדת נשאר אפשרי אחר כך דרך ה-stepper שבשורה.  */
+  const bulkDrinkers = useCallback(
+    (on) => {
+      const ids = new Set(selectedIds);
+      if (ids.size === 0) return;
+      setGuests((prev) =>
+        prev.map((g) =>
+          ids.has(g.id)
+            ? { ...g, drinkers: on ? Math.max(1, Number(g.seats) || 1) : 0 }
+            : g
+        )
+      );
+      notify(
+        on
+          ? `${ids.size} רשומות סומנו כשותים`
+          : `סימון השותים הוסר מ-${ids.size} רשומות`,
+        { tone: "success" }
+      );
     },
     [selectedIds, setGuests]
   );
@@ -2394,9 +2627,9 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         />
       </div>
 
-      {/*  מתג בין שתי העבודות — עדכון הרשימה מול סידור ההושבה.
-          דביק לראש המסך כדי שאפשר יהיה לעבור ביניהן מכל נקודה ברשימה,
-          בלי לגלול חזרה למעלה.  */}
+      {/*  מתג בין שתי העבודות על הרשימה — ניהול המוזמנים מול
+          מחשבון האלכוהול שנגזר ממנה. דביק לראש המסך כדי שאפשר יהיה
+          לעבור ביניהן מכל נקודה ברשימה, בלי לגלול חזרה למעלה.  */}
       <div className="sticky top-2 z-20 -mx-1 px-1">
         <div
           role="tablist"
@@ -2405,7 +2638,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         >
           {[
             { key: "list", label: "רשימת המוזמנים", icon: Users, count: totals.count },
-            { key: "seating", label: "סידור הושבה", icon: Armchair, count: tables.length },
+            { key: "alcohol", label: "מחשבון אלכוהול", icon: Wine, count: totals.drinkers },
           ].map((t) => {
             const active = tab === t.key;
             return (
@@ -2629,6 +2862,18 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             />
             גלאט
           </label>
+          <label
+            title="המוזמנים ברשומה הזו שותים אלכוהול — משמש למחשבון האלכוהול"
+            className="flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-600 outline-none focus-within:border-gold-400 sm:min-h-0"
+          >
+            <input
+              type="checkbox"
+              checked={form.drinkers}
+              onChange={(e) => setForm({ ...form, drinkers: e.target.checked })}
+              className="h-5 w-5 accent-gold-500 sm:h-4 sm:w-4"
+            />
+            שותים
+          </label>
           <button
             type="submit"
             className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:bg-gold-600 lg:col-span-1"
@@ -2680,21 +2925,6 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 </option>
               ))}
             </select>
-            {sourceOptions.length > 0 && (
-              <select
-                value={sourceOptions.includes(filters.source) ? filters.source : "all"}
-                onChange={(e) => setFilters({ ...filters, source: e.target.value })}
-                title="סינון לפי מקור ההזמנה"
-                className="min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
-              >
-                <option value="all">כל המקורות</option>
-                {sourceOptions.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            )}
             <select
               value={filters.rsvp}
               onChange={(e) => setFilters({ ...filters, rsvp: e.target.value })}
@@ -2744,6 +2974,18 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             </button>
             <button
               onClick={() =>
+                setFilters({ ...filters, onlyDrinkers: !filters.onlyDrinkers })
+              }
+              className={`flex items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
+                filters.onlyDrinkers
+                  ? "bg-gold-600 text-white"
+                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-gold-50"
+              }`}
+            >
+              <Wine size={15} /> שותים
+            </button>
+            <button
+              onClick={() =>
                 setFilters({ ...filters, onlyUnassigned: !filters.onlyUnassigned })
               }
               className={`flex items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
@@ -2756,22 +2998,22 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             </button>
             {(filters.search ||
               filters.category !== "all" ||
-              filters.source !== "all" ||
               filters.rsvp !== "all" ||
               filters.onlyProbably ||
               filters.onlyConsidering ||
               filters.onlyGlatt ||
+              filters.onlyDrinkers ||
               filters.onlyUnassigned) && (
               <button
                 onClick={() =>
                   setFilters({
                     search: "",
-                    source: "all",
                     category: "all",
                     rsvp: "all",
                     onlyProbably: false,
                     onlyConsidering: false,
                     onlyGlatt: false,
+                    onlyDrinkers: false,
                     onlyUnassigned: false,
                   })
                 }
@@ -2787,7 +3029,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         <p className="mb-3 text-xs text-slate-400">
           מציג {filtered.length} מתוך {guests.length} רשומות · עמודות שהמערכת
           מזהה בקובץ Excel או CSV (בכל סדר): שם, נייד, קטגוריה, אזכור, כיסאות,
-          מקור, גלאט, "כנראה יבוא", "לשקול", "אישור הגעה", "כמה אישרו", מתנה
+          מקור, גלאט, שותים, "כנראה יבוא", "לשקול", "אישור הגעה", "כמה אישרו", מתנה
         </p>
 
         {/* Bulk action bar */}
@@ -2816,6 +3058,20 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               className="rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-500 ring-1 ring-rose-200 transition hover:bg-rose-50"
             >
               לא מגיעים
+            </button>
+            <div className="mx-1 h-5 w-px bg-gold-200" />
+            <span className="text-xs font-medium text-slate-500">שותים:</span>
+            <button
+              onClick={() => bulkDrinkers(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-gold-600 ring-1 ring-gold-200 transition hover:bg-gold-50"
+            >
+              <Wine size={14} /> סמן כשותים
+            </button>
+            <button
+              onClick={() => bulkDrinkers(false)}
+              className="rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-500 ring-1 ring-slate-200 transition hover:bg-slate-50"
+            >
+              בטל סימון
             </button>
             <div className="mx-1 h-5 w-px bg-gold-200" />
             <button
@@ -2863,6 +3119,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 <SortHeader label="אזכור" sortKey="mention" sort={sort} onSort={toggleSort} />
                 <SortHeader label="כיסאות" sortKey="seats" sort={sort} onSort={toggleSort} />
                 <SortHeader label="גלאט" sortKey="glatt" sort={sort} onSort={toggleSort} center />
+                <SortHeader label="שותים" sortKey="drinkers" sort={sort} onSort={toggleSort} center />
                 <SortHeader label="שיבוץ" sortKey="table" sort={sort} onSort={toggleSort} />
                 <SortHeader label="כנראה יבוא" sortKey="probablyComing" sort={sort} onSort={toggleSort} center />
                 <SortHeader label="לשקול" sortKey="considering" sort={sort} onSort={toggleSort} center />
@@ -2874,7 +3131,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             <tbody>
               {padTop > 0 && (
                 <tr aria-hidden="true">
-                  <td colSpan={13} className="p-0" style={{ height: padTop }} />
+                  <td colSpan={14} className="p-0" style={{ height: padTop }} />
                 </tr>
               )}
               {visibleRows.map((g) => (
@@ -2890,6 +3147,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   updateMention={updateMention}
                   updateSeats={updateSeats}
                   updateGift={updateGift}
+                  updateDrinkers={updateDrinkers}
                   toggleFlag={toggleFlag}
                   updateRsvp={updateRsvp}
                   updateAttending={updateAttending}
@@ -2899,12 +3157,12 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               ))}
               {padBottom > 0 && (
                 <tr aria-hidden="true">
-                  <td colSpan={13} className="p-0" style={{ height: padBottom }} />
+                  <td colSpan={14} className="p-0" style={{ height: padBottom }} />
                 </tr>
               )}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={13} className="px-3 py-10 text-center text-slate-400">
+                  <td colSpan={14} className="px-3 py-10 text-center text-slate-400">
                     לא נמצאו רשומות התואמות לסינון
                   </td>
                 </tr>
@@ -2928,6 +3186,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               updateMention={updateMention}
               updateSeats={updateSeats}
               updateGift={updateGift}
+              updateDrinkers={updateDrinkers}
               toggleFlag={toggleFlag}
               updateRsvp={updateRsvp}
               updateAttending={updateAttending}
@@ -2953,8 +3212,12 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         </>
       )}
 
-      {tab === "seating" && (
-        <Seating guests={guests} tables={tables} setTables={setTables} />
+      {tab === "alcohol" && (
+        <AlcoholCalculator
+          drinkers={totals.drinkers}
+          expectedSeats={totals.confirmedPeople || totals.probablySeats || totals.seatsTotal}
+          setBudget={setBudget}
+        />
       )}
 
       <CategoryManager
@@ -3130,6 +3393,519 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* =============================================================================
+ *  מחשבון אלכוהול
+ * -----------------------------------------------------------------------------
+ *  הכלל שמנחה את המסך הזה: מדברים בבקבוקים בלבד. זוג שמתכנן חתונה חושב
+ *  “כמה בקבוקים לקנות”, לא “כמה מנות” או “כמה כוסות”. לכן גם השאלה על
+ *  עוצמת השתייה מנוסחת בבקבוקים: בקבוק אחד לכל כמה אנשים.
+ *
+ *  מאחורי הקלעים עדיין צריך מכנה משותף אחד כדי לחלק בין הסוגים (בקבוק
+ *  וודקה מול ארגז בירה אינם אותו דבר), ולכן קיים BOTTLE_SHOTS. הוא לעולם
+ *  לא מוצג למשתמש — הוא רק מתרגם “בקבוק לכל 6 אנשים” לכמויות של כל סוג.
+ *
+ *  ההמלצות (8 / 6 / 4 אנשים לבקבוק) כבר כוללות עודף קטן, ולכן אין שדה
+ *  “מרווח ביטחון” ואין מכפיל נסתר — מה שרואים הוא מה שמחושב.
+ *
+ *  ה-state מקומי במכוון — אלו פרמטרים של חישוב ולא נתון של החתונה.
+ *  מה שצריך לשרוד (סכום ההוצאה) עובר לסעיף תקציב אמיתי.
+ * ========================================================================== */
+
+//  עוגן ההמרה הפנימי: בקבוק ליטר של משקה חריף נותן כ-25 שוטים של 40 מ״ל.
+//  המספר לא מוצג ולא ניתן לעריכה — הוא רק המכנה המשותף שמאפשר לחלק את
+//  הכמות בין הסוגים. זוג שמתכנן חתונה לא צריך להתעסק במספר הזה.
+const BOTTLE_SHOTS = 25;
+
+//  בעברית “1 אנשים” נראה כמו תקלה, ולכן יש טיפול בצורת היחיד.
+const peopleLabel = (n) => (n === 1 ? "אדם אחד" : `${n} אנשים`);
+
+//  עוצמת השתייה, מנוסחת בשפה של בקבוקים.
+const DRINK_LEVELS = [
+  { key: "light", label: "שותים מעט", perBottle: 8, hint: "קהל משפחתי או אירוע קצר" },
+  { key: "normal", label: "רגיל", perBottle: 6, hint: "רוב החתונות" },
+  { key: "heavy", label: "שותים הרבה", perBottle: 4, hint: "קהל צעיר, רחבה עד הסוף" },
+];
+
+/*  portions = כמה מנות שתייה יוצאות מיחידת קנייה אחת. זה נתון פנימי
+    בלבד שלא מוצג ולא ניתן לעריכה — זוג שמתכנן חתונה לא יודע ולא
+    צריך לדעת כמה שוטים יש בבקבוק. sizeLabel מתאר את אריזת הקנייה
+    כטקסט קבוע, כדי שיהיה ברור מה סופרים. רק המחיר ניתן לעריכה,
+    כי הוא באמת משתנה בין ספקים והזוג יודע מה הוא שילם.  */
+const DRINK_TYPES = [
+  { key: "vodka", label: "וודקה", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", portions: 25, price: 90, share: 25 },
+  { key: "whiskey", label: "וויסקי", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", portions: 25, price: 150, share: 15 },
+  { key: "arak", label: "ערק", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", portions: 20, price: 50, share: 15 },
+  { key: "beer", label: "בירה", unitOne: "ארגז", unitMany: "ארגזים", sizeLabel: "ארגז של 24", portions: 24, price: 120, share: 25 },
+  { key: "wine", label: "יין", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק 750 מ״ל", portions: 5, price: 45, share: 10 },
+  { key: "excel", label: "אקסלים", unitOne: "מגש", unitMany: "מגשים", sizeLabel: "מגש", portions: 80, price: 280, share: 10 },
+];
+
+
+const ALCOHOL_BUDGET_CATEGORY = "אלכוהול";
+
+function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
+  const canEdit = useCanEdit();
+  //  כל עוד אף אחד לא סומן ברשימה אין טעם להציג 0 — עוברים אוטומטית
+  //  להערכה לפי אחוז מהאורחים, שהיא הדרך שבה רוב הזוגות מתחילים.
+  const [source, setSource] = useState(drinkers > 0 ? "marked" : "percent");
+  const [percent, setPercent] = useState(80);
+  const [peoplePerBottle, setPeoplePerBottle] = useState(6);
+  const [enabled, setEnabled] = useState(() =>
+    Object.fromEntries(DRINK_TYPES.map((t) => [t.key, true]))
+  );
+  const [shares, setShares] = useState(() =>
+    Object.fromEntries(DRINK_TYPES.map((t) => [t.key, t.share]))
+  );
+  const [prices, setPrices] = useState(() =>
+    Object.fromEntries(DRINK_TYPES.map((t) => [t.key, t.price]))
+  );
+
+  const base = expectedSeats || 0;
+  const estimated = Math.round(
+    (base * Math.min(100, Math.max(0, Number(percent) || 0))) / 100
+  );
+  //  clamp על כל קלט: שדה ריק או ערך שלילי לא יפיל את החישוב.
+  const drinkerCount = Math.max(0, source === "marked" ? drinkers : estimated);
+
+  const perBottle = Math.max(1, Number(peoplePerBottle) || 1);
+  //  “בקבוק לכל N אנשים” → כמה בקבוקים בסך הכל → כמה מנות בסך הכל.
+  //  המנות הן מטבע פנימי בלבד ולא מוצגות בשום מקום במסך.
+  const totalBottles = drinkerCount / perBottle;
+  const totalPortions = totalBottles * BOTTLE_SHOTS;
+
+  //  האחוזים מחולקים רק בין הסוגים שסומנו לקנייה, ומנורמלים ביניהם. כך
+  //  כיבוי “בירה” מחלק את החלק שלה בין השאר במקום להשאיר חור בכמות.
+  const shareTotal = DRINK_TYPES.reduce(
+    (s, t) => s + (enabled[t.key] ? Math.max(0, Number(shares[t.key]) || 0) : 0),
+    0
+  );
+
+  const lines = DRINK_TYPES.map((t) => {
+    const on = !!enabled[t.key];
+    const share =
+      on && shareTotal > 0 ? Math.max(0, Number(shares[t.key]) || 0) / shareTotal : 0;
+    const per = Math.max(1, t.portions);
+    const units = on ? Math.ceil((totalPortions * share) / per) : 0;
+    const cost = units * Math.max(0, Number(prices[t.key]) || 0);
+    return { ...t, on, share, per, units, cost };
+  });
+
+  const totalCost = lines.reduce((s, l) => s + l.cost, 0);
+  const activeCount = lines.filter((l) => l.on).length;
+
+  function pushToBudget() {
+    if (!setBudget || totalCost <= 0) return;
+    setBudget((prev) => {
+      const idx = prev.findIndex((b) => b.category === ALCOHOL_BUDGET_CATEGORY);
+      if (idx === -1)
+        return [
+          ...prev,
+          {
+            id: nextRowId(prev),
+            category: ALCOHOL_BUDGET_CATEGORY,
+            expected: totalCost,
+            actual: 0,
+            paid: 0,
+          },
+        ];
+      //  סעיף קיים: מתעדכנת רק ההוצאה הצפויה. “בפועל” ו“שולם” הם נתוני
+      //  אמת שהזוג הקליד, ואסור למחשבון לדרוס אותם.
+      const next = [...prev];
+      next[idx] = { ...next[idx], expected: totalCost };
+      return next;
+    });
+    notify(`סעיף „${ALCOHOL_BUDGET_CATEGORY}” עודכן ל-${fmt(totalCost)}`, {
+      tone: "success",
+    });
+  }
+
+  const field =
+    "min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200";
+  //  וריאציה צרה לשדות שיושבים בתוך משפט. אי אפשר להוסיף עליה w-20
+  //  ל-field, כי שתי מחלקות רוחב מתנגשות ו-w-full גובר בגיליון.
+  const fieldNarrow =
+    "min-h-11 w-20 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200";
+  const fieldLabel = "mb-1 block text-xs font-medium text-slate-500";
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <SectionTitle
+          icon={Wine}
+          title="כמה אלכוהול צריך להזמין"
+          subtitle="עונים על שתי שאלות פשוטות, והמערכת מתרגמת אותן למספר בקבוקים ולעלות משוערת"
+        />
+
+        {/* שאלה 1 — כמה אנשים שותים */}
+        <div className="rounded-2xl border border-slate-200/80 bg-white/60 p-3.5">
+          <p className="mb-1 text-sm font-semibold text-slate-700">
+            1. כמה מהאורחים שותים אלכוהול?
+          </p>
+          <p className="mb-2.5 text-xs text-slate-500">
+            זה המספר שכל השאר מחושב ממנו.
+          </p>
+          <div className="space-y-2">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl p-2 transition hover:bg-slate-50">
+              <input
+                type="radio"
+                name="drinkers-source"
+                checked={source === "marked"}
+                onChange={() => setSource("marked")}
+                className="mt-0.5 h-4 w-4 accent-gold-500 focus-visible:ring-2 focus-visible:ring-gold-400"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-slate-700">
+                  לפי מי שסומן ברשימה — {peopleLabel(drinkers)}
+                </span>
+                <span className="block text-xs text-slate-500">
+                  {drinkers > 0
+                    ? "סכום העמודה „שותים” בכל הרשומות שלא סירבו להגיע"
+                    : "עדיין לא סומן אף אחד. בוחרים שורות ברשימה ולוחצים „סמן כשותים”"}
+                </span>
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl p-2 transition hover:bg-slate-50">
+              <input
+                type="radio"
+                name="drinkers-source"
+                checked={source === "percent"}
+                onChange={() => setSource("percent")}
+                className="mt-0.5 h-4 w-4 accent-gold-500 focus-visible:ring-2 focus-visible:ring-gold-400"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium text-slate-700">
+                  לא סימנתי — תעריכו בשבילי
+                </span>
+                <span className="mt-1.5 flex flex-wrap items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={percent}
+                    onChange={(e) => setPercent(e.target.value)}
+                    onFocus={() => setSource("percent")}
+                    className={fieldNarrow}
+                    aria-label="אחוז האורחים ששותים אלכוהול"
+                  />
+                  <span className="text-sm text-slate-600">מהאורחים שותים</span>
+                </span>
+                {/*  ההסבר המילולי חשוב יותר מהמספר עצמו: בלעדיו אי אפשר
+                    לדעת מאיפה הגיע ה-“מתוך כמה”.  */}
+                <span className="mt-1.5 block text-xs text-slate-500">
+                  {base > 0 ? (
+                    <>
+                      צפויים להגיע {base} אנשים (לפי אישורי ההגעה ברשימה), ולכן{" "}
+                      <b className="text-slate-700">{peopleLabel(estimated)} שותים</b>.
+                    </>
+                  ) : (
+                    "עדיין אין מספיק נתוני הגעה ברשימה כדי להעריך."
+                  )}
+                </span>
+                <span className="mt-0.5 block text-xs text-slate-400">
+                  80% הוא המספר שרוב הזוגות מתחילים ממנו. קהל מבוגר או דתי — פחות,
+                  קהל צעיר — יותר.
+                </span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        {/* שאלה 2 — עוצמת השתייה, בשפה של בקבוקים */}
+        <div className="mt-3 rounded-2xl border border-slate-200/80 bg-white/60 p-3.5">
+          <p className="mb-1 text-sm font-semibold text-slate-700">
+            2. כמה שותים אצלכם?
+          </p>
+          <p className="mb-2.5 text-xs text-slate-500">
+            בוחרים את התיאור הקרוב ביותר. לכל אחד מהם יש חישוב פשוט: לכמה
+            אנשים מספיק בקבוק אחד.
+          </p>
+          <div className="grid grid-cols-3 gap-1.5">
+            {DRINK_LEVELS.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => setPeoplePerBottle(p.perBottle)}
+                title={p.hint}
+                aria-label={`${p.label} — בקבוק לכל ${p.perBottle} אנשים. ${p.hint}`}
+                className={`min-h-11 rounded-xl px-2 py-2 text-sm font-semibold transition ${
+                  Number(peoplePerBottle) === p.perBottle
+                    ? "bg-gradient-to-br from-gold-500 to-gold-600 text-white shadow-md shadow-gold-500/25"
+                    : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                {p.label}
+                <span className="block text-[11px] font-normal opacity-80">
+                  בקבוק לכל {p.perBottle}
+                </span>
+              </button>
+            ))}
+          </div>
+          <label className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-slate-500">
+              או בעצמכם: בקבוק אחד לכל
+            </span>
+            <input
+              type="number"
+              min="1"
+              value={peoplePerBottle}
+              onChange={(e) => setPeoplePerBottle(e.target.value)}
+              className={fieldNarrow}
+              aria-label="כמה אנשים לבקבוק אחד"
+            />
+            <span className="text-xs text-slate-500">אנשים</span>
+          </label>
+          <p className="mt-2 text-xs text-slate-400">
+            ההמלצות כבר כוללות עודף קטן, כדי שהאלכוהול לא ייגמר באמצע הערב.
+          </p>
+        </div>
+
+        {/* השורה שמחברת בין שתי השאלות לטבלה */}
+        <div className="mt-4 rounded-2xl bg-gradient-to-l from-gold-50 to-white p-4 ring-1 ring-gold-200">
+          <p className="text-sm text-slate-700">
+            לפי <b>{peopleLabel(drinkerCount)}</b> ששותים, ובקבוק אחד לכל{" "}
+            <b>{perBottle}</b> מהם — זה מה שצריך להזמין:
+          </p>
+        </div>
+      </Card>
+
+      <Card>
+        <SectionTitle
+          icon={ShoppingCart}
+          title="רשימת הקנייה"
+          subtitle="מכבים כל סוג שאתם לא קונים — למשל אם האולם מביא בירה ויין על חשבונו"        />
+
+        {/*  במסך רחב טבלה אמיתית: השורה נקראת משמאל לימין כמו רשימת קנייה —
+            מה קונים, כמה מזמינים, כמה זה עולה. בנייד אותה שורה נפרסת
+            לכרטיס, כי טבלה של שש עמודות לא נכנסת ל-390 פיקסלים.  */}
+        <div className="hidden overflow-x-auto lg:block">
+          <table className="w-full min-w-[720px] text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
+                <th className="px-2 py-2.5 text-right">קונים?</th>
+                <th className="px-2 py-2.5 text-right">סוג השתייה</th>
+                <th className="px-2 py-2.5 text-center">כמה מזה שותים</th>
+                <th className="px-2 py-2.5 text-center">כמה להזמין</th>
+                <th className="px-2 py-2.5 text-center">מחיר ליחידה</th>
+                <th className="px-2 py-2.5 text-center">סה״כ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l) => (
+                <tr
+                  key={l.key}
+                  className={`border-b border-slate-100 last:border-0 ${
+                    l.on ? "" : "bg-slate-50/60"
+                  }`}
+                >
+                  <td className="px-2 py-3">
+                    <input
+                      type="checkbox"
+                      checked={l.on}
+                      onChange={(e) =>
+                        setEnabled((p) => ({ ...p, [l.key]: e.target.checked }))
+                      }
+                      className="h-5 w-5 cursor-pointer accent-gold-500"
+                      aria-label={`קונים ${l.label}`}
+                    />
+                  </td>
+                  <td className="px-2 py-3">
+                    <p
+                      className={`font-semibold ${
+                        l.on ? "text-slate-700" : "text-slate-400"
+                      }`}
+                    >
+                      {l.label}
+                    </p>
+                    {/*  אריזת הקנייה מוצגת כטקסט בלבד. במפורש אין כאן
+                        שדה “כמה שוטים בבקבוק” — זוג שמתכנן חתונה לא יודע
+                        את המספר הזה ולא צריך לדעת אותו.  */}
+                    <p className="mt-0.5 text-xs text-slate-500">{l.sizeLabel}</p>
+                  </td>
+                  <td className="px-2 py-3 text-center">
+                    <span className="inline-flex items-center gap-1">
+                      <input
+                        type="number"
+                        min="0"
+                        value={shares[l.key]}
+                        onChange={(e) =>
+                          setShares((p) => ({ ...p, [l.key]: e.target.value }))
+                        }
+                        disabled={!l.on}
+                        className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center tabular-nums outline-none focus:border-gold-400 disabled:bg-slate-100 disabled:text-slate-400"
+                        aria-label={`כמה מהאלכוהול יהיה ${l.label}, באחוזים`}
+                      />
+                      <span className="text-xs text-slate-400">%</span>
+                    </span>
+                  </td>
+                  <td className="px-2 py-3 text-center">
+                    {l.on ? (
+                      <>
+                        <span className="text-2xl font-bold tabular-nums text-slate-800">
+                          {l.units}
+                        </span>{" "}
+                        <span className="text-xs text-slate-500">
+                          {l.units === 1 ? l.unitOne : l.unitMany}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-xs text-slate-400">לא קונים</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-3 text-center">
+                    <input
+                      type="number"
+                      min="0"
+                      value={prices[l.key]}
+                      onChange={(e) =>
+                        setPrices((p) => ({ ...p, [l.key]: e.target.value }))
+                      }
+                      disabled={!l.on}
+                      className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center tabular-nums outline-none focus:border-gold-400 disabled:bg-slate-100 disabled:text-slate-400"
+                      aria-label={`מחיר ל${l.unitOne} של ${l.label}`}
+                    />
+                  </td>
+                  <td className="px-2 py-3 text-center font-semibold tabular-nums text-slate-700">
+                    {l.on ? fmt(l.cost) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-slate-200">
+                <td colSpan={5} className="px-2 py-3 text-left font-semibold text-slate-600">
+                  סה״כ להזמנה
+                </td>
+                <td className="px-2 py-3 text-center text-lg font-bold tabular-nums text-slate-800">
+                  {fmt(totalCost)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        {/* כרטיסים בנייד */}
+        <div className="space-y-3 lg:hidden">
+          {lines.map((l) => (
+            <div
+              key={l.key}
+              className={`rounded-2xl border p-3.5 transition ${
+                l.on
+                  ? "border-slate-200/80 bg-white/60"
+                  : "border-slate-200/60 bg-slate-50/60"
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="flex min-h-11 cursor-pointer items-center gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={l.on}
+                    onChange={(e) =>
+                      setEnabled((p) => ({ ...p, [l.key]: e.target.checked }))
+                    }
+                    className="h-5 w-5 cursor-pointer accent-gold-500"
+                    aria-label={`קונים ${l.label}`}
+                  />
+                  <span
+                    className={`text-base font-semibold ${
+                      l.on ? "text-slate-700" : "text-slate-400"
+                    }`}
+                  >
+                    {l.label}
+                  </span>
+                </label>
+                {l.on ? (
+                  <div className="text-left">
+                    <p className="text-2xl font-bold tabular-nums text-slate-800">
+                      {l.units}{" "}
+                      <span className="text-sm font-medium text-slate-500">
+                        {l.units === 1 ? l.unitOne : l.unitMany}
+                      </span>
+                    </p>
+                    <p className="text-xs text-slate-500">{fmt(l.cost)}</p>
+                  </div>
+                ) : (
+                  <span className="text-xs font-medium text-slate-400">לא קונים</span>
+                )}
+              </div>
+
+              {l.on && (
+                <div className="mt-3 space-y-2">
+                  <p className="text-xs text-slate-500">{l.sizeLabel}</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className={fieldLabel}>כמה מזה שותים (%)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={shares[l.key]}
+                        onChange={(e) =>
+                          setShares((p) => ({ ...p, [l.key]: e.target.value }))
+                        }
+                        className={field}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className={fieldLabel}>מחיר ל{l.unitOne} (₪)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={prices[l.key]}
+                        onChange={(e) =>
+                          setPrices((p) => ({ ...p, [l.key]: e.target.value }))
+                        }
+                        className={field}
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {activeCount === 0 && (
+          <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-200">
+            כל הסוגים כבויים — סמנו לפחות סוג אחד כדי לקבל רשימת קנייה.
+          </p>
+        )}
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
+          <div>
+            <p className="text-xs font-medium text-slate-500">עלות משוערת לכל האלכוהול</p>
+            <p className="text-2xl font-bold tabular-nums text-slate-800">
+              {fmt(totalCost)}
+            </p>
+          </div>
+          {canEdit && setBudget && (
+            <button
+              onClick={pushToBudget}
+              disabled={totalCost <= 0}
+              className="flex min-h-11 items-center gap-2 rounded-xl bg-gradient-to-br from-gold-500 to-gold-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-gold-500/25 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Wallet size={16} /> העבר לסעיף תקציב
+            </button>
+          )}
+        </div>
+
+        <div className="mt-2 space-y-1 text-xs text-slate-400">
+          <p>
+            האחוזים אומרים איזה חלק מכל האלכוהול יהיה מכל סוג — למשל רבע
+            וודקה ועשירית יין. הם מתחלקים אוטומטית בין הסוגים שסימנתם —
+            לא חייבים להגיע ל-100.
+          </p>
+          <p>
+            המחירים הם הערכה ממוצעת לאריזה הרשומה ליד כל סוג — עדכנו
+            אותם לפי מה שקיבלתם מהספק, והסכום מתעדכן מיד.
+          </p>
+          <p>
+            העברה לתקציב יוצרת (או מעדכנת) סעיף בשם „{ALCOHOL_BUDGET_CATEGORY}” בשדה
+            „הוצאה צפויה” בלבד — מה שכבר שילמתם בפועל לא נדרס.
+          </p>
+        </div>
+      </Card>
     </div>
   );
 }
@@ -3525,6 +4301,480 @@ function Seating({ guests, tables, setTables }) {
   );
 }
 
+/* =============================================================================
+ *  צ׳קליסט החתונה
+ * -----------------------------------------------------------------------------
+ *  שתי רשימות משימות חיות במערכת, והן לא אותו דבר:
+ *    • vendors.tasks  — משימות מול ספק מסוים ("לשלוח לצלם לוח זמנים").
+ *    • checklist      — המטלות של הזוג עצמו, רובן לא קשורות לאף ספק.
+ *  איחוד שלהן היה הופך את לוח המשימות של הספק לרשימה שאי אפשר לעבוד איתה.
+ *
+ *  הרשימה המומלצת (45 משימות) אינה נזרעת אוטומטית. חתונה קיימת שכבר מנוהלת
+ *  לא אמורה לקבל 45 שורות חדשות בלי שביקשו, ולכן זו פעולה מפורשת במסך.
+ * ========================================================================== */
+
+const ASSIGNEES = [
+  { key: "both", label: "שניהם", short: "שניהם", icon: Users, badge: "bg-slate-100 text-slate-600 ring-slate-200" },
+  { key: "bride", label: "כלה", short: "כלה", icon: Heart, badge: "bg-rose-50 text-rose-600 ring-rose-200" },
+  { key: "groom", label: "חתן", short: "חתן", icon: Crown, badge: "bg-sky-50 text-sky-600 ring-sky-200" },
+];
+
+const assigneeOf = (key) => ASSIGNEES.find((a) => a.key === key) || ASSIGNEES[0];
+
+/**  סדר הקטגוריות: קודם אלו שמגיעות מהתבנית ובסדר שלה, ואחריהן קטגוריות
+ *   שהזוג המציא. מיון אלפביתי היה מפזר את "ספקים" ו"כללי" באמצע הרשימה.  */
+function orderCategories(list) {
+  const extra = list.filter((c) => !CHECKLIST_CATEGORIES.includes(c)).sort((a, b) => a.localeCompare(b, "he"));
+  return [...CHECKLIST_CATEGORIES.filter((c) => list.includes(c)), ...extra];
+}
+
+function AssigneeBadge({ value }) {
+  const a = assigneeOf(value);
+  const Icon = a.icon;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${a.badge}`}
+    >
+      <Icon size={11} />
+      {a.short}
+    </span>
+  );
+}
+
+function ChecklistRow({ item, canEdit, onToggle, onRename, onAssign, onDelete }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.title);
+
+  function commit() {
+    const clean = draft.trim();
+    setEditing(false);
+    if (!clean || clean === item.title) {
+      setDraft(item.title);
+      return;
+    }
+    onRename(item.id, clean);
+  }
+
+  return (
+    <li
+      className={`flex flex-wrap items-center gap-2 rounded-2xl border px-3 py-2 transition sm:flex-nowrap ${
+        item.done
+          ? "border-sage-200/70 bg-sage-50/50"
+          : "border-slate-200/70 bg-white/60"
+      }`}
+    >
+      {/*  שטח הלחיצה הוא ה-label כולו ולא רק הריבוע — 44px בגובה, כדי
+          שסימון משימה בטלפון לא ידרוש כיוון עדין.  */}
+      <label className="flex min-h-11 flex-1 cursor-pointer items-center gap-2.5">
+        <input
+          type="checkbox"
+          checked={item.done}
+          disabled={!canEdit}
+          onChange={() => onToggle(item.id)}
+          className="h-5 w-5 shrink-0 cursor-pointer accent-sage-500 disabled:cursor-default"
+          aria-label={`סימון "${item.title}" כבוצע`}
+        />
+        {editing ? (
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                setDraft(item.title);
+                setEditing(false);
+              }
+            }}
+            className="min-h-9 w-full rounded-lg border border-gold-300 bg-white px-2 py-1 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-gold-200"
+            aria-label="שם המשימה"
+          />
+        ) : (
+          <span
+            onDoubleClick={() => canEdit && setEditing(true)}
+            className={`min-w-0 break-words text-sm ${
+              item.done ? "text-slate-400 line-through" : "text-slate-700"
+            }`}
+          >
+            {item.title}
+          </span>
+        )}
+      </label>
+
+      <div className="flex shrink-0 items-center gap-1.5">
+        {canEdit ? (
+          <select
+            value={item.assignee}
+            onChange={(e) => onAssign(item.id, e.target.value)}
+            className="min-h-9 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 outline-none focus:border-gold-400"
+            aria-label={`מי אחראי על "${item.title}"`}
+          >
+            {ASSIGNEES.map((a) => (
+              <option key={a.key} value={a.key}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <AssigneeBadge value={item.assignee} />
+        )}
+        {canEdit && (
+          <>
+            <button
+              onClick={() => setEditing(true)}
+              title="שינוי שם המשימה"
+              aria-label={`שינוי שם המשימה "${item.title}"`}
+              className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-white hover:text-slate-600"
+            >
+              <Pencil size={14} />
+            </button>
+            <button
+              onClick={() => onDelete(item.id)}
+              title="מחיקת המשימה"
+              aria-label={`מחיקת המשימה "${item.title}"`}
+              className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500"
+            >
+              <Trash2 size={14} />
+            </button>
+          </>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function Checklist({ items, setItems }) {
+  const canEdit = useCanEdit();
+  const [query, setQuery] = useState("");
+  const [assigneeFilter, setAssigneeFilter] = useState("all");
+  const [hideDone, setHideDone] = useState(false);
+  const [form, setForm] = useState({ title: "", category: CHECKLIST_CATEGORIES[0], assignee: "both" });
+
+  const categories = useMemo(
+    () => orderCategories([...new Set(items.map((i) => i.category || "כללי"))]),
+    [items]
+  );
+
+  const stats = useMemo(() => {
+    const per = { both: { done: 0, total: 0 }, bride: { done: 0, total: 0 }, groom: { done: 0, total: 0 } };
+    let done = 0;
+    for (const i of items) {
+      const bucket = per[i.assignee] || per.both;
+      bucket.total += 1;
+      if (i.done) {
+        bucket.done += 1;
+        done += 1;
+      }
+    }
+    return { done, total: items.length, per };
+  }, [items]);
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return items
+      .filter((i) => {
+        if (hideDone && i.done) return false;
+        if (assigneeFilter !== "all" && i.assignee !== assigneeFilter) return false;
+        if (q && !i.title.toLowerCase().includes(q)) return false;
+        return true;
+      })
+      .sort((a, b) => (Number(a.position) || 0) - (Number(b.position) || 0));
+  }, [items, query, assigneeFilter, hideDone]);
+
+  const grouped = useMemo(() => {
+    const map = new Map();
+    for (const i of visible) {
+      const key = i.category || "כללי";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(i);
+    }
+    return orderCategories([...map.keys()]).map((category) => ({
+      category,
+      rows: map.get(category),
+    }));
+  }, [visible]);
+
+  const toggle = useCallback(
+    (id) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, done: !i.done } : i))),
+    [setItems]
+  );
+  const rename = useCallback(
+    (id, title) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, title } : i))),
+    [setItems]
+  );
+  const assign = useCallback(
+    (id, assignee) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, assignee } : i))),
+    [setItems]
+  );
+
+  async function remove(id) {
+    const item = items.find((i) => i.id === id);
+    const ok = await confirmDialog({
+      title: "מחיקת משימה",
+      message: `למחוק את "${item?.title ?? ""}" מהצ׳קליסט?`,
+      confirmLabel: "מחיקה",
+      tone: "danger",
+    });
+    if (ok) setItems((prev) => prev.filter((i) => i.id !== id));
+  }
+
+  function addItem(e) {
+    e.preventDefault();
+    const title = form.title.trim();
+    if (!title) return;
+    setItems((prev) => {
+      const position = prev.reduce((m, i) => Math.max(m, Number(i.position) || 0), 0) + 10;
+      return [
+        ...prev,
+        {
+          id: nextRowId(prev),
+          title,
+          category: form.category || "כללי",
+          assignee: form.assignee,
+          done: false,
+          position,
+        },
+      ];
+    });
+    setForm((f) => ({ ...f, title: "" }));
+    notify("המשימה נוספה לצ׳קליסט", { tone: "success" });
+  }
+
+  /*  טעינת הרשימה המומלצת. מוסיפה רק משימות שאין להן שם זהה ברשימה, כדי
+      שלחיצה שנייה (או זוג שהקליד חלק מהן ידנית) לא תיצור כפילויות.  */
+  async function loadTemplate() {
+    const existing = new Set(items.map((i) => i.title.trim()));
+    const missing = CHECKLIST_TEMPLATE.filter((t) => !existing.has(t.title));
+    if (!missing.length) {
+      notify("כל המשימות המומלצות כבר קיימות ברשימה", { tone: "info" });
+      return;
+    }
+    const ok = await confirmDialog({
+      title: "טעינת הרשימה המומלצת",
+      message: `יתווספו ${missing.length} משימות מומלצות לצ׳קליסט. משימות שכבר קיימות לא ישוכפלו, ושום דבר קיים לא יימחק.`,
+      confirmLabel: "הוספה",
+    });
+    if (!ok) return;
+    setItems((prev) => {
+      let id = nextRowId(prev);
+      let position = prev.reduce((m, i) => Math.max(m, Number(i.position) || 0), 0);
+      return [
+        ...prev,
+        ...missing.map((t) => {
+          position += 10;
+          return { ...t, id: id++, done: false, position };
+        }),
+      ];
+    });
+    notify(`נוספו ${missing.length} משימות`, { tone: "success" });
+  }
+
+  const pct = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
+  const chip = (on) =>
+    `min-h-9 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+      on
+        ? "bg-gradient-to-br from-gold-500 to-gold-600 text-white shadow-sm shadow-gold-500/25"
+        : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+    }`;
+
+  return (
+    <div className="space-y-4 sm:space-y-6">
+      <Card>
+        <SectionTitle
+          icon={ListChecks}
+          title="הצ׳קליסט של החתונה"
+          subtitle="כל מה שצריך לסגור עד היום הגדול, במקום אחד"
+          action={
+            canEdit && (
+              <button
+                onClick={loadTemplate}
+                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:w-auto"
+              >
+                <Sparkles size={16} className="text-gold-500" />
+                הוספת הרשימה המומלצת
+              </button>
+            )
+          }
+        />
+
+        {items.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white/50 p-6 text-center">
+            <ListChecks className="mx-auto mb-2 text-gold-400" size={28} />
+            <p className="text-sm font-semibold text-slate-700">הצ׳קליסט עדיין ריק</p>
+            {/*  לצופה אין כפתור טעינה, ולכן גם אין טעם להבטיח לו "אפשר
+                להתחיל מרשימה מוכנה" — הוא יחפש כפתור שלא קיים אצלו.  */}
+            <p className="mx-auto mt-1 max-w-md text-xs text-slate-500">
+              {canEdit
+                ? `אפשר להתחיל מרשימה מוכנה של ${CHECKLIST_TEMPLATE.length} משימות שרוב הזוגות עוברים דרכן — ולמחוק או להוסיף כל מה שרוצים.`
+                : "בעלי החתונה עדיין לא הוסיפו משימות לצ׳קליסט."}
+            </p>
+            {canEdit && (
+              <button
+                onClick={loadTemplate}
+                className="mx-auto mt-4 flex min-h-11 items-center gap-2 rounded-xl bg-gradient-to-br from-gold-500 to-gold-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/25 transition hover:from-gold-600 hover:to-gold-700"
+              >
+                <Sparkles size={16} />
+                טעינת הרשימה המומלצת
+              </button>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <p className="text-sm text-slate-500">
+                הושלמו{" "}
+                <b className="text-lg tabular-nums text-slate-800">{stats.done}</b> מתוך{" "}
+                <b className="tabular-nums text-slate-800">{stats.total}</b> משימות
+              </p>
+              <p className="text-lg font-bold tabular-nums text-gold-600">{pct}%</p>
+            </div>
+            <div className="mt-2">
+              <ProgressBar value={stats.done} max={stats.total} tone="sage" />
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {ASSIGNEES.map((a) => {
+                const s = stats.per[a.key];
+                const Icon = a.icon;
+                return (
+                  <div key={a.key} className="rounded-xl bg-white/60 px-3 py-2 text-center ring-1 ring-slate-200/70">
+                    <p className="flex items-center justify-center gap-1 text-[11px] font-medium text-slate-500">
+                      <Icon size={12} />
+                      {a.label}
+                    </p>
+                    <p className="mt-0.5 text-sm font-bold tabular-nums text-slate-700">
+                      {s.done}/{s.total}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </Card>
+
+      {items.length > 0 && (
+        <Card>
+          {canEdit && (
+            <form onSubmit={addItem} className="mb-4 grid gap-2 sm:grid-cols-[1fr_auto_auto_auto]">
+              <input
+                value={form.title}
+                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                placeholder="משימה חדשה…"
+                className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200"
+                aria-label="שם המשימה החדשה"
+              />
+              <select
+                value={form.category}
+                onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+                className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-gold-400"
+                aria-label="קטגוריה"
+              >
+                {categories.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={form.assignee}
+                onChange={(e) => setForm((f) => ({ ...f, assignee: e.target.value }))}
+                className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-gold-400"
+                aria-label="מי אחראי"
+              >
+                {ASSIGNEES.map((a) => (
+                  <option key={a.key} value={a.key}>
+                    {a.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="submit"
+                className="flex min-h-11 items-center justify-center gap-1.5 rounded-xl bg-gradient-to-br from-gold-500 to-gold-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-gold-500/25 transition hover:from-gold-600 hover:to-gold-700"
+              >
+                <Plus size={16} />
+                הוספה
+              </button>
+            </form>
+          )}
+
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <div className="relative min-w-0 flex-1 sm:max-w-xs">
+              <Search size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="חיפוש משימה…"
+                className="min-h-11 w-full rounded-xl border border-slate-200 bg-white py-2 pr-9 pl-3 text-sm text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200"
+                aria-label="חיפוש משימה"
+              />
+            </div>
+            <button onClick={() => setAssigneeFilter("all")} className={chip(assigneeFilter === "all")}>
+              הכול
+            </button>
+            {ASSIGNEES.map((a) => (
+              <button
+                key={a.key}
+                onClick={() => setAssigneeFilter(a.key)}
+                className={chip(assigneeFilter === a.key)}
+              >
+                {a.label}
+              </button>
+            ))}
+            <button onClick={() => setHideDone((v) => !v)} className={chip(hideDone)}>
+              <CheckCheck size={13} className="ml-1 inline" />
+              הסתרת שהושלמו
+            </button>
+          </div>
+
+          {grouped.length === 0 ? (
+            <p className="py-8 text-center text-sm text-slate-400">
+              אין משימות שמתאימות לסינון הנוכחי.
+            </p>
+          ) : (
+            <div className="space-y-5">
+              {grouped.map(({ category, rows }) => {
+                const total = items.filter((i) => (i.category || "כללי") === category);
+                const done = total.filter((i) => i.done).length;
+                return (
+                  <div key={category}>
+                    <div className="mb-2 flex items-baseline justify-between gap-2">
+                      <h3 className="text-sm font-bold text-slate-700">{category}</h3>
+                      {/*  המונה סופר תמיד את כל הקטגוריה ולא רק את מה שהסינון
+                          הותיר על המסך. בלי ההבהרה בסוגריים נוצר רושם שחלק
+                          מהמשימות נעלמו — ולכן היא מופיעה רק כשבאמת מסתירים.  */}
+                      <span
+                        className="text-xs tabular-nums text-slate-400"
+                        title="הושלמו מתוך כלל המשימות בקטגוריה"
+                      >
+                        {done}/{total.length}
+                        {rows.length !== total.length && ` · מוצגות ${rows.length}`}
+                      </span>
+                    </div>
+                    <ul className="space-y-1.5">
+                      {rows.map((item) => (
+                        <ChecklistRow
+                          key={item.id}
+                          item={item}
+                          canEdit={canEdit}
+                          onToggle={toggle}
+                          onRename={rename}
+                          onAssign={assign}
+                          onDelete={remove}
+                        />
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
 /* =========================================================================
  *  VENDORS + TASK MANAGEMENT MODULE
  * ====================================================================== */
@@ -3573,7 +4823,9 @@ function Vendors({
     const nameChanged = patch.name !== undefined && patch.name !== before.name;
     const costChanged =
       patch.contractCost !== undefined && patch.contractCost !== before.contractCost;
-    if (!nameChanged && !costChanged) return;
+    const depositChanged =
+      patch.deposit !== undefined && patch.deposit !== before.deposit;
+    if (!nameChanged && !costChanged && !depositChanged) return;
 
     setBudget((prev) =>
       prev.map((b) => {
@@ -3587,6 +4839,9 @@ function Vendors({
           if (b.expected === before.contractCost) next.expected = patch.contractCost;
           if (b.actual === before.contractCost) next.actual = patch.contractCost;
         }
+        //  המקדמה בכרטיס הספק היא תשלום שבוצע — אותו דבר בדיוק
+        //  כמו “סה״כ שולם” בתקציב, ולכן היא נגררת לשם באותו תנאי.
+        if (depositChanged && b.paid === before.deposit) next.paid = patch.deposit;
         return next;
       })
     );
@@ -3727,7 +4982,7 @@ function Vendors({
       <Card>
         <SectionTitle
           icon={Briefcase}
-          title="ניהול ספקים ומשימות"
+          title="ניהול ספקים"
           subtitle="פרטים, תשלומים, סיכומי פגישות ולוח משימות"
           action={
             canEdit ? (
@@ -4280,7 +5535,7 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
 function VendorSourceTag({ vendorName }) {
   return (
     <span
-      title={`הסעיף נוצר אוטומטית מהספק “${vendorName}” בלשונית ספקים ומשימות`}
+      title={`הסעיף נוצר אוטומטית מהספק “${vendorName}” בלשונית ספקים`}
       className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-sage-100 px-2 py-0.5 text-[11px] font-semibold text-sage-700 ring-1 ring-inset ring-sage-300"
     >
       <Briefcase size={11} />
@@ -4303,8 +5558,9 @@ function moveBefore(list, id, targetId) {
 
 function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudgetGoal, financeLabels, setFinanceLabels }) {
   const canEdit = useCanEdit();
-  const [form, setForm] = useState({ category: "", expected: "", actual: "" });
+  const [form, setForm] = useState({ category: "", expected: "", actual: "", paid: "" });
   const [goalDraft, setGoalDraft] = useState(budgetGoal);
+  const [colsOpen, setColsOpen] = useState(false);
   const [dragId, setDragId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
 
@@ -4376,6 +5632,25 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
   const updateLabel = (key, val) =>
     setFinanceLabels((prev) => ({ ...prev, [key]: val }));
 
+  /*  עמודות מוסתרות נשמרות כמחרוזת מופרדת בפסיקים באותו אובייקט של התוויות,
+      כדי לעבור באותו ערוץ סנכרון ובלי הגדרה חדשה בשרת. ערך ריק נמחק שם,
+      ולכן "שום עמודה לא מוסתרת" מיוצג כהיעדר המפתח.  */
+  const hiddenCols = String(financeLabels?.hiddenCols || "")
+    .split(",")
+    .filter(Boolean);
+  const showCol = (key) => !hiddenCols.includes(key);
+  const toggleCol = (key) => {
+    const next = hiddenCols.includes(key)
+      ? hiddenCols.filter((k) => k !== key)
+      : [...hiddenCols, key];
+    setFinanceLabels((prev) => {
+      const out = { ...prev };
+      if (next.length) out.hiddenCols = next.join(",");
+      else delete out.hiddenCols;
+      return out;
+    });
+  };
+
   useEffect(() => setGoalDraft(budgetGoal), [budgetGoal]);
 
   const goal = Number(budgetGoal) || 0;
@@ -4389,8 +5664,17 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
   const totals = useMemo(() => {
     const expected = budget.reduce((s, b) => s + b.expected, 0);
     const actual = budget.reduce((s, b) => s + b.actual, 0);
+    const paid = budget.reduce((s, b) => s + (b.paid || 0), 0);
     const income = guests.reduce((s, g) => s + (g.gift || 0), 0);
-    return { expected, actual, income, balance: income - actual };
+    //  מי ששילם יותר ממה שסוכם לא “נותר לשלם” סכום שלילי.
+    return {
+      expected,
+      actual,
+      paid,
+      remaining: Math.max(0, actual - paid),
+      income,
+      balance: income - actual,
+    };
   }, [budget, guests]);
 
   function addItem(e) {
@@ -4403,9 +5687,10 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
         category: form.category.trim(),
         expected: Number(form.expected) || 0,
         actual: Number(form.actual) || 0,
+        paid: Number(form.paid) || 0,
       },
     ]);
-    setForm({ category: "", expected: "", actual: "" });
+    setForm({ category: "", expected: "", actual: "", paid: "" });
   }
 
   function updateItem(id, key, value) {
@@ -4450,7 +5735,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
     //  כל עוד הספק קיים, והמשתמש היה חווה את זה כתקלה.
     if (vendor) {
       notify(
-        `“${b.category}” הוא סעיף של ספק. כדי להסיר אותו, מחקו את הספק בלשונית “ספקים ומשימות”. כדי שלא ייספר בתקציב, אפסו את הסכומים.`,
+        `“${b.category}” הוא סעיף של ספק. כדי להסיר אותו, מחקו את הספק בלשונית “ספקים”. כדי שלא ייספר בתקציב, אפסו את הסכומים.`,
         { tone: "error", duration: 7000 }
       );
       return;
@@ -4531,8 +5816,14 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                 ):{" "}
                 <b className="tabular-nums text-slate-700">{fmt(totals.expected)}</b>
                 {" · "}
-                הוצאה בפועל:{" "}
+                נדרש לשלם:{" "}
                 <b className="tabular-nums text-slate-700">{fmt(totals.actual)}</b>
+                {" · "}
+                שולם:{" "}
+                <b className="tabular-nums text-slate-700">{fmt(totals.paid)}</b>
+                {" · "}
+                נותר לשלם:{" "}
+                <b className="tabular-nums text-slate-700">{fmt(totals.remaining)}</b>
               </span>
             </div>
           ) : (
@@ -4558,34 +5849,34 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                     : `נותרו לתכנון ${fmt(goal - totals.expected)}`}
                 </span>
               </div>
-              <ProgressBar
-                value={totals.actual}
+              <BudgetSplitBar
+                paid={totals.paid}
+                remaining={totals.remaining}
                 max={goal}
-                tone={totals.actual > goal ? "rose" : "gold"}
               />
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                <span className="text-slate-500">
-                  הוצאה בפועל:{" "}
-                  <b className="tabular-nums text-slate-700">{fmt(totals.actual)}</b>
-                </span>
-                <span
-                  className={
-                    totals.actual > goal
-                      ? "font-semibold text-rose-500"
-                      : "text-slate-500"
-                  }
-                >
-                  {totals.actual > goal
-                    ? `מעל היעד ב-${fmt(totals.actual - goal)}`
-                    : `נותרו מהיעד ${fmt(goal - totals.actual)}`}
-                </span>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                <SplitLegendItem
+                  color="bg-gold-600"
+                  label="שולם"
+                  value={fmt(totals.paid)}
+                />
+                <SplitLegendItem
+                  color={totals.actual > goal ? "bg-rose-300" : "bg-gold-200"}
+                  label="נותר לשלם"
+                  value={fmt(totals.remaining)}
+                />
+                <SplitLegendItem
+                  color="bg-slate-200"
+                  label={totals.actual > goal ? "חריגה מהיעד" : "מרווח עד היעד"}
+                  value={fmt(Math.abs(goal - totals.actual))}
+                />
               </div>
             </>
           )}
         </div>
       </Card>
 
-      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-3">
         <StatCard
           icon={Wallet}
           label={
@@ -4607,6 +5898,28 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
           }
           value={fmt(totals.actual)}
           tone="rose"
+        />
+        <StatCard
+          icon={CheckCircle2}
+          label={
+            <EditableText
+              value={L.statPaid}
+              onCommit={(v) => updateLabel("statPaid", v)}
+            />
+          }
+          value={fmt(totals.paid)}
+          tone="sage"
+        />
+        <StatCard
+          icon={Clock}
+          label={
+            <EditableText
+              value={L.statRemaining}
+              onCommit={(v) => updateLabel("statRemaining", v)}
+            />
+          }
+          value={fmt(totals.remaining)}
+          tone="gold"
         />
         <StatCard
           icon={Gift}
@@ -4663,7 +5976,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
         {canEdit && (
         <form
           onSubmit={addItem}
-          className="mb-4 grid grid-cols-2 gap-2 rounded-2xl bg-white/50 p-3 ring-1 ring-slate-200/70 sm:mb-5 sm:gap-3 sm:p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
+          className="mb-4 grid grid-cols-2 gap-2 rounded-2xl bg-white/50 p-3 ring-1 ring-slate-200/70 sm:mb-5 sm:gap-3 sm:p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
         >
           <input
             value={form.category}
@@ -4685,6 +5998,13 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
             placeholder="עלות בפועל"
             className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400"
           />
+          <input
+            type="number"
+            value={form.paid}
+            onChange={(e) => setForm({ ...form, paid: e.target.value })}
+            placeholder="שולם עד כה"
+            className="col-span-2 min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400 sm:col-span-1"
+          />
           <button
             type="submit"
             className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-gold-600 sm:col-span-1"
@@ -4693,6 +6013,53 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
           </button>
         </form>
         )}
+
+        {/*  בורר עמודות: לא לכל זוג רלוונטיות כל חמש העמודות. ההסתרה היא
+            תצוגתית בלבד — הנתונים נשמרים וממשיכים להיספר בסיכומים.  */}
+        <div className="mb-3 flex justify-end">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setColsOpen((v) => !v)}
+              aria-expanded={colsOpen}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-gold-300 hover:text-gold-700"
+            >
+              <Settings2 size={15} />
+              עמודות
+              {hiddenCols.length > 0 && (
+                <span className="rounded-full bg-gold-100 px-1.5 text-[11px] text-gold-700">
+                  {BUDGET_COLUMNS.length - hiddenCols.length}/{BUDGET_COLUMNS.length}
+                </span>
+              )}
+            </button>
+            {colsOpen && (
+              <>
+                <button
+                  type="button"
+                  aria-label="סגירת בורר העמודות"
+                  onClick={() => setColsOpen(false)}
+                  className="fixed inset-0 z-10 cursor-default"
+                />
+                <div className="absolute end-0 z-20 mt-1.5 w-52 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                  {BUDGET_COLUMNS.map((c) => (
+                    <label
+                      key={c.key}
+                      className="flex cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={showCol(c.key)}
+                        onChange={() => toggleCol(c.key)}
+                        className="h-4 w-4 accent-gold-500"
+                      />
+                      {L[c.label]}
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
 
         <div className="hidden overflow-x-auto lg:block">
           <table className="w-full min-w-[620px] text-right text-sm">
@@ -4705,30 +6072,53 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                     onCommit={(v) => updateLabel("colCategory", v)}
                   />
                 </th>
-                <th className="px-3 py-2 font-semibold">
-                  <EditableText
-                    value={L.colExpected}
-                    onCommit={(v) => updateLabel("colExpected", v)}
-                  />
-                </th>
-                <th className="px-3 py-2 font-semibold">
-                  <EditableText
-                    value={L.colActual}
-                    onCommit={(v) => updateLabel("colActual", v)}
-                  />
-                </th>
-                <th className="px-3 py-2 font-semibold">
-                  <EditableText
-                    value={L.colDiff}
-                    onCommit={(v) => updateLabel("colDiff", v)}
-                  />
-                </th>
+                {showCol("expected") && (
+                  <th className="px-3 py-2 font-semibold">
+                    <EditableText
+                      value={L.colExpected}
+                      onCommit={(v) => updateLabel("colExpected", v)}
+                    />
+                  </th>
+                )}
+                {showCol("actual") && (
+                  <th className="px-3 py-2 font-semibold">
+                    <EditableText
+                      value={L.colActual}
+                      onCommit={(v) => updateLabel("colActual", v)}
+                    />
+                  </th>
+                )}
+                {showCol("paid") && (
+                  <th className="px-3 py-2 font-semibold">
+                    <EditableText
+                      value={L.colPaid}
+                      onCommit={(v) => updateLabel("colPaid", v)}
+                    />
+                  </th>
+                )}
+                {showCol("remaining") && (
+                  <th className="px-3 py-2 font-semibold">
+                    <EditableText
+                      value={L.colRemaining}
+                      onCommit={(v) => updateLabel("colRemaining", v)}
+                    />
+                  </th>
+                )}
+                {showCol("diff") && (
+                  <th className="px-3 py-2 font-semibold">
+                    <EditableText
+                      value={L.colDiff}
+                      onCommit={(v) => updateLabel("colDiff", v)}
+                    />
+                  </th>
+                )}
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
               {budget.map((b, idx) => {
                 const diff = b.expected - b.actual;
+                const remaining = Math.max(0, b.actual - (b.paid || 0));
                 const vendor = vendorOf(b);
                 const cost = vendor ? contractOf(vendor) : 0;
                 const mismatch =
@@ -4798,35 +6188,66 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                         </span>
                       )}
                     </td>
-                    <td className="px-3 py-3">
-                      <input
-                        type="number"
-                        value={b.expected}
-                        onChange={(e) =>
-                          updateItem(b.id, "expected", e.target.value)
-                        }
-                        className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
-                      />
-                    </td>
-                    <td className="px-3 py-3">
-                      <input
-                        type="number"
-                        value={b.actual}
-                        onChange={(e) =>
-                          updateItem(b.id, "actual", e.target.value)
-                        }
-                        className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
-                      />
-                    </td>
-                    <td className="px-3 py-3">
-                      <span
-                        className={`font-semibold tabular-nums ${
-                          diff >= 0 ? "text-sage-600" : "text-rose-500"
-                        }`}
-                      >
-                        {fmt(diff)}
-                      </span>
-                    </td>
+                    {showCol("expected") && (
+                      <td className="px-3 py-3">
+                        <input
+                          type="number"
+                          value={b.expected}
+                          onChange={(e) =>
+                            updateItem(b.id, "expected", e.target.value)
+                          }
+                          className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
+                        />
+                      </td>
+                    )}
+                    {showCol("actual") && (
+                      <td className="px-3 py-3">
+                        <input
+                          type="number"
+                          value={b.actual}
+                          onChange={(e) =>
+                            updateItem(b.id, "actual", e.target.value)
+                          }
+                          className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
+                        />
+                      </td>
+                    )}
+                    {showCol("paid") && (
+                      <td className="px-3 py-3">
+                        <input
+                          type="number"
+                          value={b.paid ?? 0}
+                          onChange={(e) => updateItem(b.id, "paid", e.target.value)}
+                          className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
+                        />
+                      </td>
+                    )}
+                    {showCol("remaining") && (
+                      <td className="px-3 py-3">
+                        <span
+                          className={`font-semibold tabular-nums ${
+                            remaining > 0 ? "text-gold-600" : "text-sage-600"
+                          }`}
+                        >
+                          {remaining > 0
+                            ? fmt(remaining)
+                            : b.actual > 0
+                              ? "שולם במלואו"
+                              : fmt(0)}
+                        </span>
+                      </td>
+                    )}
+                    {showCol("diff") && (
+                      <td className="px-3 py-3">
+                        <span
+                          className={`font-semibold tabular-nums ${
+                            diff >= 0 ? "text-sage-600" : "text-rose-500"
+                          }`}
+                        >
+                          {fmt(diff)}
+                        </span>
+                      </td>
+                    )}
                     <td className="px-3 py-3 text-left">
                       <div className="flex items-center justify-end gap-0.5">
                         <button
@@ -4859,7 +6280,10 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
               })}
               {budget.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-10 text-center text-slate-400">
+                  <td
+                    colSpan={3 + BUDGET_COLUMNS.length - hiddenCols.length}
+                    className="px-3 py-10 text-center text-slate-400"
+                  >
                     עדיין אין סעיפי תקציב – הוסיפו סעיף חדש בעזרת הטופס למעלה.
                   </td>
                 </tr>
@@ -4869,11 +6293,23 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
               <tr className="border-t-2 border-slate-200 font-bold text-slate-800">
                 <td className="px-2 py-3"></td>
                 <td className="px-3 py-3">סה״כ</td>
-                <td className="px-3 py-3 tabular-nums">{fmt(totals.expected)}</td>
-                <td className="px-3 py-3 tabular-nums">{fmt(totals.actual)}</td>
-                <td className="px-3 py-3 tabular-nums">
-                  {fmt(totals.expected - totals.actual)}
-                </td>
+                {showCol("expected") && (
+                  <td className="px-3 py-3 tabular-nums">{fmt(totals.expected)}</td>
+                )}
+                {showCol("actual") && (
+                  <td className="px-3 py-3 tabular-nums">{fmt(totals.actual)}</td>
+                )}
+                {showCol("paid") && (
+                  <td className="px-3 py-3 tabular-nums">{fmt(totals.paid)}</td>
+                )}
+                {showCol("remaining") && (
+                  <td className="px-3 py-3 tabular-nums">{fmt(totals.remaining)}</td>
+                )}
+                {showCol("diff") && (
+                  <td className="px-3 py-3 tabular-nums">
+                    {fmt(totals.expected - totals.actual)}
+                  </td>
+                )}
                 <td></td>
               </tr>
             </tfoot>
@@ -4884,6 +6320,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
         <div className="space-y-3 lg:hidden">
           {budget.map((b) => {
             const diff = b.expected - b.actual;
+            const remaining = Math.max(0, b.actual - (b.paid || 0));
             const vendor = vendorOf(b);
             const cost = vendor ? contractOf(vendor) : 0;
             const mismatch = vendor && (b.expected !== cost || b.actual !== cost);
@@ -4970,42 +6407,81 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                 </div>
 
                 <div className="grid grid-cols-2 gap-2.5">
-                  <label className="text-xs font-medium text-slate-500">
-                    {L.colExpected}
-                    <input
-                      type="number"
-                      value={b.expected}
-                      onChange={(e) =>
-                        updateItem(b.id, "expected", e.target.value)
-                      }
-                      className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
-                    />
-                  </label>
-                  <label className="text-xs font-medium text-slate-500">
-                    {L.colActual}
-                    <input
-                      type="number"
-                      value={b.actual}
-                      onChange={(e) =>
-                        updateItem(b.id, "actual", e.target.value)
-                      }
-                      className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
-                    />
-                  </label>
+                  {showCol("expected") && (
+                    <label className="text-xs font-medium text-slate-500">
+                      {L.colExpected}
+                      <input
+                        type="number"
+                        value={b.expected}
+                        onChange={(e) =>
+                          updateItem(b.id, "expected", e.target.value)
+                        }
+                        className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
+                      />
+                    </label>
+                  )}
+                  {showCol("actual") && (
+                    <label className="text-xs font-medium text-slate-500">
+                      {L.colActual}
+                      <input
+                        type="number"
+                        value={b.actual}
+                        onChange={(e) =>
+                          updateItem(b.id, "actual", e.target.value)
+                        }
+                        className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
+                      />
+                    </label>
+                  )}
+                  {showCol("paid") && (
+                    <label className="col-span-2 text-xs font-medium text-slate-500">
+                      {L.colPaid}
+                      <input
+                        type="number"
+                        value={b.paid ?? 0}
+                        onChange={(e) => updateItem(b.id, "paid", e.target.value)}
+                        className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
+                      />
+                    </label>
+                  )}
                 </div>
 
-                <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2 text-sm">
-                  <span className="text-xs font-medium text-slate-500">
-                    {L.colDiff}
-                  </span>
-                  <span
-                    className={`font-semibold tabular-nums ${
-                      diff >= 0 ? "text-sage-600" : "text-rose-500"
-                    }`}
-                  >
-                    {fmt(diff)}
-                  </span>
-                </div>
+                {(showCol("remaining") || showCol("diff")) && (
+                  <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-2 text-sm">
+                    {showCol("remaining") && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-slate-500">
+                          {L.colRemaining}
+                        </span>
+                        <span
+                          className={`font-semibold tabular-nums ${
+                            remaining > 0 ? "text-gold-600" : "text-sage-600"
+                          }`}
+                        >
+                          {remaining > 0
+                            ? fmt(remaining)
+                            : b.actual > 0
+                              ? "שולם במלואו"
+                              : fmt(0)}
+                        </span>
+                      </div>
+                    )}
+                    {showCol("diff") && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-slate-500">
+                          {L.colDiff}
+                        </span>
+                        <span
+                          className={`font-semibold tabular-nums ${
+                            diff >= 0 ? "text-sage-600" : "text-rose-500"
+                          }`}
+                        >
+                          {fmt(diff)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -5017,7 +6493,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
           ) : (
             <div className="rounded-2xl bg-slate-800 p-4 text-white">
               <p className="mb-2 text-sm font-bold">סה״כ</p>
-              <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="grid grid-cols-2 gap-2 text-center">
                 <div>
                   <p className="text-[11px] text-white/60">{L.colExpected}</p>
                   <p className="text-sm font-bold tabular-nums">
@@ -5031,9 +6507,15 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                   </p>
                 </div>
                 <div>
-                  <p className="text-[11px] text-white/60">{L.colDiff}</p>
+                  <p className="text-[11px] text-white/60">{L.colPaid}</p>
                   <p className="text-sm font-bold tabular-nums">
-                    {fmt(totals.expected - totals.actual)}
+                    {fmt(totals.paid)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-white/60">{L.colRemaining}</p>
+                  <p className="text-sm font-bold tabular-nums">
+                    {fmt(totals.remaining)}
                   </p>
                 </div>
               </div>
@@ -5228,7 +6710,7 @@ function VendorPortal({ vendors, setVendors, weddingName = "", coupleTitle = "" 
       {!vendor && (
         <Card className="text-center">
           <p className="text-sm text-slate-500">
-            עדיין לא הוספתם ספקים. הוסיפו ספק במסך "ספקים ומשימות" והפורטל שלו יופיע כאן.
+            עדיין לא הוספתם ספקים. הוסיפו ספק במסך "ספקים" והפורטל שלו יופיע כאן.
           </p>
         </Card>
       )}
@@ -5593,6 +7075,7 @@ function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [weddingDate, setWeddingDate] = useState("");
+  const [partnerEmail, setPartnerEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -5647,7 +7130,17 @@ function LoginScreen() {
         //  משלו. אם הצירוף הצליח מסירים אותו, אחרת הוא נשאר וה-effect
         //  שאחרי הכניסה ינסה שוב ויציג שגיאה מדויקת.
         const pendingInvite = sessionStorage.getItem(INVITE_STORAGE_KEY);
-        const res = await signUp(address, password, weddingDate || null, pendingInvite);
+        //  מי שמצטרף לחתונה קיימת אינו הבעלים שלה, ולכן אין לו את מי לצרף.
+        const partner = hasInvite ? null : partnerEmail.trim();
+        if (partner && !isValidEmail(partner)) {
+          setError("כתובת המייל של בן/בת הזוג אינה תקינה.");
+          return;
+        }
+        if (partner && partner.toLowerCase() === address.toLowerCase()) {
+          setError("מייל בן/בת הזוג חייב להיות שונה מהמייל שלכם.");
+          return;
+        }
+        const res = await signUp(address, password, weddingDate || null, pendingInvite, partner);
         if (res?.joinedWeddingId) sessionStorage.removeItem(INVITE_STORAGE_KEY);
       } else {
         await signIn(address, password);
@@ -5739,6 +7232,39 @@ function LoginScreen() {
               לפחות 8 תווים. אל תשתמשו בסיסמה שכבר בשימוש באתר אחר.
             </span>
           )}
+        </label>
+      )}
+
+      {/*  צירוף בן/בת הזוג כבר בהרשמה חוסך את כל מסלול ההזמנה (קישור,
+          מסירה, קבלה). מי שמצטרף לחתונה של מישהו אחר לא מצרף אף אחד.  */}
+      {signup && !hasInvite && (
+        <label className="block space-y-1">
+          <span className="text-xs font-medium text-slate-500">
+            מייל של בן/בת הזוג{" "}
+            <span className="font-normal text-slate-400">(רשות)</span>
+          </span>
+          <div
+            data-tour="auth-partner"
+            className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 ring-1 ring-slate-200 focus-within:ring-gold-400"
+          >
+            <Heart size={16} className="text-slate-400" />
+            <input
+              type="email"
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              value={partnerEmail}
+              onChange={(e) => setPartnerEmail(e.target.value)}
+              className="w-full bg-transparent text-sm outline-none"
+              placeholder="name@example.com"
+              dir="ltr"
+            />
+          </div>
+          <span className="block text-[11px] text-slate-400">
+            אפשר להיכנס גם עם המייל הזה ועם אותה הסיסמה. בכל שלב אפשר
+            לשנות אותה דרך "שכחתי סיסמה". אפשר לדלג ולהוסיף בהמשך
+            במסך "הגדרות החתונה".
+          </span>
         </label>
       )}
 
@@ -6304,6 +7830,7 @@ function WeddingApp({
   const mayGuests = hasScope(scopes, "guests");
   const mayVendors = hasScope(scopes, "vendors");
   const mayFinance = hasScope(scopes, "finance");
+  const mayChecklist = hasScope(scopes, "checklist");
 
   //  תאריך החתונה מגיע מה-DB כמחרוזת 'YYYY-MM-DD'. מקבעים 19:00 מקומי כשעת
   //  האירוע כדי שהספירה לאחור לא תסתיים בחצות של אותו יום.
@@ -6341,11 +7868,13 @@ function WeddingApp({
     "budget",
     cloudEnabled ? [] : SEED_BUDGET
   );
+  //  הצ׳קליסט מתחיל ריק תמיד, גם ללא ענן: הרשימה המומלצת נטענת
+  //  בלחיצה מפורשת במסך ולא נדחפת לאיש לחשבון.
+  const [checklist, setChecklist] = usePersistentState("checklist", []);
   const [budgetGoal, setBudgetGoal] = usePersistentState(
     "budgetGoal",
     cloudEnabled ? 0 : SEED_BUDGET.reduce((s, b) => s + b.expected, 0)
-  );
-  const [financeLabels, setFinanceLabels] = usePersistentState(
+  );  const [financeLabels, setFinanceLabels] = usePersistentState(
     "financeLabels",
     {}
   );
@@ -6401,6 +7930,7 @@ function WeddingApp({
     tables: new Set(),
     vendors: new Set(),
     budget: new Set(),
+    checklist: new Set(),
   });
 
   /*  כישלון סנכרון חייב לנסות שוב מעצמו. בלי זה, שינוי שנכשל (שרת עמוס,
@@ -6442,7 +7972,7 @@ function WeddingApp({
         // זריעה רק כשיש מה להעלות מהמכשיר (שדרוג ממצב מקומי), ורק לבעלים
         // עם גישה מלאה — למי ששותף לו מסך בודד אין מה לזרוע.
         if (isOwner && fullScope && (await cloudIsEmpty(weddingId))) {
-          let datasets = { guests, tables, vendors, budget };
+          let datasets = { guests, tables, vendors, budget, checklist };
 
           // שדרוג ממצב מקומי בלבד: הנתונים שמורים תחת התחילית הישנה, ללא
           // שיוך למשתמש. מייבאים רק באישור מפורש – ייתכן שהם של אדם אחר.
@@ -6472,6 +8002,7 @@ function WeddingApp({
         setGuests(data.guests);
         setTables(data.tables);
         setVendors(data.vendors);
+        setChecklist(data.checklist);
         //  השלמה חד-פעמית: חתונות שנוצרו לפני הקישור לתקציב מחזיקות
         //  ספקים בלי סעיף משלהם. מותנה בהרשאה לשני המסכים: למי ששותף
         //  לו מסך בודד רשימת הספקים מגיעה ריקה, והשלמה על סמך רשימה
@@ -6496,6 +8027,7 @@ function WeddingApp({
           tables: new Set(data.tables.map((t) => t.id)),
           vendors: new Set(data.vendors.map((v) => v.id)),
           budget: new Set(data.budget.map((b) => b.id)),
+          checklist: new Set(data.checklist.map((c) => c.id)),
         };
         cloudReadyRef.current = true;
         //  רק אחרי הטעינה מותר לדחוף הגדרות למעלה. בלי זה, ערכי ברירת המחדל
@@ -6610,6 +8142,30 @@ function WeddingApp({
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [budget, syncRetry]);
+
+  useEffect(() => {
+    if (!cloudEnabled || !canEdit || !mayChecklist || !cloudReadyRef.current) return;
+    const timer = setTimeout(() => {
+      enqueueSync(async () => {
+        try {
+          setCloudStatus("saving");
+          prevIdsRef.current.checklist = await cloudSyncDataset(
+            weddingId,
+            "checklist",
+            checklist,
+            prevIdsRef.current.checklist
+          );
+          setCloudStatus("synced");
+        } catch (err) {
+          console.error("Cloud sync failed (checklist):", err);
+          setCloudStatus("error");
+          scheduleSyncRetry();
+        }
+      });
+    }, 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checklist, syncRetry]);
 
   //  שמירת ההגדרות. כתיבת מיזוג של אובייקט קטן, ולכן אין צורך בהשוואת מזהים
   //  כמו במערכי הנתונים. גם עורך רשאי לשמור — הקטגוריות ויעד התקציב הם נתון
@@ -6979,15 +8535,24 @@ function WeddingApp({
 
   const titleMap = {
     overview: "דאשבורד ראשי",
-    guests: "מוזמנים והושבה",
-    vendors: "ספקים ומשימות",
+    checklist: "צ׳קליסט",
+    guests: "מוזמנים",
+    seating: "סידור הושבה",
+    vendors: "ספקים",
     finance: "ניהול תקציב",
     portal: "פורטל ספקים",
   };
 
   const subtitleMap = {
     overview: `${guests.length} מוזמנים · ${vendors.length} ספקים`,
+    checklist: checklist.length
+      ? `${checklist.filter((c) => c.done).length} מתוך ${checklist.length} משימות הושלמו`
+      : "עדיין לא נוספו משימות",
     guests: `${guests.length} רשומות ברשימה`,
+    seating: `${tables.length} שולחנות · ${tables.reduce(
+      (s, t) => s + (t.guestIds?.length || 0),
+      0
+    )} רשומות משובצות`,
     vendors: `${vendors.length} ספקים · ${vendors.reduce(
       (s, v) => s + v.tasks.filter((t) => t.status !== "done").length,
       0
@@ -7018,6 +8583,7 @@ function WeddingApp({
           canEditBasics={cloudEnabled ? isOwner : true}
           canEditBudgetGoal={canEdit && mayFinance}
           showDate={cloudEnabled}
+          weddingId={cloudEnabled && isOwner ? weddingId : null}
           onSaveBasics={saveWeddingBasics}
           onSetBudgetGoal={setBudgetGoal}
           onClose={() => setSettingsOpen(false)}
@@ -7320,12 +8886,16 @@ function WeddingApp({
               guests={guests}
               vendors={vendors}
               budget={budget}
+              checklist={checklist}
               weddingDate={weddingDate}
               couple={couple}
               canEditSettings={cloudEnabled ? isOwner : true}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenVendor={canOpenVendors ? openVendor : null}
             />
+          )}
+          {active === "checklist" && (
+            <Checklist items={checklist} setItems={setChecklist} />
           )}
           {active === "guests" && (
             <CategoriesContext.Provider value={categories}>
@@ -7336,8 +8906,12 @@ function WeddingApp({
                 setTables={setTables}
                 categories={categories}
                 setCategories={setCategories}
+                setBudget={mayFinance ? setBudget : null}
               />
             </CategoriesContext.Provider>
+          )}
+          {active === "seating" && (
+            <Seating guests={guests} tables={tables} setTables={setTables} />
           )}
           {active === "vendors" && (
             <Vendors
@@ -7615,6 +9189,7 @@ function WeddingSettingsModal({
   canEditBasics,
   canEditBudgetGoal,
   showDate,
+  weddingId = null,
   onSaveBasics,
   onSetBudgetGoal,
   onClose,
@@ -7624,6 +9199,49 @@ function WeddingSettingsModal({
   const [date, setDate] = useState(String(weddingDate || "").slice(0, 10));
   const [goal, setGoal] = useState(String(budgetGoal || ""));
   const [busy, setBusy] = useState(false);
+
+  //  צירוף בן/בת הזוג אינו חלק מטופס השמירה: זו פעולה חד-פעמית שפותחת
+  //  חשבון ושולחת מייל, ואין לה מצב של "עוד לא נשמר".
+  const [partnerEmail, setPartnerEmail] = useState("");
+  const [partnerBusy, setPartnerBusy] = useState(false);
+  const [partnerMsg, setPartnerMsg] = useState("");
+  const [partnerError, setPartnerError] = useState("");
+
+  async function addPartnerAccount() {
+    const address = partnerEmail.trim();
+    setPartnerMsg("");
+    setPartnerError("");
+    if (!isValidEmail(address)) {
+      setPartnerError("כתובת המייל אינה תקינה. לדוגמה: name@example.com");
+      return;
+    }
+
+    setPartnerBusy(true);
+    try {
+      const res = await addPartner(weddingId, address);
+      setPartnerEmail("");
+      setPartnerMsg(
+        res?.alreadyMember
+          ? `${res.email} כבר משותף/ת בחתונה הזו — לא בוצע שינוי.`
+          : res?.created
+            ? `נפתח חשבון עבור ${res.email}. הכניסה היא עם אותה הסיסמה שלכם.`
+            : `${res.email} צורף/ה לחתונה. הכניסה היא עם הסיסמה הקיימת שלו/ה.`
+      );
+    } catch (err) {
+      const code = err?.code || err?.message;
+      setPartnerError(
+        code === "cannot_invite_self"
+          ? "זו כתובת המייל שלכם. הזינו את הכתובת של בן/בת הזוג."
+          : code === "invalid_email"
+            ? "כתובת המייל אינה תקינה."
+            : code === "too_many_attempts"
+              ? "בוצעו יותר מדי ניסיונות. נסו שוב בעוד שעה."
+              : "צירוף בן/בת הזוג נכשל. נסו שוב."
+      );
+    } finally {
+      setPartnerBusy(false);
+    }
+  }
 
   async function save(e) {
     e.preventDefault();
@@ -7762,6 +9380,56 @@ function WeddingSettingsModal({
               הסכום שאתם מוכנים להוציא בסך הכול. משמש להשוואה במסך התקציב.
             </p>
           </div>
+
+          {/*  נפרד מכפתור השמירה בכוונה: זו פעולה שפותחת חשבון אמיתי
+              ושולחת מייל, ואי-אפשר לבטל אותה בעזרת "ביטול".  */}
+          {weddingId && (
+            <div className="rounded-2xl bg-slate-50 p-3.5 ring-1 ring-slate-200">
+              <label
+                htmlFor="settings-partner-email"
+                className="mb-2 block text-xs font-semibold text-slate-500"
+              >
+                צירוף בן/בת הזוג
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="settings-partner-email"
+                  type="email"
+                  value={partnerEmail}
+                  onChange={(e) => setPartnerEmail(e.target.value)}
+                  disabled={partnerBusy}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  placeholder="name@example.com"
+                  dir="ltr"
+                  className={inputCls}
+                />
+                <button
+                  type="button"
+                  onClick={addPartnerAccount}
+                  disabled={partnerBusy || !partnerEmail.trim()}
+                  className="shrink-0 rounded-xl bg-sage-500 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-sage-600 disabled:opacity-50"
+                >
+                  {partnerBusy ? "מצרף…" : "צירוף"}
+                </button>
+              </div>
+              <p className="mt-1.5 text-[11px] text-slate-400">
+                נפתח חשבון עם גישה מלאה לכל המסכים. אפשר להיכנס גם עם המייל
+                הזה ועם אותה הסיסמה. בכל שלב אפשר לשנות אותה דרך "שכחתי סיסמה".
+              </p>
+              {partnerMsg && (
+                <p className="mt-2 rounded-lg bg-sage-50 px-2.5 py-1.5 text-[11px] text-sage-700 ring-1 ring-sage-200">
+                  {partnerMsg}
+                </p>
+              )}
+              {partnerError && (
+                <p className="mt-2 rounded-lg bg-rose-50 px-2.5 py-1.5 text-[11px] text-rose-600 ring-1 ring-rose-200">
+                  {partnerError}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {!canEditBasics && (

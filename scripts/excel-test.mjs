@@ -126,9 +126,9 @@ console.log("\n3. גיליון \u201eמוזמנים\u201d");
 const G = readSheet("מוזמנים");
 const guestHeaders = [
   "מס׳", "שם", "נייד", "קטגוריה", "מקור", "כיסאות", "אישור הגעה",
-  "כמה אישרו", "כנראה יבוא", "לשקול", "גלאט", "מתנה", "שולחן", "אזכור",
+  "כמה אישרו", "כנראה יבוא", "לשקול", "גלאט", "שותים", "מתנה", "שולחן", "אזכור",
 ];
-check("כל 14 העמודות קיימות ובסדר הנכון", JSON.stringify(G.headers) === JSON.stringify(guestHeaders), G.headers.join(" | "));
+check("כל 15 העמודות קיימות ובסדר הנכון", JSON.stringify(G.headers) === JSON.stringify(guestHeaders), G.headers.join(" | "));
 check(`כל ${SEED_GUESTS.length} המוזמנים יורדו`, G.rows.length === SEED_GUESTS.length, `${G.rows.length}`);
 
 const byId = new Map(G.rows.map((r) => [Number(r["מס׳"]), r]));
@@ -148,6 +148,7 @@ for (const g of SEED_GUESTS) {
     "כנראה יבוא": yesNo(g.probablyComing),
     "לשקול": yesNo(g.considering),
     "גלאט": yesNo(g.glatt),
+    "שותים": Math.min(seats, Math.round(Number(g.drinkers) || 0)),
     "מתנה": Math.round(Number(g.gift) || 0),
     "שולחן": tableOfGuest.get(g.id)?.name || "ללא שיבוץ",
     "אזכור": g.mention ?? "",
@@ -254,15 +255,24 @@ check("שורות ללא שיבוץ מכילות שם מוזמן", unassignedRow
 console.log("\n6. גיליון \u201eניהול תקציב\u201d");
 const B = readSheet("ניהול תקציב");
 check(
-  "כל 5 העמודות קיימות ובסדר הנכון",
-  JSON.stringify(B.headers) === JSON.stringify(["מס׳", "סעיף", "צפוי", "בפועל", "פער"]),
+  "כל 7 העמודות קיימות ובסדר הנכון",
+  JSON.stringify(B.headers) ===
+    JSON.stringify(["מס׳", "סעיף", "הוצאה צפויה", "הוצאה בפועל", "סה״כ שולם", "נותר לשלם", "פער"]),
   B.headers.join(" | ")
 );
 
 const bMismatch = [];
 SEED_BUDGET.forEach((b, i) => {
   const r = B.rows[i];
-  const expected = { "מס׳": b.id, "סעיף": b.category, "צפוי": b.expected, "בפועל": b.actual, "פער": b.actual - b.expected };
+  const expected = {
+    "מס׳": b.id,
+    "סעיף": b.category,
+    "הוצאה צפויה": b.expected,
+    "הוצאה בפועל": b.actual,
+    "סה״כ שולם": b.paid,
+    "נותר לשלם": Math.max(0, b.actual - b.paid),
+    "פער": b.actual - b.expected,
+  };
   for (const [k, v] of Object.entries(expected)) {
     if (str(r?.[k]) !== String(v)) bMismatch.push(`${b.category}/${k}: "${str(r?.[k])}" ≠ "${v}"`);
   }
@@ -272,12 +282,15 @@ check("סדר הסעיפים נשמר", str(B.rows[0]["סעיף"]) === SEED_BUDG
 
 const expectedTotal = SEED_BUDGET.reduce((s, b) => s + b.expected, 0);
 const actualTotal = SEED_BUDGET.reduce((s, b) => s + b.actual, 0);
+const paidTotal = SEED_BUDGET.reduce((s, b) => s + b.paid, 0);
 const income = SEED_GUESTS.reduce((s, g) => s + (Number(g.gift) || 0), 0);
 const summary = new Map(
-  B.rows.slice(SEED_BUDGET.length).filter((r) => str(r["סעיף"])).map((r) => [str(r["סעיף"]), Number(cell(r["צפוי"]))])
+  B.rows.slice(SEED_BUDGET.length).filter((r) => str(r["סעיף"])).map((r) => [str(r["סעיף"]), Number(cell(r["הוצאה צפויה"]))])
 );
-check("סה\u05f4כ תקציב מתוכנן", summary.get("סה״כ תקציב מתוכנן") === expectedTotal, `${summary.get("סה״כ תקציב מתוכנן")} ≠ ${expectedTotal}`);
-check("סה\u05f4כ הוצאה בפועל", summary.get("סה״כ הוצאה בפועל") === actualTotal, `${summary.get("סה״כ הוצאה בפועל")} ≠ ${actualTotal}`);
+check("סכום הסעיפים הצפוי", summary.get("סכום הסעיפים הצפוי") === expectedTotal, `${summary.get("סכום הסעיפים הצפוי")} ≠ ${expectedTotal}`);
+check("סה\u05f4כ נדרש לשלם", summary.get("סה״כ נדרש לשלם") === actualTotal, `${summary.get("סה״כ נדרש לשלם")} ≠ ${actualTotal}`);
+check("סה\u05f4כ שולם", summary.get("סה״כ שולם") === paidTotal, `${summary.get("סה״כ שולם")} ≠ ${paidTotal}`);
+check("נותר לשלם", summary.get("נותר לשלם") === Math.max(0, actualTotal - paidTotal), `${summary.get("נותר לשלם")} ≠ ${actualTotal - paidTotal}`);
 check("הכנסות ממתנות זהות לסכום בגיליון המוזמנים", summary.get("הכנסות (מתנות)") === income, `${summary.get("הכנסות (מתנות)")} ≠ ${income}`);
 check("מאזן סופי = הכנסות פחות הוצאה בפועל", summary.get("מאזן סופי") === income - actualTotal);
 check("יעד התקציב יורד לקובץ", summary.get("יעד התקציב הכולל") === 170000);

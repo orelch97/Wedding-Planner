@@ -15,6 +15,7 @@ import { withUser, withAdmin } from "./db.js";
 import {
   registerUser,
   authenticateUser,
+  addPartnerToWedding,
   createSession,
   destroySession,
   validateCredentials,
@@ -26,7 +27,7 @@ import {
   hashToken,
   asText,
 } from "./auth.js";
-import { sendPasswordResetEmail, APP_URL } from "./mailer.js";
+import { sendPasswordResetEmail, sendPartnerWelcomeEmail, APP_URL } from "./mailer.js";
 
 /* ── סכימת הטבלאות: רשימת עמודות לבנה ─────────────────────────────────────
  *  שמות הטבלאות והעמודות לעולם לא מגיעים מהלקוח. הלקוח שולח מפתח לוגי
@@ -38,14 +39,14 @@ const ENTITIES = {
     table: "guests",
     columns: [
       "name", "phone", "category", "seats", "mention", "source",
-      "probably_coming", "considering", "glatt", "rsvp", "gift",
+      "probably_coming", "considering", "glatt", "drinkers", "rsvp", "gift",
     ],
     jsonColumns: [],
     //  עמודות NOT NULL. ה-INSERT מונה את כל העמודות מפורשות, ולכן
     //  שדה חסר היה נשלח כ-NULL ודורס את ברירת המחדל של העמודה.
     defaults: {
       name: "", seats: 1, probably_coming: false, considering: false,
-      glatt: false, rsvp: "pending", gift: 0,
+      glatt: false, drinkers: 0, rsvp: "pending", gift: 0,
     },
   },
   tables: {
@@ -66,9 +67,15 @@ const ENTITIES = {
   budget: {
     table: "budget_items",
     //  vendor_id = הספק שממנו נוצר הסעיף, או NULL לסעיף שהוקלד ידנית.
-    columns: ["category", "expected", "actual", "vendor_id"],
+    columns: ["category", "expected", "actual", "paid", "vendor_id"],
     jsonColumns: [],
-    defaults: { category: "", expected: 0, actual: 0 },
+    defaults: { category: "", expected: 0, actual: 0, paid: 0 },
+  },
+  checklist: {
+    table: "checklist_items",
+    columns: ["title", "category", "assignee", "done", "position"],
+    jsonColumns: [],
+    defaults: { title: "", category: "", assignee: "both", done: false, position: 0 },
   },
 };
 
@@ -81,7 +88,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *  האכיפה עצמה היא במדיניות ה-RLS (ראו db/002_scopes_and_files.sql);
  *  הניקוי כאן רק מונע שמירת ערכי זבל בעמודה.
  */
-const SCOPE_KEYS = ["guests", "vendors", "finance"];
+const SCOPE_KEYS = ["guests", "vendors", "finance", "checklist"];
 
 function sanitizeScopes(input) {
   if (!Array.isArray(input)) return ["all"];
@@ -366,6 +373,43 @@ const rateLimitAlways = makeRateLimit(true);
 //  בלולאה הוא הופך לסורק שמגלה אילו כתובות רשומות במערכת.
 const rateLimitRegister = makeRateLimit(false, [409]);
 
+/*  צירוף בן/בת זוג שולח מייל לכתובת שהמשתמש הקליד, ויוצר חשבון.
+ *  בלי תקרה, חשבון לגיטימי אחד הופך את השרת למכונת שליחת מיילים.
+ *  מונה נפרד מזה של ההזדהות בכוונה: ניסיון כאן לא אמור לנעול את מסך
+ *  ההתחברות לאותו IP.  */
+const partnerAttempts = new Map();
+const PARTNER_WINDOW_MS = 60 * 60_000;
+const MAX_PARTNER_ADDS = 10;
+
+function rateLimitPartner(req, res, next) {
+  const key = req.ip || "unknown";
+  const now = Date.now();
+  const entry = partnerAttempts.get(key);
+
+  if (!entry || now > entry.resetAt) {
+    partnerAttempts.set(key, { count: 1, resetAt: now + PARTNER_WINDOW_MS });
+    return next();
+  }
+  if (++entry.count > MAX_PARTNER_ADDS) return fail(res, 429, "too_many_attempts");
+  next();
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of partnerAttempts) {
+    if (now > entry.resetAt) partnerAttempts.delete(key);
+  }
+}, PARTNER_WINDOW_MS).unref();
+
+/**  קורא למייל היידוע בלי להמתין לו. הצירוף כבר נשמר במסד, וכשל דואר
+ *   (או SMTP שלא הוגדר כלל) לא אמור לעכב את התשובה ובוודאי שלא להפיל אותה.  */
+function notifyPartner(partner, ownerEmail) {
+  if (!partner || partner.alreadyMember) return;
+  Promise.resolve(
+    sendPartnerWelcomeEmail(partner.email, { ownerEmail, created: partner.created })
+  ).catch(() => {});
+}
+
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of attempts) if (now > entry.resetAt) attempts.delete(key);
@@ -417,6 +461,16 @@ router.post(
     const date = normalizeDate(req.body?.weddingDate);
     if (date === false) return fail(res, 400, "invalid_date");
 
+    //  מייל בן/בת הזוג רשות. נבדק *לפני* יצירת המשתמש, כדי שכתובת שגויה
+    //  תיפסל בהודעה ברורה ולא תשאיר חשבון חצי-מוגדר.
+    const partnerRaw = req.body?.partnerEmail;
+    let partnerEmail = null;
+    if (partnerRaw != null && asText(partnerRaw).trim() !== "") {
+      partnerEmail = normalizeEmail(partnerRaw);
+      if (!partnerEmail) return fail(res, 400, "invalid_partner_email");
+      if (partnerEmail === creds.email.toLowerCase()) return fail(res, 400, "partner_same_email");
+    }
+
     //  נרשמים דרך קישור הזמנה: בודקים את ההזמנה לפני יצירת המשתמש, כדי לא
     //  לפתוח לו חתונה פרטית משלו. חתונה כזו הופכת אותו לבעלים עם גישה מלאה
     //  ומציגה לו את כל תפריט המערכת — למרות שההזמנה הוגבלה למסך אחד.
@@ -428,6 +482,8 @@ router.post(
 
     const result = await registerUser(creds.email, creds.password, date, {
       createWedding: !joining,
+      //  מצטרף לחתונה קיימת אינו הבעלים שלה, ולכן אין לו את מי לצרף.
+      partnerEmail: joining ? null : partnerEmail,
     });
     if (result.error) return fail(res, 409, result.error);
 
@@ -439,9 +495,17 @@ router.post(
       joinedWeddingId = joined.weddingId ?? null;
     }
 
+    notifyPartner(result.partner, result.user.email);
+
     const { token, expiresAt } = await createSession(result.user.id);
     res.setHeader("Set-Cookie", sessionCookie(token, expiresAt));
-    res.json({ user: result.user, joinedWeddingId });
+    res.json({
+      user: result.user,
+      joinedWeddingId,
+      partner: result.partner
+        ? { email: result.partner.email, created: result.partner.created }
+        : null,
+    });
   })
 );
 
@@ -676,8 +740,43 @@ router.get(
   })
 );
 
-/** עדכון הרשאות של חבר קיים (תפקיד ו/או מסכים). בעלים בלבד — נאכף ב-RLS. */
-router.patch(
+/**
+ *  צירוף בן/בת זוג לחתונה קיימת. בעל החתונה בלבד.
+ *
+ *  להבדיל מהזמנה רגילה, כאן לא נוצר קישור שצריך למסור: החשבון נפתח מיד עם
+ *  אותה סיסמה, כדי שבני הזוג יוכלו לעבוד שניהם בלי שום שלב ביניים. המחיר
+ *  הוא שטעות הקלדה בכתובת פותחת חשבון על שם אדם זר, ולכן נשלח לשם מייל
+ *  יידוע — זו רשת הביטחון היחידה, ולכן היא חובה ולא רשות.
+ */
+router.post(
+  "/weddings/:id/partner",
+  requireAuth,
+  rateLimitPartner,
+  route(async (req, res) => {
+    const wid = weddingId(req, res);
+    if (!wid) return;
+
+    const email = normalizeEmail(req.body?.email);
+    if (!email) return fail(res, 400, "invalid_email");
+
+    const result = await addPartnerToWedding(wid, req.user.userId, email);
+    if (result.error) {
+      const status = { not_found: 404, not_allowed: 403, cannot_invite_self: 400 };
+      return fail(res, status[result.error] ?? 400, result.error);
+    }
+
+    notifyPartner(result.partner, req.user.email);
+
+    res.status(201).json({
+      userId: result.partner.userId,
+      email: result.partner.email,
+      created: result.partner.created,
+      alreadyMember: result.partner.alreadyMember,
+    });
+  })
+);
+
+/** עדכון הרשאות של חבר קיים (תפקיד ו/או מסכים). בעלים בלבד — נאכף ב-RLS. */router.patch(
   "/weddings/:id/members/:userId",
   requireAuth,
   route(async (req, res) => {

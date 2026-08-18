@@ -7,7 +7,7 @@
 --  לא יקבל אף שורה מ-vendors או מ-budget_items גם אם הלקוח יבקש אותן ישירות.
 --
 --  מיפוי היקף → טבלאות:
---    'guests'   → guests, seating_tables       (מסך "מוזמנים והושבה")
+--    'guests'   → guests, seating_tables       (מסכי "מוזמנים" ו"סידור הושבה")
 --    'vendors'  → vendors, vendor_files        (מסכי "ספקים" ו"פורטל ספקים")
 --    'finance'  → budget_items                 (מסך "ניהול תקציב")
 --    'all'      → הכול, כולל הדאשבורד הראשי

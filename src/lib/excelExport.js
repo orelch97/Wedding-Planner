@@ -75,6 +75,7 @@ export function buildSheets({
       { header: "כנראה יבוא", key: "probablyComing", width: 12 },
       { header: "לשקול", key: "considering", width: 10 },
       { header: "גלאט", key: "glatt", width: 8 },
+      { header: "שותים", key: "drinkers", width: 10 },
       { header: "מתנה", key: "gift", width: 12, numFmt: "#,##0" },
       { header: "שולחן", key: "table", width: 18 },
       { header: "אזכור", key: "mention", width: 30 },
@@ -96,6 +97,8 @@ export function buildSheets({
         probablyComing: yesNo(g.probablyComing),
         considering: yesNo(g.considering),
         glatt: yesNo(g.glatt),
+        //  מספר ולא כן/לא: רשומה אחת יכולה להיות משפחה שבה חלק שותים.
+        drinkers: Math.min(seats, num(g.drinkers)),
         gift: num(g.gift),
         table: tableOfGuest.get(g.id)?.name || UNASSIGNED,
         mention: text(g.mention),
@@ -220,6 +223,7 @@ export function buildSheets({
   /* ── גיליון 4: ניהול תקציב ────────────────────────────────────────── */
   const expectedTotal = budget.reduce((s, b) => s + num(b.expected), 0);
   const actualTotal = budget.reduce((s, b) => s + num(b.actual), 0);
+  const paidTotal = budget.reduce((s, b) => s + num(b.paid), 0);
   const income = guests.reduce((s, g) => s + num(g.gift), 0);
 
   const budgetSheet = {
@@ -227,8 +231,10 @@ export function buildSheets({
     columns: [
       { header: "מס׳", key: "id", width: 8 },
       { header: "סעיף", key: "category", width: 32 },
-      { header: "צפוי", key: "expected", width: 14, numFmt: "#,##0" },
-      { header: "בפועל", key: "actual", width: 14, numFmt: "#,##0" },
+      { header: "הוצאה צפויה", key: "expected", width: 14, numFmt: "#,##0" },
+      { header: "הוצאה בפועל", key: "actual", width: 14, numFmt: "#,##0" },
+      { header: "סה״כ שולם", key: "paid", width: 14, numFmt: "#,##0" },
+      { header: "נותר לשלם", key: "remaining", width: 14, numFmt: "#,##0" },
       { header: "פער", key: "diff", width: 14, numFmt: "#,##0" },
     ],
     rows: budget.map((b) => ({
@@ -236,13 +242,18 @@ export function buildSheets({
       category: text(b.category),
       expected: num(b.expected),
       actual: num(b.actual),
+      paid: num(b.paid),
+      //  אותו חישוב כמו במסך: תשלום יתר אינו "נותר לשלם" שלילי.
+      remaining: Math.max(0, num(b.actual) - num(b.paid)),
       //  אותו חישוב כמו במסך: חיובי = חריגה מהצפוי.
       diff: num(b.actual) - num(b.expected),
     })),
     //  שורות סיכום מתחת לטבלה, עם שורה ריקה מפרידה.
     summary: [
-      { label: "סה״כ תקציב מתוכנן", value: expectedTotal },
-      { label: "סה״כ הוצאה בפועל", value: actualTotal },
+      { label: "סכום הסעיפים הצפוי", value: expectedTotal },
+      { label: "סה״כ נדרש לשלם", value: actualTotal },
+      { label: "סה״כ שולם", value: paidTotal },
+      { label: "נותר לשלם", value: Math.max(0, actualTotal - paidTotal) },
       { label: "הכנסות (מתנות)", value: income },
       { label: "מאזן סופי", value: income - actualTotal },
       { label: "יעד התקציב הכולל", value: num(budgetGoal) },

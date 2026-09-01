@@ -112,6 +112,54 @@ select,
   touch-action: none;
 }
 
+/*  מערכת הכפתורים.
+    ------------------------------------------------------------------------
+    @layer components ולא כללים חשופים: כלל לא-משוכב גובר על *כל* מחלקת
+    Tailwind (ראו ההערה על .touch-none למעלה), ואז `className="btn-primary
+    bg-rose-500"` לא היה עוקף את הצבע. בתוך השכבה, utility תמיד מנצח —
+    וזה מה שמאפשר חריגים נקודתיים בלי !important.
+
+    min-height 2.75rem = 44px, מינימום יעד המגע המומלץ. הכפתורים במערכת
+    נלחצים בעיקר מהטלפון, ביד אחת, לעיתים בעמידה באולם.  */
+@layer components {
+  /*  הבסיס חוזר בכל וריאנט ולא נגזר מ-.btn: ב-Tailwind 4 אי-אפשר
+      @apply על מחלקה מותאמת שמוגדרת באותה שכבה.  */
+  .btn-primary {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5
+           text-sm font-semibold transition focus-visible:outline-none
+           focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2
+           disabled:cursor-not-allowed disabled:opacity-60
+           bg-gradient-to-l from-gold-500 to-gold-400 text-white
+           shadow-lg shadow-gold-500/30 hover:brightness-105 active:brightness-95;
+  }
+
+  .btn-secondary {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5
+           text-sm font-semibold transition focus-visible:outline-none
+           focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2
+           disabled:cursor-not-allowed disabled:opacity-60
+           bg-white text-slate-700 ring-1 ring-slate-200
+           hover:bg-slate-50 hover:ring-slate-300 active:bg-slate-100;
+  }
+
+  .btn-ghost {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5
+           text-sm font-semibold transition focus-visible:outline-none
+           focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2
+           disabled:cursor-not-allowed disabled:opacity-60
+           text-slate-500 hover:bg-slate-100 hover:text-slate-700 active:bg-slate-200;
+  }
+
+  .btn-danger {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5
+           text-sm font-semibold transition focus-visible:outline-none
+           focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:ring-offset-2
+           disabled:cursor-not-allowed disabled:opacity-60
+           bg-rose-500 text-white shadow-lg shadow-rose-500/25
+           hover:bg-rose-600 active:bg-rose-700;
+  }
+}
+
 @media (max-width: 640px) {
   /* iOS auto-zooms when a focused field is under 16px – keep inputs at 16px
      on phones while the visual scale stays compact. */

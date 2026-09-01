@@ -17,6 +17,13 @@ dist-ssr
 .env.*
 !.env.example
 
+# מפתח ה-service account של Firebase — סוד. גישה מלאה לפרויקט, עוקף כל כלל אבטחה.
+firebase-service-account.json
+*-service-account.json
+
+# ייצוא המסד. מכיל שמות וטלפונים של מאות מוזמנים אמיתיים — לא נכנס ל-git לעולם.
+migration/
+
 # PostgreSQL זמני של npm run test:db
 .pgdata
 

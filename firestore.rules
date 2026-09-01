@@ -1,0 +1,172 @@
+rules_version = '2';
+
+/* =============================================================================
+ *  firestore.rules — שכבת ההרשאות
+ * -----------------------------------------------------------------------------
+ *  זה התחליף ל-55 מדיניות ה-RLS שהיו ב-CockroachDB. באפליקציה שכותבת
+ *  ל-Firestore ישירות מהדפדפן, הקובץ הזה הוא **הגבול היחיד**. כל מה שהוא
+ *  מתיר — כל אחד עם חשבון יכול לעשות, גם בלי לעבור דרך ה-UI שלנו.
+ *
+ *  מודל ההרשאות, זהה למה שהיה במסד:
+ *    • חבר   — קיים מסמך members/{uid} תחת החתונה
+ *    • תפקיד — owner / editor / viewer
+ *    • היקף  — scopes: ['all'] או תת-קבוצה של guests|vendors|finance|checklist
+ *    • בעלים — weddings/{id}.ownerId == uid  (עריכת הגדרות, הזמנות, חברים)
+ *
+ *  מיפוי אוסף→היקף (חייב להישאר זהה ל-SCOPE_OF_COLLECTION ב-src/lib/firebase.js):
+ *    guests, tables      → 'guests'
+ *    vendors, files      → 'vendors'
+ *    budget              → 'finance'
+ *    checklist           → 'checklist'
+ *
+ *  ⚠ כל get() כאן הוא קריאה בתשלום. לכן הבדיקות בנויות סביב מסמך חברות
+ *    אחד לכל חתונה, ולא סביב שדות מפוזרים.
+ * ========================================================================== */
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /envs/{env} {
+
+      function uid() {
+        return request.auth != null ? request.auth.uid : null;
+      }
+
+      function memberPath(weddingId) {
+        return /databases/$(database)/documents/envs/$(env)/weddings/$(weddingId)/members/$(uid());
+      }
+
+      function isMember(weddingId) {
+        return uid() != null && exists(memberPath(weddingId));
+      }
+
+      function member(weddingId) {
+        return get(memberPath(weddingId)).data;
+      }
+
+      function isOwner(weddingId) {
+        return isMember(weddingId) && member(weddingId).role == 'owner';
+      }
+
+      //  viewer רשאי לקרוא בלבד. owner ו-editor רשאים לכתוב.
+      function canWriteRole(weddingId) {
+        return isMember(weddingId) && member(weddingId).role in ['owner', 'editor'];
+      }
+
+      function hasScope(weddingId, scope) {
+        return isMember(weddingId) &&
+               ('all' in member(weddingId).scopes || scope in member(weddingId).scopes);
+      }
+
+      /* ── שורש הסביבה ─────────────────────────────────────────────────── */
+      //  מסמך המטא של הסביבה נכתב רק על ידי סקריפט ההעברה (Admin SDK,
+      //  שעוקף את הכללים האלה לחלוטין).
+      allow read: if uid() != null;
+      allow write: if false;
+
+      /* ── משתמשים ─────────────────────────────────────────────────────── */
+      //  כל אחד רואה רק את עצמו. רשימת המשתמשים אינה ניתנת לסריקה, אחרת
+      //  כל בעל חשבון היה יכול לשלוף את כל כתובות המייל במערכת.
+      match /users/{userId} {
+        allow read: if uid() == userId;
+        allow create, update: if uid() == userId;
+        allow delete: if false;
+      }
+
+      /* ── חתונות ──────────────────────────────────────────────────────── */
+      match /weddings/{weddingId} {
+        allow read: if isMember(weddingId);
+
+        //  שם, תאריך, שמות בני הזוג ויעד התקציב — בעלים בלבד, בדיוק כמו
+        //  מדיניות weddings_update הישנה שנשענה על owner_id.
+        allow update: if isOwner(weddingId)
+                      && request.resource.data.ownerId == resource.data.ownerId;
+
+        //  הרשמה: משתמש פותח לעצמו חתונה, ורק כאשר הוא הבעלים שלה.
+        //  בלי זה אי-אפשר להירשם בכלל בלי שרת.
+        allow create: if uid() != null && request.resource.data.ownerId == uid();
+        allow delete: if false;
+
+        /* ── חברים ──────────────────────────────────────────────── */
+        match /members/{memberId} {
+          //  כל חבר רואה את רשימת החברים של החתונה שלו (נדרש למסך השיתוף).
+          allow read: if isMember(weddingId);
+
+          //  ביצת הבעלות: כדי להיות בעלים צריך מסמך חברות, וכדי ליצור מסמך
+          //  חברות צריך להיות בעלים. לכן יצירת שורת הבעלים של עצמי נשענת
+          //  על weddings/{id}.ownerId ולא על החברות.
+          allow create: if uid() == memberId
+                        && request.resource.data.role == 'owner'
+                        && get(/databases/$(database)/documents/envs/$(env)/weddings/$(weddingId))
+                             .data.ownerId == uid();
+
+          //  שינוי הרשאות — הבעלים בלבד, ואסור להעניק 'owner' לאף אחד —
+          //  שורת בעלים שנייה היתה עוקפת את בדיקת isOwner.
+          allow update: if isOwner(weddingId)
+                        && request.resource.data.role in ['editor', 'viewer'];
+
+          //  הבעלים מסיר כל חבר; כל חבר מסיר את עצמו (עזיבה). שורת הבעלים
+          //  מוגנת, כדי שלא יינעל מחוץ לחתונה שלו.
+          allow delete: if (isOwner(weddingId) || uid() == memberId)
+                        && resource.data.role != 'owner';
+        }
+
+        /* ── הגדרות החתונה ─────────────────────────────────────────────── */
+        //  ההגדרות מרכזות מפתחות מכמה היקפים (יעד תקציב, קטגוריות מוזמנים).
+        //  קריאה לכל חבר; כתיבה למי שרשאי לערוך לפחות היקף אחד מהם.
+        match /settings/{docId} {
+          allow read: if isMember(weddingId);
+          allow write: if canWriteRole(weddingId)
+                       && (hasScope(weddingId, 'finance') || hasScope(weddingId, 'guests'));
+        }
+
+        /* ── נתוני המסכים ──────────────────────────────────────────────── */
+        match /guests/{docId} {
+          allow read:  if hasScope(weddingId, 'guests');
+          allow write: if hasScope(weddingId, 'guests') && canWriteRole(weddingId);
+        }
+
+        match /tables/{docId} {
+          allow read:  if hasScope(weddingId, 'guests');
+          allow write: if hasScope(weddingId, 'guests') && canWriteRole(weddingId);
+        }
+
+        match /vendors/{docId} {
+          allow read:  if hasScope(weddingId, 'vendors');
+          allow write: if hasScope(weddingId, 'vendors') && canWriteRole(weddingId);
+        }
+
+        //  מטא-דאטה של מסמכים מצורפים. הקובץ עצמו יושב ב-Storage ומוגן
+        //  בנפרד ב-storage.rules.
+        match /files/{docId} {
+          allow read:  if hasScope(weddingId, 'vendors');
+          allow write: if hasScope(weddingId, 'vendors') && canWriteRole(weddingId);
+        }
+
+        match /budget/{docId} {
+          allow read:  if hasScope(weddingId, 'finance');
+          allow write: if hasScope(weddingId, 'finance') && canWriteRole(weddingId);
+        }
+
+        match /checklist/{docId} {
+          allow read:  if hasScope(weddingId, 'checklist');
+          allow write: if hasScope(weddingId, 'checklist') && canWriteRole(weddingId);
+        }
+      }
+
+      /* ── הזמנות ──────────────────────────────────────────────────────── */
+      //  ההזמנה מכילה טוקן, ולכן היא לא נקראת מהדפדפן כלל: המימוש עובר
+      //  דרך Cloud Function עם הרשאות אדמין. הבעלים רואה את ההזמנות שהנפיק
+      //  כדי לבטל אותן.
+      match /invites/{inviteId} {
+        allow read: if isOwner(resource.data.weddingId);
+        allow write: if false;
+      }
+    }
+
+    //  כל מה שלא הוזכר במפורש — חסום.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

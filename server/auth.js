@@ -203,34 +203,38 @@ export async function purgeExpiredSessions() {
 /**
  *  מצרף בן/בת זוג לחתונה, בתוך טרנזקציה קיימת.
  *
- *  אם המייל עדיין לא רשום — נוצר עבורו חשבון אמיתי עם **אותו** hash הסיסמה
- *  של בעל החתונה, כך שאפשר להיכנס עם שתי הכתובות ואותה סיסמה. זו העתקה של
- *  ה-hash ולא גזירה מחדש, כי בנתיב ההגדרות אין לנו את הסיסמה בטקסט גלוי.
- *  מרגע היצירה אלה שתי שורות נפרדות ב-app.users: שינוי סיסמה באחת (דרך
- *  "שכחתי סיסמה") לא משפיע על השנייה.
+ *  לכל אחד מבני הזוג חשבון משלו עם **סיסמה שלו**. החשבון נוצר עם סיסמה
+ *  אקראית שאיש אינו יודע — כולל בעל החתונה — ונשלח קישור לקביעת סיסמה.
+ *  כך אף אחד לא מחזיק את הסיסמה של השני, וטעות הקלדה בכתובת לא נותנת
+ *  לאדם זר חשבון עובד — רק קישור שפג תוקף.
  *
  *  התפקיד הוא 'editor' עם scopes=['all']: גישה מלאה לכל הנתונים, בלי עריכת
  *  הגדרות החתונה ובלי הזמנת אנשים נוספים — אלה שמורים לבעלים ברמת ה-RLS
  *  (weddings.owner_id). בנוסף, שורת role='owner' חסומה למחיקה במדיניות
  *  wedding_members_delete, ולכן צירוף בטעות היה בלתי הפיך.
  */
-async function linkPartner(q, { weddingId, ownerId, passwordHash, email }) {
+async function linkPartner(q, { weddingId, ownerId, email }) {
   const lower = email.toLowerCase();
 
   const found = await q(`SELECT id FROM app.users WHERE email_lower = $1`, [lower]);
   let userId = found.rows[0]?.id ?? null;
   const created = !userId;
+  let setupToken = null;
 
   if (!userId) {
+    //  סיסמה אקראית שאיש אינו מחזיק: העמודה היא NOT NULL, והכניסה
+    //  היחידה האפשרית היא דרך קישור קביעת הסיסמה.
+    const unusable = await hashPassword(randomBytes(32).toString("base64url"));
     const { rows } = await q(
       `INSERT INTO app.users (email, email_lower, password_hash)
        VALUES ($1, $2, $3) RETURNING id`,
-      [lower, lower, passwordHash]
+      [lower, lower, unusable]
     );
     userId = rows[0].id;
+    setupToken = await issueSetupToken(q, userId);
   }
 
-  //  כבר חבר (למשל דרך הזמנה קודמת)? לא דורסים לו את ההרשאות הקיימות.
+  //  כבר חבר (למשל דרך הזמנה קודמת)? לא דורסים לו את ההרשאות.
   const { rowCount } = await q(
     `INSERT INTO public.wedding_members (wedding_id, user_id, owner_id, role, scopes)
      VALUES ($1, $2, $3, 'editor', ARRAY['all'])
@@ -238,7 +242,7 @@ async function linkPartner(q, { weddingId, ownerId, passwordHash, email }) {
     [weddingId, userId, ownerId]
   );
 
-  return { userId, email: lower, created, alreadyMember: rowCount === 0 };
+  return { userId, email: lower, created, alreadyMember: rowCount === 0, setupToken };
 }
 
 export async function registerUser(email, password, weddingDate = null, options = {}) {
@@ -278,7 +282,6 @@ export async function registerUser(email, password, weddingDate = null, options 
         partner = await linkPartner(q, {
           weddingId,
           ownerId: user.id,
-          passwordHash,
           email: partnerEmail,
         });
       }
@@ -300,22 +303,38 @@ export async function addPartnerToWedding(weddingId, ownerId, partnerEmail) {
     if (!wedding.rows.length) return { error: "not_found" };
     if (wedding.rows[0].owner_id !== ownerId) return { error: "not_allowed" };
 
-    const owner = await q(
-      `SELECT email_lower, password_hash FROM app.users WHERE id = $1`,
-      [ownerId]
-    );
+    const owner = await q(`SELECT email_lower FROM app.users WHERE id = $1`, [ownerId]);
     if (!owner.rows.length) return { error: "not_allowed" };
     if (owner.rows[0].email_lower === partnerEmail.toLowerCase()) {
       return { error: "cannot_invite_self" };
     }
 
-    const partner = await linkPartner(q, {
-      weddingId,
-      ownerId,
-      passwordHash: owner.rows[0].password_hash,
-      email: partnerEmail,
-    });
+    const partner = await linkPartner(q, { weddingId, ownerId, email: partnerEmail });
     return { partner };
+  });
+}
+
+/**
+ * מנפיק לבן/בת זוג קישור חדש לקביעת סיסמה, למקרה שהקודם פג או אבד.
+ * בעל החתונה בלבד, ורק עבור מי שאכן חבר בחתונה שלו.
+ */
+export async function resendPartnerSetup(weddingId, ownerId, partnerUserId) {
+  return withAdmin(async (q) => {
+    const wedding = await q(`SELECT owner_id FROM public.weddings WHERE id = $1`, [weddingId]);
+    if (!wedding.rows.length) return { error: "not_found" };
+    if (wedding.rows[0].owner_id !== ownerId) return { error: "not_allowed" };
+
+    const member = await q(
+      `SELECT 1 FROM public.wedding_members WHERE wedding_id = $1 AND user_id = $2`,
+      [weddingId, partnerUserId]
+    );
+    if (!member.rows.length) return { error: "not_a_member" };
+
+    const user = await q(`SELECT email FROM app.users WHERE id = $1`, [partnerUserId]);
+    if (!user.rows.length) return { error: "not_found" };
+
+    const token = await issueSetupToken(q, partnerUserId);
+    return { token, email: user.rows[0].email };
   });
 }
 
@@ -338,6 +357,33 @@ export async function authenticateUser(email, password) {
 // ── איפוס סיסמה ─────────────────────────────────────────────────────────────
 
 const RESET_TTL_MS = 60 * 60_000; // שעה. מספיק כדי לפתוח מייל, קצר מספיק כדי להזיק פחות אם דלף
+
+/*  קישור קביעת סיסמה לבן/בת זוג חי שבוע ולא שעה: להבדיל מאיפוס סיסמה,
+    שהמשתמש יזם בעצמו ומחכה לו, כאן ההזמנה מגיעה בלי שביקשו אותה ועלולה
+    לחכות במייל כמה ימים. עדיין מוגבל בזמן, ועדיין חד-פעמי.  */
+const SETUP_TTL_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * מנפיק טוקן קביעת סיסמה למשתמש ידוע. משתמש באותה טבלה ובאותו מימוש של
+ * איפוס סיסמה, ולכן consumePasswordReset מטפל בשניהם ואין מסלול שני לתחזק.
+ */
+async function issueSetupToken(q, userId, ttlMs = SETUP_TTL_MS) {
+  const token = randomBytes(32).toString("base64url");
+
+  //  טוקן חדש מבטל קודמים, אחרת כל הנפקה מותירה עוד מפתח פעיל לחשבון.
+  await q(
+    `UPDATE app.password_resets SET used_at = now()
+      WHERE user_id = $1 AND used_at IS NULL`,
+    [userId]
+  );
+  await q(
+    `INSERT INTO app.password_resets (token_hash, user_id, expires_at)
+     VALUES ($1, $2, $3)`,
+    [hashToken(token), userId, new Date(Date.now() + ttlMs)]
+  );
+
+  return token;
+}
 
 /**
  * יוצר טוקן איפוס למי שהכתובת שלו רשומה. מחזיר `null` אם אין חשבון כזה —

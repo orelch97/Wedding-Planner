@@ -16,6 +16,7 @@ import {
   registerUser,
   authenticateUser,
   addPartnerToWedding,
+  resendPartnerSetup,
   createSession,
   destroySession,
   validateCredentials,
@@ -405,8 +406,15 @@ setInterval(() => {
  *   (או SMTP שלא הוגדר כלל) לא אמור לעכב את התשובה ובוודאי שלא להפיל אותה.  */
 function notifyPartner(partner, ownerEmail) {
   if (!partner || partner.alreadyMember) return;
+  const setupLink = partner.setupToken
+    ? `${APP_URL}/?reset=${encodeURIComponent(partner.setupToken)}`
+    : null;
   Promise.resolve(
-    sendPartnerWelcomeEmail(partner.email, { ownerEmail, created: partner.created })
+    sendPartnerWelcomeEmail(partner.email, {
+      ownerEmail,
+      created: partner.created,
+      setupLink,
+    })
   ).catch(() => {});
 }
 
@@ -773,6 +781,34 @@ router.post(
       created: result.partner.created,
       alreadyMember: result.partner.alreadyMember,
     });
+  })
+);
+
+/**  הנפקה מחדש של קישור קביעת הסיסמה, למקרה שהקודם פג או המייל לא הגיע.  */
+router.post(
+  "/weddings/:id/partner/:userId/resend",
+  requireAuth,
+  rateLimitPartner,
+  route(async (req, res) => {
+    const wid = weddingId(req, res);
+    if (!wid) return;
+    if (!UUID_RE.test(req.params.userId)) return fail(res, 400, "invalid_user_id");
+
+    const result = await resendPartnerSetup(wid, req.user.userId, req.params.userId);
+    if (result.error) {
+      const status = { not_found: 404, not_allowed: 403, not_a_member: 404 };
+      return fail(res, status[result.error] ?? 400, result.error);
+    }
+
+    Promise.resolve(
+      sendPartnerWelcomeEmail(result.email, {
+        ownerEmail: req.user.email,
+        created: true,
+        setupLink: `${APP_URL}/?reset=${encodeURIComponent(result.token)}`,
+      })
+    ).catch(() => {});
+
+    res.json({ ok: true, email: result.email });
   })
 );
 

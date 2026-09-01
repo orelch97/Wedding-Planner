@@ -1,0 +1,43 @@
+rules_version = '2';
+
+/* =============================================================================
+ *  storage.rules — הרשאות על הקבצים עצמם
+ * -----------------------------------------------------------------------------
+ *  ב-Firestore נשמרת רק המטא-דאטה של המסמך; התוכן יושב כאן. בלי הכללים
+ *  האלה כל מי שמחזיק בקישור יכול להוריד חוזים חתומים של ספקים.
+ *
+ *  נתיב הקובץ:  {env}/weddings/{weddingId}/vendor-files/{fileId}
+ *
+ *  ⚠ ההרשאה נבדקת מול **custom claim** ולא מול Firestore.
+ *    firestore.get() בתוך storage.rules מוחזר כ-403 בפרויקט הזה — נבדק
+ *    אמפירית: אותה העלאה בדיוק עוברת ברגע שהתנאי מוסר. במקום זאת
+ *    functions/index.js שומר על הטוקן claim בשם w_test / w_prod ובו
+ *    רשימת מזהי החתונות שהמשתמש חבר בהן.
+ * ========================================================================== */
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    match /{env}/weddings/{weddingId}/vendor-files/{fileId} {
+
+      function memberOf() {
+        return request.auth != null
+               && request.auth.token['w_' + env] is list
+               && weddingId in request.auth.token['w_' + env];
+      }
+
+      allow read: if memberOf();
+
+      //  התקרה זהה ל-MAX_FILE_BYTES בקוד. בלי מגבלה כאן חשבון אחד יכול
+      //  למלא את מכסת האחסון של כל הפרויקט.
+      allow write: if memberOf() && request.resource.size < 5 * 1024 * 1024;
+
+      allow delete: if memberOf();
+    }
+
+    //  כל נתיב אחר — חסום.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

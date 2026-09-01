@@ -109,30 +109,34 @@ function escapeHtml(value) {
  * מיידע בן/בת זוג שצורפו לחתונה. לעולם לא זורק — כישלון דואר לא אמור
  * לבטל צירוף שכבר נשמר במסד.
  *
- * המייל הזה הוא גם רשת הביטחון היחידה מפני טעות הקלדה בכתובת: מי שקיבל
- * אותו בטעות רואה מיד שנפתח על שמו חשבון, ויודע למי לפנות.
- *
- * @param {boolean} created  האם נוצר חשבון חדש (לעומת צירוף חשבון קיים)
+ * @param {string|null} setupLink  קישור לקביעת סיסמה. קיים רק כשנפתח חשבון
+ *                                 חדש; מי שכבר היה רשום נכנס עם הסיסמה שלו.
  * @returns {Promise<boolean>} האם המייל נשלח בפועל
  */
-export async function sendPartnerWelcomeEmail(to, { ownerEmail = "", created = true } = {}) {
+export async function sendPartnerWelcomeEmail(
+  to,
+  { ownerEmail = "", created = true, setupLink = null } = {}
+) {
   const subject = created
-    ? "נפתח עבורכם חשבון — תכנון החתונה שלנו"
+    ? "הוזמנתם לנהל חתונה משותפת — תכנון החתונה שלנו"
     : "צורפתם לחתונה — תכנון החתונה שלנו";
 
   const lines = created
     ? [
-        `${ownerEmail} פתח/ה עבורכם חשבון לניהול החתונה המשותפת.`,
-        "אפשר להיכנס עם כתובת המייל הזו ועם אותה הסיסמה שנבחרה בהרשמה.",
-        "לא יודעים את הסיסמה? אפשר לקבוע חדשה דרך \"שכחתי סיסמה\" במסך הכניסה.",
+        `${ownerEmail} צירף/ה אתכם לניהול החתונה המשותפת.`,
+        "כדי להיכנס, קבעו לעצמכם סיסמה בקישור הבא. הכניסה שלכם היא עם כתובת המייל הזו ועם הסיסמה שתבחרו — נפרדת לחלוטין מזו של בן/בת הזוג.",
       ]
     : [
         `${ownerEmail} צירף/ה את החשבון שלכם לחתונה המשותפת.`,
         "אפשר להיכנס כרגיל, עם המייל והסיסמה הקיימים שלכם.",
       ];
 
+  const link = setupLink || APP_URL;
+
   if (!isMailConfigured()) {
-    console.info(`[mail] יידוע צירוף בן/בת זוג עבור ${to}:\n${lines.join("\n")}`);
+    console.info(
+      `[mail] יידוע צירוף בן/בת זוג עבור ${to}:\n${lines.join("\n")}\n${link}`
+    );
     return false;
   }
 
@@ -142,15 +146,21 @@ export async function sendPartnerWelcomeEmail(to, { ownerEmail = "", created = t
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to,
       subject,
-      text: ["שלום,", "", ...lines, "", `כניסה למערכת: ${APP_URL}`,
+      text: [
+        "שלום,",
         "",
-        "אם ההודעה הגיעה אליכם בטעות, אפשר להתעלם ממנה — או לבקש מהשולח/ת להסיר את הכתובת.",
+        ...lines,
+        "",
+        created ? `קביעת סיסמה: ${link}` : `כניסה למערכת: ${link}`,
+        ...(created ? ["הקישור תקף לשבוע וניתן לשימוש פעם אחת."] : []),
+        "",
+        "אם ההודעה הגיעה אליכם בטעות, אפשר להתעלם ממנה — בלי קביעת סיסמה לא ניתן להיכנס לחשבון.",
       ].join("\n"),
       html: `<div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.7;color:#1e293b">
-  <h2 style="margin:0 0 12px">${escapeHtml(subject.split(" — ")[0])}</h2>
+  <h2 style="margin:0 0 12px">${escapeHtml(created ? "הוזמנתם לנהל חתונה משותפת" : "צורפתם לחתונה")}</h2>
   ${lines.map((l) => `<p>${escapeHtml(l)}</p>`).join("\n  ")}
-  <p><a href="${APP_URL}" style="display:inline-block;background:#c9a227;color:#fff;padding:10px 18px;border-radius:10px;text-decoration:none">כניסה למערכת</a></p>
-  <p style="font-size:13px;color:#64748b">אם ההודעה הגיעה אליכם בטעות, אפשר להתעלם ממנה — או לבקש מהשולח/ת להסיר את הכתובת.</p>
+  <p><a href="${escapeHtml(link)}" style="display:inline-block;background:#c9a227;color:#fff;padding:10px 18px;border-radius:10px;text-decoration:none">${escapeHtml(created ? "קביעת סיסמה" : "כניסה למערכת")}</a></p>
+  <p style="font-size:13px;color:#64748b">${created ? "הקישור תקף לשבוע וניתן לשימוש פעם אחת.<br>" : ""}אם ההודעה הגיעה אליכם בטעות, אפשר להתעלם ממנה — בלי קביעת סיסמה לא ניתן להיכנס לחשבון.</p>
 </div>`,
     });
     return true;

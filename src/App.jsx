@@ -80,7 +80,7 @@ import {
   markGuideSeen,
 } from "./data/guide";
 import { Tour, ScreenIntro } from "./components/Guide";
-import { isCloudConfigured } from "./lib/api";
+import { firebaseConfigured as isCloudConfigured } from "./lib/firebase";
 import {
   loadSession,
   onAuthChange,
@@ -90,7 +90,7 @@ import {
   authErrorMessage,
   requestPasswordReset,
   resetPassword,
-} from "./lib/auth";
+} from "./lib/firebaseAuth";
 import {
   cloudFetchAll,
   cloudIsEmpty,
@@ -114,8 +114,9 @@ import {
   uploadVendorFile,
   deleteVendorFile,
   vendorFileUrl,
+  subscribeCollection,
   MAX_FILE_BYTES,
-} from "./lib/cloudStore";
+} from "./lib/firebaseStore";
 import {
   encryptBackup,
   decryptBackup,
@@ -2655,7 +2656,10 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 className={`flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition ${
                   active
                     ? "bg-gradient-to-br from-gold-500 to-gold-600 text-white shadow-md shadow-gold-500/25"
-                    : "text-slate-500 hover:bg-white/70 hover:text-slate-700"
+                    : /*  לטאב לא-פעיל היה רק hover, שאינו קיים במגע: בטלפון
+                          הוא נראה כמו טקסט אפור ולא כמו משהו שאפשר ללחוץ.
+                          רקע וטבעת קבועים נותנים לו נראות של כפתור.  */
+                      "bg-white/60 text-slate-600 ring-1 ring-slate-200 hover:bg-white hover:text-slate-800 hover:ring-slate-300 active:bg-slate-100"
                 }`}
               >
                 <t.icon size={17} className="shrink-0" />
@@ -5304,6 +5308,33 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
   const inputRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(null);
+  /*  ב-Firebase Storage כתובת ההורדה נחתמת מול הטוקן ולכן נשלפת
+      ב-await. קודם זה היה נתיב קבוע שהעוגייה אימתה, ואפשר היה לשים
+      אותו ישירות ב-src/href.  */
+  const [urls, setUrls] = useState({});
+
+  const fileIds = files.map((f) => f.id).join(",");
+  useEffect(() => {
+    let alive = true;
+    if (!weddingId || !files.length) return undefined;
+
+    (async () => {
+      const resolved = {};
+      for (const f of files) {
+        try {
+          resolved[f.id] = await vendorFileUrl(weddingId, f.id);
+        } catch {
+          //  קובץ שנמחק מ-Storage או חסר הרשאה — מוצגת אייקונה במקום תמונה.
+        }
+      }
+      if (alive) setUrls(resolved);
+    })();
+
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weddingId, fileIds]);
 
   if (!weddingId) {
     return (
@@ -5357,9 +5388,7 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
   async function download(file) {
     setDownloading(file.id);
     try {
-      const res = await fetch(vendorFileUrl(weddingId, file.id, { download: true }), {
-        credentials: "same-origin",
-      });
+      const res = await fetch(await vendorFileUrl(weddingId, file.id));
       if (!res.ok) throw new Error(`status ${res.status}`);
 
       const url = URL.createObjectURL(await res.blob());
@@ -5456,9 +5485,9 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
                 className="flex min-w-0 items-center gap-1 rounded-2xl bg-white/70 p-2.5 ring-1 ring-slate-200 transition hover:ring-gold-300 sm:gap-2"
               >
                 <span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl bg-slate-100 text-slate-400 ring-1 ring-slate-200">
-                  {isImage ? (
+                  {isImage && urls[f.id] ? (
                     <img
-                      src={vendorFileUrl(weddingId, f.id)}
+                      src={urls[f.id]}
                       alt=""
                       loading="lazy"
                       className="h-full w-full object-cover"
@@ -5482,9 +5511,9 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
                     <bdi>{new Date(f.createdAt).toLocaleDateString("he-IL")}</bdi>
                   </span>
                 </span>
-                {isImage && (
+                {isImage && urls[f.id] && (
                   <a
-                    href={vendorFileUrl(weddingId, f.id)}
+                    href={urls[f.id]}
                     target="_blank"
                     rel="noopener noreferrer"
                     title="פתיחה בכרטיסייה חדשה"
@@ -6895,16 +6924,20 @@ function captureInviteToken() {
 // יידע שיש הזמנה ממתינה ושהטוקן לא יישאר בשורת הכתובת (וב-history/logs).
 captureInviteToken();
 
-/*  טוקן איפוס הסיסמה מגיע ב-`?reset=`. שולפים אותו לזיכרון ומוחקים
-    מיד משורת הכתובת, בדיוק כמו טוקן הזמנה: כתובות נשמרות בהיסטוריה,
-    נשלחות ב-Referer ומופיעות בלוגים. בניגוד להזמנה לא משתמשים כאן
-    ב-sessionStorage — טוקן שמאפשר לקבוע סיסמה לא צריך לשרוד רענון דף.  */
+/*  טוקן איפוס הסיסמה מגיע ב-`?oobCode=` (Firebase) או ב-`?reset=`
+    (קישורים ישנים שעוד בתוקף). שולפים אותו לזיכרון ומוחקים מיד
+    משורת הכתובת, בדיוק כמו טוקן הזמנה: כתובות נשמרות בהיסטוריה,
+    נשלחות ב-Referer ומופיעות בלוגים.  */
 function captureResetToken() {
   try {
     const params = new URLSearchParams(window.location.search);
-    const token = params.get("reset");
+    const token = params.get("oobCode") || params.get("reset");
     if (!token) return "";
+    params.delete("oobCode");
     params.delete("reset");
+    params.delete("mode");
+    params.delete("apiKey");
+    params.delete("lang");
     const qs = params.toString();
     window.history.replaceState(
       {},
@@ -7261,9 +7294,9 @@ function LoginScreen() {
             />
           </div>
           <span className="block text-[11px] text-slate-400">
-            אפשר להיכנס גם עם המייל הזה ועם אותה הסיסמה. בכל שלב אפשר
-            לשנות אותה דרך "שכחתי סיסמה". אפשר לדלג ולהוסיף בהמשך
-            במסך "הגדרות החתונה".
+            יישלח לכתובת קישור לקביעת סיסמה משלהם. לכל אחד מכם תהיה כניסה
+            נפרדת — מייל וסיסמה שלו — לאותה חתונה. אפשר לדלג ולהוסיף
+            בהמשך במסך "הגדרות החתונה".
           </span>
         </label>
       )}
@@ -8119,9 +8152,26 @@ function WeddingApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vendors, syncRetry]);
 
+  /*  סנכרון בזמן אמת לספקים. ספק שמעדכן משימה מפורטל הנייד אמור להופיע
+      בדאשבורד מיד, בלי רענון.
+
+      ההשוואה לפני setState היא מה שמונע לולאה: הכתיבה המושהית מפעילה
+      snapshot, שמחזיר בדיוק את מה שכבר יושב ב-state. בלי הבדיקה הזו
+      כל שמירה הייתה מפעילה שמירה נוספת ללא סוף.  */
   useEffect(() => {
-    if (!cloudEnabled || !canEdit || !mayFinance || !cloudReadyRef.current) return;
-    const timer = setTimeout(() => {
+    if (!cloudEnabled || !mayVendors || !weddingId) return undefined;
+
+    const stop = subscribeCollection(weddingId, "vendors", (remote) => {
+      setVendors((local) =>
+        JSON.stringify(local) === JSON.stringify(remote) ? local : remote
+      );
+    });
+    return stop;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cloudEnabled, mayVendors, weddingId]);
+
+  useEffect(() => {
+    if (!cloudEnabled || !canEdit || !mayFinance || !cloudReadyRef.current) return;    const timer = setTimeout(() => {
       enqueueSync(async () => {
         try {
           setCloudStatus("saving");
@@ -9224,7 +9274,7 @@ function WeddingSettingsModal({
         res?.alreadyMember
           ? `${res.email} כבר משותף/ת בחתונה הזו — לא בוצע שינוי.`
           : res?.created
-            ? `נפתח חשבון עבור ${res.email}. הכניסה היא עם אותה הסיסמה שלכם.`
+            ? `נשלח ל-${res.email} קישור לקביעת סיסמה. אחרי שיקבעו אותה הכניסה תהיה עם המייל והסיסמה שלהם.`
             : `${res.email} צורף/ה לחתונה. הכניסה היא עם הסיסמה הקיימת שלו/ה.`
       );
     } catch (err) {
@@ -9415,8 +9465,9 @@ function WeddingSettingsModal({
                 </button>
               </div>
               <p className="mt-1.5 text-[11px] text-slate-400">
-                נפתח חשבון עם גישה מלאה לכל המסכים. אפשר להיכנס גם עם המייל
-                הזה ועם אותה הסיסמה. בכל שלב אפשר לשנות אותה דרך "שכחתי סיסמה".
+                יישלח לכתובת קישור לקביעת סיסמה משלהם, ולאחר מכן תהיה להם כניסה
+                נפרדת לאותה חתונה, עם גישה מלאה לכל המסכים. הסיסמה שלהם
+                נפרדת משלכם — אתם לא רואים אותה והם לא רואים את שלכם.
               </p>
               {partnerMsg && (
                 <p className="mt-2 rounded-lg bg-sage-50 px-2.5 py-1.5 text-[11px] text-sage-700 ring-1 ring-sage-200">

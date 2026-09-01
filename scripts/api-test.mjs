@@ -576,16 +576,52 @@ check("טוקן שפג תוקפו נדחה", r.data?.error === "invalid_reset_to
 /* ── בן/בת זוג: חשבון שני עם אותה סיסמה ───────────────────────────────────── */
 console.log("\nבן/בת זוג");
 
-//  צירוף כבר בהרשמה: החשבון השני נפתח באותה טרנזקציה, עם אותו hash סיסמה.
+//  צירוף כבר בהרשמה. לכל אחד מבני הזוג חשבון עם סיסמה משלו.
 const groom = { email: `groom-${stamp}@test.local`, password: "CorrectHorse123" };
 const brideEmail = `bride-${stamp}@test.local`;
 const G = makeClient();
 r = await G("/auth/register", { method: "POST", body: { ...groom, partnerEmail: brideEmail } });
 check("הרשמה עם מייל בן/בת זוג", r.status < 300 && r.data?.partner?.created === true, JSON.stringify(r.data));
 
+//  הנקודה המהותית: הסיסמה של בעל החתונה לא פותחת את חשבון השני.
+r = await makeClient()("/auth/login", { method: "POST", body: { email: brideEmail, password: groom.password } });
+check("הסיסמה של המצרף אינה עובדת לחשבון בן/בת הזוג", r.data?.error === "invalid_credentials", JSON.stringify(r.data));
+
+//  הכניסה נפתחת רק אחרי קביעת סיסמה עצמאית דרך הטוקן שנשלח במייל.
+const brideSetup = await withAdmin(async (q) => {
+  const { rows } = await q(
+    `SELECT pr.token_hash FROM app.password_resets pr
+       JOIN app.users u ON u.id = pr.user_id
+      WHERE u.email_lower = $1 AND pr.used_at IS NULL`,
+    [brideEmail]
+  );
+  return rows.length;
+});
+check("נוצר טוקן קביעת סיסמה לבן/בת הזוג", brideSetup === 1, `נמצאו ${brideSetup}`);
+
+//  ממששים את הטוקן כמו שהמשתמש היה עושה מהקישור במייל.
+const bridePassword = "BrideOwnPass456";
+const brideToken = "bride-setup-" + stamp;
+await withAdmin(async (q) => {
+  const { rows } = await q(`SELECT id FROM app.users WHERE email_lower = $1`, [brideEmail]);
+  await q(`UPDATE app.password_resets SET used_at = now() WHERE user_id = $1 AND used_at IS NULL`, [rows[0].id]);
+  await q(
+    `INSERT INTO app.password_resets (token_hash, user_id, expires_at)
+     VALUES ($1, $2, now() + INTERVAL '7 days')`,
+    [hashToken(brideToken), rows[0].id]
+  );
+});
+
+r = await makeClient()("/auth/reset", { method: "POST", body: { token: brideToken, password: bridePassword } });
+check("בן/בת הזוג קובע/ת סיסמה משלהם", r.status === 200 && r.data?.ok === true, JSON.stringify(r.data));
+
 const BR = makeClient();
-r = await BR("/auth/login", { method: "POST", body: { email: brideEmail, password: groom.password } });
-check("בן/בת הזוג נכנס/ת עם אותה סיסמה", r.status === 200 && r.data?.user?.email === brideEmail, JSON.stringify(r.data));
+r = await BR("/auth/login", { method: "POST", body: { email: brideEmail, password: bridePassword } });
+check("כניסה עם מייל וסיסמה עצמאיים", r.status === 200 && r.data?.user?.email === brideEmail, JSON.stringify(r.data));
+
+//  שתי הכניסות נפרדות לחלוטין: סיסמת החתן ממשיכה לעבוד כרגיל.
+r = await makeClient()("/auth/login", { method: "POST", body: { email: groom.email, password: groom.password } });
+check("הסיסמה של בעל החתונה לא השתנתה", r.status === 200, JSON.stringify(r.data));
 
 r = await BR("/weddings");
 const GW = r.data?.[0]?.id;
@@ -625,7 +661,18 @@ r = await G(`/weddings/${GW}/partner`, { method: "POST", body: { email: laterEma
 check("צירוף בן/בת זוג בדיעבד", r.status === 201 && r.data?.created === true, JSON.stringify(r.data));
 
 r = await makeClient()("/auth/login", { method: "POST", body: { email: laterEmail, password: groom.password } });
-check("החשבון שנוצר בדיעבד נכנס עם סיסמת הבעלים", r.status === 200, JSON.stringify(r.data));
+check("החשבון שנוצר בדיעבד אינו נגיש בסיסמת הבעלים", r.data?.error === "invalid_credentials", JSON.stringify(r.data));
+
+//  הנפקה מחדש של קישור הקביעה, למקרה שהמייל לא הגיע.
+const laterId = await withAdmin(async (q) => {
+  const { rows } = await q(`SELECT id FROM app.users WHERE email_lower = $1`, [laterEmail]);
+  return rows[0]?.id;
+});
+r = await G(`/weddings/${GW}/partner/${laterId}/resend`, { method: "POST" });
+check("הנפקה מחדש של קישור קביעת סיסמה", r.status === 200 && r.data?.ok === true, JSON.stringify(r.data));
+
+r = await BR(`/weddings/${GW}/partner/${laterId}/resend`, { method: "POST" });
+check("מי שאינו בעלים לא מנפיק קישור", r.status === 403, `status=${r.status}`);
 
 r = await G(`/weddings/${GW}/partner`, { method: "POST", body: { email: laterEmail } });
 check("צירוף חוזר לא משנה דבר", r.status === 201 && r.data?.alreadyMember === true, JSON.stringify(r.data));

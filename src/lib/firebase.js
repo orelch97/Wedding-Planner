@@ -32,10 +32,25 @@ const config = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-/*  ברירת המחדל היא 'test' ולא 'prod'. הגדרה חסרה בסביבת פיתוח צריכה
-    להוביל לנתוני בדיקה, לא לעריכת חתונות אמיתיות.  */
-export const FIREBASE_ENV =
-  import.meta.env.VITE_FIREBASE_ENV === "prod" ? "prod" : "test";
+/*  איזו סביבה. ברירת המחדל בפיתוח היא 'test': הגדרה חסרה במחשב מקומי
+    צריכה להוביל לנתוני בדיקה, לא לעריכת חתונות אמיתיות.
+
+    ⚠ בבנייה לייצור אין ברירת מחדל בכוונה. שקט כאן פירושו שזוגות אמיתיים
+    היו נוחתים בסביבת הבדיקות בלי ששום דבר ייראה שבור — עד שמישהו היה
+    שואל למה רשימת המוזמנים שלו התרוקנה. עדיף שהאפליקציה תסרב לעלות.
+
+    שימו לב: קובץ .env מקומי גובר על משתנה סביבה של המעטפת, ולכן בנייה
+    מקומית תמיד תשקף את מה שכתוב ב-.env ולא את מה שהוגדר בטרמינל.  */
+const rawEnv = import.meta.env.VITE_FIREBASE_ENV;
+
+if (import.meta.env.PROD && rawEnv !== "prod" && rawEnv !== "test") {
+  throw new Error(
+    "VITE_FIREBASE_ENV חייב להיות 'prod' או 'test' בבנייה לייצור. " +
+      `התקבל: ${JSON.stringify(rawEnv)}. הגדירו אותו בסביבת הפריסה.`
+  );
+}
+
+export const FIREBASE_ENV = rawEnv === "prod" ? "prod" : "test";
 
 export const firebaseConfigured = Boolean(config.apiKey && config.projectId);
 

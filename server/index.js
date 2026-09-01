@@ -47,13 +47,26 @@ app.disable("x-powered-by");
 //  כותרות אבטחה. public/_headers עובד רק אצל מארחים סטטיים (Netlify /
 //  Cloudflare Pages); כשהשרת הזה מגיש את הבילד בעצמו (Render) הן חייבות
 //  לצאת מכאן, אחרת אין CSP ואין HSTS כלל. שמור על התאמה בין שני הקבצים.
+//  הלקוח מדבר ישירות מול Firebase, ולכן חייבים לפרט כאן כל מארח שלו:
+//  identitytoolkit ו-securetoken להתחברות ולרענון הטוקן, firestore לנתונים,
+//  firebasestorage לקבצי ספקים ו-cloudfunctions להזמנות. בלעדיהם הדפדפן חוסם
+//  את הבקשות והאפליקציה עולה ריקה — וזה לא נראה בפיתוח, כי שרת Vite
+//  לא מגיש את הכותרות האלה בכלל.
+const FIREBASE_ORIGINS = [
+  "https://identitytoolkit.googleapis.com",
+  "https://securetoken.googleapis.com",
+  "https://firestore.googleapis.com",
+  "https://firebasestorage.googleapis.com",
+  "https://europe-west1-wedding-planner-c3d62.cloudfunctions.net",
+].join(" ");
+
 const SECURITY_HEADERS = {
   "Content-Security-Policy":
     "default-src 'self'; script-src 'self'; worker-src 'self'; " +
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src 'self' data: https://fonts.gstatic.com; " +
-    "img-src 'self' data: blob:; " +
-    "connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; " +
+    "img-src 'self' data: blob: https://firebasestorage.googleapis.com; " +
+    `connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com ${FIREBASE_ORIGINS}; ` +
     "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",

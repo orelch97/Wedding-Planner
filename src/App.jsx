@@ -6956,6 +6956,7 @@ const INITIAL_RESET_TOKEN = captureResetToken();
     מכאן מסיר את המסך באמצע ההנפשה, וארוך ממנו משאיר שכבה שקופה תקועה מעל
     הדשבורד אחרי שהיא כבר בלתי נראית.  */
 const BOOT_FADE_MS = 500;
+const BOOT_FAILSAFE_MS = 15_000;
 
 /*  מסך הטעינה של האפליקציה. הוא ממשיך ויזואלית את מסך הפתיחה שב-index.html,
     כך שהמעבר מה-HTML הסטטי ל-React אינו נראה כמו קפיצה. אחרי כמה שניות
@@ -7014,9 +7015,13 @@ async function signOutAndWipe() {
 export default function App() {
   const [authReady, setAuthReady] = useState(!isCloudConfigured);
   const [initialDataReady, setInitialDataReady] = useState(!isCloudConfigured);
+  const [initialDataTimedOut, setInitialDataTimedOut] = useState(false);
   const [session, setSession] = useState(null);
   const [resetToken, setResetToken] = useState(INITIAL_RESET_TOKEN);
-  const handleInitialDataReady = useCallback(() => setInitialDataReady(true), []);
+  const handleInitialDataReady = useCallback((timedOut = false) => {
+    setInitialDataTimedOut(timedOut);
+    setInitialDataReady(true);
+  }, []);
 
   useEffect(() => {
     if (!isCloudConfigured) return;
@@ -7046,6 +7051,12 @@ export default function App() {
     return () => clearTimeout(t);
   }, [bootDone, bootMounted]);
 
+  useEffect(() => {
+    if (bootDone || !isCloudConfigured || resetToken) return;
+    const timer = setTimeout(() => handleInitialDataReady(true), BOOT_FAILSAFE_MS);
+    return () => clearTimeout(timer);
+  }, [bootDone, handleInitialDataReady, resetToken]);
+
   let content;
 
   //  מסך איפוס הסיסמה קודם לכל השאר, וגם לפני בדיקת הסשן: מי שהגיע
@@ -7067,7 +7078,13 @@ export default function App() {
       </StoragePrefixContext.Provider>
     );
   } else {
-    content = <WeddingShell session={session} onInitialDataReady={handleInitialDataReady} />;
+    content = (
+      <WeddingShell
+        session={session}
+        initialDataTimedOut={initialDataTimedOut}
+        onInitialDataReady={handleInitialDataReady}
+      />
+    );
   }
 
   return (
@@ -7533,7 +7550,7 @@ function ResetPasswordScreen({ token, onDone }) {
  *  ובוחר את החתונה הפעילה. מרנדר את WeddingApp עם key ייחודי לכל צירוף
  *  משתמש+חתונה, כך שכל המצב (וה-localStorage שמאחוריו) מתאפס בהחלפה.
  * ---------------------------------------------------------------------- */
-function WeddingShell({ session, onInitialDataReady }) {
+function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
   const userId = session.user.id;
   const activeKey = `${STORAGE_ROOT}${userId}:activeWeddingId`;
 
@@ -7671,6 +7688,28 @@ function WeddingShell({ session, onInitialDataReady }) {
   }
 
   if (weddings === null) {
+    if (initialDataTimedOut) {
+      return (
+        <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+          <CloudOff className="text-rose-400" size={32} />
+          <p className="text-sm text-slate-600">טעינת הנתונים נמשכת זמן רב מהרגיל.</p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={retry}
+              className="rounded-xl bg-gold-500 px-4 py-2 text-sm font-semibold text-white"
+            >
+              נסו שוב
+            </button>
+            <button
+              onClick={signOutAndWipe}
+              className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-600 ring-1 ring-slate-200"
+            >
+              יציאה
+            </button>
+          </div>
+        </div>
+      );
+    }
     return null;
   }
 

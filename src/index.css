@@ -78,6 +78,53 @@ body {
 }
 
 /* =========================================================================
+ *  BOOT SCREEN
+ * -------------------------------------------------------------------------
+ *  These mirror the inline rules in index.html one for one. The static
+ *  screen paints before the bundle downloads and React swaps in its own
+ *  copy on mount, so any drift between the two files shows up as a visible
+ *  jump at the exact moment the user is already waiting.
+ * ====================================================================== */
+
+@keyframes bootTurn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The scale stays deliberately small. Large movement on a screen someone is
+   waiting in front of reads as impatience rather than calm. */
+@keyframes bootBeat {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+}
+
+.animate-boot-ring {
+  animation: bootTurn 1.6s linear infinite;
+}
+.animate-boot-ring-reverse {
+  animation: bootTurn 2.4s linear infinite reverse;
+}
+.animate-boot-beat {
+  animation: bootBeat 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-boot-ring,
+  .animate-boot-ring-reverse,
+  .animate-boot-beat {
+    animation: none;
+  }
+}
+
+/* =========================================================================
  *  MOBILE / TOUCH ADAPTATIONS
  * ====================================================================== */
 

@@ -6952,22 +6952,46 @@ function captureResetToken() {
 
 const INITIAL_RESET_TOKEN = captureResetToken();
 
+/*  משך ההיעלמות. חייב להתאים ל-duration-500 שבתוך BootScreen — ערך קצר
+    מכאן מסיר את המסך באמצע ההנפשה, וארוך ממנו משאיר שכבה שקופה תקועה מעל
+    הדשבורד אחרי שהיא כבר בלתי נראית.  */
+const BOOT_FADE_MS = 500;
+
 /*  מסך הטעינה של האפליקציה. הוא ממשיך ויזואלית את מסך הפתיחה שב-index.html,
     כך שהמעבר מה-HTML הסטטי ל-React אינו נראה כמו קפיצה. אחרי כמה שניות
     מתווספת הודעה שמסבירה למה זה לוקח זמן — השירות בענן נכבה כשאין פעילות,
     וההתעוררות שלו אורכת עשרות שניות. בלי ההסבר המשתמש חושב שהמערכת תקועה.
     הניסוח מדבר על "המערכת" ולא על "השרת", כי זה מונח שלא אומר כלום למי
-    שרק רוצה לתכנן חתונה.  */
-function BootScreen() {
+    שרק רוצה לתכנן חתונה.
+
+    fading מפעיל את ההיעלמות. המסך נשאר מורכב לאורך ההנפשה ורק אחריה יורד,
+    ולכן הוא חייב להיות fixed מעל התוכן ולא להחליף אותו.  */
+function BootScreen({ fading = false }) {
   const [slow, setSlow] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setSlow(true), 4000);
     return () => clearTimeout(t);
   }, []);
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gradient-to-b from-white to-gold-50 px-6 text-center">
+    <div
+      role="status"
+      aria-live="polite"
+      aria-hidden={fading}
+      className={`fixed inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-gradient-to-b from-white via-gold-50 to-sage-50 px-6 text-center transition-opacity duration-500 motion-reduce:transition-none ${
+        fading ? "pointer-events-none opacity-0" : "opacity-100"
+      }`}
+    >
       <img src="/icon-192.png" alt="" className="h-16 w-16 rounded-2xl shadow-sm" />
-      <Loader2 className="animate-spin text-gold-500" size={30} />
+      <div className="relative grid h-20 w-20 place-items-center">
+        <span className="animate-boot-ring absolute inset-0 rounded-full border-[3px] border-gold-100 border-t-gold-500" />
+        <span className="animate-boot-ring-reverse absolute inset-2 rounded-full border-2 border-transparent border-b-sage-300" />
+        <Heart
+          size={26}
+          strokeWidth={1.5}
+          fill="currentColor"
+          className="animate-boot-beat text-gold-500"
+        />
+      </div>
       <p className="text-lg font-bold text-slate-800">מכינים את החתונה שלכם…</p>
       <p className="max-w-sm text-sm leading-6 text-slate-500">
         {slow
@@ -7008,33 +7032,47 @@ export default function App() {
     };
   }, []);
 
+  /*  מי שהגיע מקישור איפוס סיסמה מדלג על מסך הטעינה: המסך שלו מוכן מיד
+      ואינו ממתין לסשן, ולכן אין מה לכסות.  */
+  const bootDone = !isCloudConfigured || authReady || Boolean(resetToken);
+  const [bootMounted, setBootMounted] = useState(!bootDone);
+
+  useEffect(() => {
+    if (!bootDone || !bootMounted) return;
+    const t = setTimeout(() => setBootMounted(false), BOOT_FADE_MS);
+    return () => clearTimeout(t);
+  }, [bootDone, bootMounted]);
+
+  let content;
+
   //  מסך איפוס הסיסמה קודם לכל השאר, וגם לפני בדיקת הסשן: מי שהגיע
   //  מהקישור שבמייל רוצה לקבוע סיסמה חדשה גם אם במקרה עדיין יש לו סשן פתוח.
   if (isCloudConfigured && resetToken) {
-    return (
-      <ResetPasswordScreen token={resetToken} onDone={() => setResetToken("")} />
-    );
-  }
-
-  if (isCloudConfigured && !authReady) {
-    return <BootScreen />;
-  }
-
-  if (isCloudConfigured && !session) {
-    return <LoginScreen />;
-  }
-
-  // מצב מקומי בלבד (ללא שרת): אין משתמש ואין חתונה – תחילית ה-localStorage
-  // נשארת הישנה (`wp:v1:<key>`) וכל שכבת הענן מנוטרלת.
-  if (!isCloudConfigured) {
-    return (
+    content = <ResetPasswordScreen token={resetToken} onDone={() => setResetToken("")} />;
+  } else if (!bootDone) {
+    //  אין עדיין מה להציג, ומסך הטעינה ממילא מכסה את כל המסך. רינדור מסך
+    //  ההתחברות כאן היה גורם לו להבהב לרגע כשמתברר שיש סשן.
+    content = null;
+  } else if (isCloudConfigured && !session) {
+    content = <LoginScreen />;
+  } else if (!isCloudConfigured) {
+    // מצב מקומי בלבד (ללא שרת): אין משתמש ואין חתונה – תחילית ה-localStorage
+    // נשארת הישנה (`wp:v1:<key>`) וכל שכבת הענן מנוטרלת.
+    content = (
       <StoragePrefixContext.Provider value={STORAGE_ROOT}>
         <WeddingApp session={null} weddingId={null} role="owner" weddings={[]} />
       </StoragePrefixContext.Provider>
     );
+  } else {
+    content = <WeddingShell session={session} />;
   }
 
-  return <WeddingShell session={session} />;
+  return (
+    <>
+      {content}
+      {bootMounted && <BootScreen fading={bootDone} />}
+    </>
+  );
 }
 
 /*  ולידציית מייל בצד הלקוח, למשוב מיידי בלבד. השרת בודק את אותו כלל שוב

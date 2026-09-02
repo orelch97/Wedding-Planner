@@ -40,18 +40,41 @@
         justify-content: center;
         gap: 18px;
         padding: 24px;
-        background: radial-gradient(120% 90% at 50% 0%, #fffdf8 0%, #f7f6f2 55%, #f1efe8 100%);
+        background: linear-gradient(180deg, #ffffff 0%, #faf6ee 55%, #f3f6ef 100%);
         font-family: "Heebo", system-ui, -apple-system, "Segoe UI", sans-serif;
         text-align: center;
         color: #334155;
       }
+      /*  שני טבעות מסתובבים בכיוונים הפוכים סביב לב פועם. המידות והצבעים
+          זהים ל-BootScreen שב-App.jsx, אחרת המעבר ל-React נראה כמו קפיצה.  */
+      #boot .boot-mark {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: 80px;
+        height: 80px;
+      }
       #boot .boot-ring {
-        width: 62px;
-        height: 62px;
+        position: absolute;
+        inset: 0;
         border-radius: 50%;
-        border: 3px solid #eadfc6;
+        border: 3px solid #f3e9d4;
         border-top-color: #c9a86a;
-        animation: boot-spin 0.9s linear infinite;
+        animation: boot-spin 1.6s linear infinite;
+      }
+      #boot .boot-ring-inner {
+        position: absolute;
+        inset: 8px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        border-bottom-color: #a3b18a;
+        animation: boot-spin 2.4s linear infinite reverse;
+      }
+      #boot .boot-heart {
+        width: 26px;
+        height: 26px;
+        color: #c9a86a;
+        animation: boot-beat 1.8s ease-in-out infinite;
       }
       #boot .boot-title {
         margin: 0;
@@ -88,6 +111,17 @@
           transform: rotate(360deg);
         }
       }
+      @keyframes boot-beat {
+        0%,
+        100% {
+          transform: scale(1);
+          opacity: 0.85;
+        }
+        50% {
+          transform: scale(1.12);
+          opacity: 1;
+        }
+      }
       @keyframes boot-pulse {
         0%,
         100% {
@@ -101,6 +135,8 @@
       }
       @media (prefers-reduced-motion: reduce) {
         #boot .boot-ring,
+        #boot .boot-ring-inner,
+        #boot .boot-heart,
         #boot .boot-dots span {
           animation: none;
         }
@@ -111,7 +147,23 @@
     <div id="root">
       <div id="boot">
         <img src="/icon-192.png" alt="" width="72" height="72" style="border-radius: 20px" />
-        <div class="boot-ring"></div>
+        <div class="boot-mark">
+          <div class="boot-ring"></div>
+          <div class="boot-ring-inner"></div>
+          <svg
+            class="boot-heart"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path
+              d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
+            />
+          </svg>
+        </div>
         <p class="boot-title">מכינים את החתונה שלכם…</p>
         <p class="boot-text">
           המערכת עולה כעת. הטעינה הראשונה עשויה לקחת עד דקה — אחר כך היא מיידית.

@@ -35,6 +35,19 @@ service firebase.storage {
       allow delete: if memberOf();
     }
 
+    match /{env}/weddings/{weddingId}/countdown-background {
+      function memberOf() {
+        return request.auth != null
+               && request.auth.token['w_' + env] is list
+               && weddingId in request.auth.token['w_' + env];
+      }
+
+      allow read: if memberOf();
+      allow write: if memberOf()
+                   && request.resource.size < 8 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+    }
+
     //  כל נתיב אחר — חסום.
     match /{allPaths=**} {
       allow read, write: if false;

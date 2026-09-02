@@ -100,6 +100,8 @@ import {
   createWedding,
   updateWedding,
   saveWeddingSettings,
+  uploadCountdownBackground,
+  getAdminStats,
   inviteMember,
   addPartner,
   acceptInvite,
@@ -1138,7 +1140,7 @@ function CoupleNames({ couple }) {
   );
 }
 
-function Countdown({ date, couple = null, canEditSettings = false, onOpenSettings }) {
+function Countdown({ date, couple = null, canEditSettings = false, onOpenSettings, onBackgroundChange }) {
   const { days, hours, minutes, seconds } = useCountdown(date ?? WEDDING_DATE);
   const countItems = [
     { label: "ימים", value: days },
@@ -1150,7 +1152,14 @@ function Countdown({ date, couple = null, canEditSettings = false, onOpenSetting
   //  משהו חסר, כדי שחתונה חדשה לא תהיה מסך ללא מוצא — ואחר כך הוא נעלם.
   const incomplete = !date || !couple?.partnerA || !couple?.partnerB;
   return (
-    <Card className="relative overflow-hidden bg-gradient-to-br from-slate-800 via-slate-700 to-slate-800 text-white">
+    <Card
+      className="relative overflow-hidden bg-gradient-to-br from-slate-800 via-slate-700 to-slate-800 text-white"
+      style={couple?.countdownBackgroundUrl ? {
+        backgroundImage: `linear-gradient(rgba(15, 23, 42, 0.68), rgba(15, 23, 42, 0.78)), url(${couple.countdownBackgroundUrl})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+      } : undefined}
+    >
       <div className="pointer-events-none absolute -left-10 -top-10 h-40 w-40 rounded-full bg-gold-500/30 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-10 -right-10 h-40 w-40 rounded-full bg-sage-400/30 blur-3xl" />
       <div className="relative flex flex-col items-center gap-5 py-4 text-center">
@@ -1191,6 +1200,22 @@ function Countdown({ date, couple = null, canEditSettings = false, onOpenSetting
             להשלמת פרטי החתונה
           </button>
         )}
+        {canEditSettings && onBackgroundChange && (
+          <label className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 text-xs font-medium text-white/70 underline decoration-white/30 underline-offset-4 transition hover:text-white sm:min-h-0">
+            <Upload size={13} />
+            {couple?.countdownBackgroundUrl ? "החלפת תמונת רקע" : "הוספת תמונת רקע"}
+            <input
+              type="file"
+              accept="image/*"
+              className="sr-only"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) onBackgroundChange(file);
+              }}
+            />
+          </label>
+        )}
       </div>
     </Card>
   );
@@ -1206,6 +1231,8 @@ function Overview({
   canEditSettings,
   onOpenSettings,
   onOpenVendor,
+  onBackgroundChange,
+  adminStats,
 }) {
   const stats = useMemo(() => {
     const totalExpected = budget.reduce((s, b) => s + b.expected, 0);
@@ -1256,12 +1283,23 @@ function Overview({
 
   return (
     <div className="space-y-4 sm:space-y-6">
+      {adminStats && (
+        <Card className="border-gold-200 bg-gold-50/50">
+          <SectionTitle icon={Crown} title="נתוני מערכת" subtitle="תצוגת בעלים בלבד" />
+          <div className="grid grid-cols-2 gap-3">
+            <StatCard icon={Heart} label="חתונות במערכת" value={adminStats.weddings} tone="gold" />
+            <StatCard icon={UserCheck} label="משתמשים פעילים" value={adminStats.activeUsers} tone="sage" />
+          </div>
+        </Card>
+      )}
       {/* Countdown hero */}
       <Countdown
         date={weddingDate}
         couple={couple}
         canEditSettings={canEditSettings}
         onOpenSettings={onOpenSettings}
+        onBackgroundChange={onBackgroundChange}
+        onBackgroundChange={onBackgroundChange}
       />
 
       {/* Summary cards */}
@@ -2744,7 +2782,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   title="הוספה, עריכה ומחיקה של קטגוריות מוזמנים"
                   className="flex items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
                 >
-                  <Tag size={17} /> קטגוריות
+                  <Tag size={17} /> עריכת קטגוריות
                 </button>
               )}
               {canEdit && (
@@ -4705,8 +4743,8 @@ function Checklist({ items, setItems }) {
             </form>
           )}
 
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            <div className="relative min-w-0 flex-1 sm:max-w-xs">
+          <div className="mb-4 space-y-2">
+            <div className="relative w-full sm:max-w-xs">
               <Search size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 value={query}
@@ -4716,22 +4754,24 @@ function Checklist({ items, setItems }) {
                 aria-label="חיפוש משימה"
               />
             </div>
-            <button onClick={() => setAssigneeFilter("all")} className={chip(assigneeFilter === "all")}>
-              הכול
-            </button>
-            {ASSIGNEES.map((a) => (
-              <button
-                key={a.key}
-                onClick={() => setAssigneeFilter(a.key)}
-                className={chip(assigneeFilter === a.key)}
-              >
-                {a.label}
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={() => setAssigneeFilter("all")} className={chip(assigneeFilter === "all")}>
+                הכול
               </button>
-            ))}
-            <button onClick={() => setHideDone((v) => !v)} className={chip(hideDone)}>
-              <CheckCheck size={13} className="ml-1 inline" />
-              הסתרת שהושלמו
-            </button>
+              {ASSIGNEES.map((a) => (
+                <button
+                  key={a.key}
+                  onClick={() => setAssigneeFilter(a.key)}
+                  className={chip(assigneeFilter === a.key)}
+                >
+                  {a.label}
+                </button>
+              ))}
+              <button onClick={() => setHideDone((v) => !v)} className={chip(hideDone)}>
+                <CheckCheck size={13} className="ml-1 inline" />
+                הסתרת שהושלמו
+              </button>
+            </div>
           </div>
 
           {grouped.length === 0 ? (
@@ -7019,6 +7059,7 @@ export default function App() {
   const [authReady, setAuthReady] = useState(!isCloudConfigured);
   const [initialDataReady, setInitialDataReady] = useState(!isCloudConfigured);
   const [initialDataTimedOut, setInitialDataTimedOut] = useState(false);
+  const [bootTimedOut, setBootTimedOut] = useState(false);
   const [session, setSession] = useState(null);
   const [resetToken, setResetToken] = useState(INITIAL_RESET_TOKEN);
   const handleInitialDataReady = useCallback((timedOut = false) => {
@@ -7045,7 +7086,10 @@ export default function App() {
   /*  מי שהגיע מקישור איפוס סיסמה מדלג על מסך הטעינה: המסך שלו מוכן מיד
       ואינו ממתין לסשן, ולכן אין מה לכסות.  */
   const bootDone =
-    !isCloudConfigured || Boolean(resetToken) || (authReady && (!session || initialDataReady));
+    !isCloudConfigured ||
+    Boolean(resetToken) ||
+    bootTimedOut ||
+    (authReady && (!session || initialDataReady));
   const [bootMounted, setBootMounted] = useState(!bootDone);
 
   useEffect(() => {
@@ -7056,7 +7100,10 @@ export default function App() {
 
   useEffect(() => {
     if (bootDone || !isCloudConfigured || resetToken) return;
-    const timer = setTimeout(() => handleInitialDataReady(true), BOOT_FAILSAFE_MS);
+    const timer = setTimeout(() => {
+      setBootTimedOut(true);
+      handleInitialDataReady(true);
+    }, BOOT_FAILSAFE_MS);
     return () => clearTimeout(timer);
   }, [bootDone, handleInitialDataReady, resetToken]);
 
@@ -7606,7 +7653,6 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
         const list = await listWeddings();
         if (cancelled) return;
         setWeddings(list);
-        onInitialDataReady?.();
         setActiveWeddingId((cur) => {
           if (target && list.some((w) => w.id === target)) return target;
           if (cur && list.some((w) => w.id === cur)) return cur;
@@ -7715,6 +7761,7 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
   const activeWedding = weddings.find((w) => w.id === activeWeddingId) ?? null;
 
   if (!activeWedding) {
+    onInitialDataReady?.();
     return <NoWeddingScreen onCreate={handleCreateWedding} />;
   }
 
@@ -7730,6 +7777,7 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
         scopes={activeWedding.scopes}
         weddings={weddings}
         activeWedding={activeWedding}
+        onInitialDataReady={onInitialDataReady}
         onSwitchWedding={setActiveWeddingId}
         onCreateWedding={handleCreateWedding}
         onWeddingChanged={refreshWeddings}
@@ -7824,6 +7872,7 @@ function WeddingApp({
   scopes = ["all"],
   weddings = [],
   activeWedding = null,
+  onInitialDataReady,
   onSwitchWedding,
   onCreateWedding,
   onWeddingChanged,
@@ -7978,6 +8027,11 @@ function WeddingApp({
   //  הצ׳קליסט מתחיל ריק תמיד, גם ללא ענן: הרשימה המומלצת נטענת
   //  בלחיצה מפורשת במסך ולא נדחפת לאיש לחשבון.
   const [checklist, setChecklist] = usePersistentState("checklist", []);
+  const [adminStats, setAdminStats] = useState(null);
+  useEffect(() => {
+    if (session?.user?.email?.toLowerCase() !== "orelch97@gmail.com") return;
+    getAdminStats().then(setAdminStats).catch(() => setAdminStats(null));
+  }, [session?.user?.email]);
   const [budgetGoal, setBudgetGoal] = usePersistentState(
     "budgetGoal",
     cloudEnabled ? 0 : SEED_BUDGET.reduce((s, b) => s + b.expected, 0)
@@ -7999,10 +8053,12 @@ function WeddingApp({
     "couple",
     cloudEnabled ? { partnerA: "", partnerB: "" } : COUPLE
   );
+  const [countdownBackgroundUrl, setCountdownBackgroundUrl] = useState("");
   const couple = cloudEnabled
     ? {
         partnerA: activeWedding?.partnerA || "",
         partnerB: activeWedding?.partnerB || "",
+        countdownBackgroundUrl,
       }
     : localCouple;
   const coupleTitle = coupleToTitle(couple);
@@ -8124,6 +8180,7 @@ function WeddingApp({
         //  במכשיר אחר. מחילים רק מפתחות שקיימים בפועל, כדי שחתונה חדשה תישאר
         //  עם ברירות המחדל במקום להתאפס לערכים ריקים.
         const s = data.settings || {};
+        setCountdownBackgroundUrl(s.countdownBackgroundUrl || "");
         if (typeof s.budgetGoal === "number") setBudgetGoal(s.budgetGoal);
         if (s.financeLabels) setFinanceLabels(s.financeLabels);
         //  גם רשימה ריקה היא ערך תקף — משתמש שמחק את כל הקטגוריות שלו
@@ -8141,16 +8198,20 @@ function WeddingApp({
         //  של הרנדר הראשון היו דורסים את מה ששמור בענן.
         settingsReadyRef.current = true;
         setCloudStatus("synced");
+        onInitialDataReady?.();
       } catch (err) {
         console.error("Cloud load failed:", err);
-        if (!cancelled) setCloudStatus("error");
+        if (!cancelled) {
+          setCloudStatus("error");
+          onInitialDataReady?.();
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloudEnabled, weddingId]);
+  }, [cloudEnabled, weddingId, onInitialDataReady]);
 
   // Debounced per-dataset cloud sync (upsert changes + soft-delete removed).
   // צופה (viewer) לעולם לא כותב – ה-DB גם ידחה אותו, ואין טעם ברעש.
@@ -9017,6 +9078,23 @@ function WeddingApp({
               canEditSettings={cloudEnabled ? isOwner : true}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenVendor={canOpenVendors ? openVendor : null}
+              onBackgroundChange={async (file) => {
+                try {
+                  const url = await uploadCountdownBackground(weddingId, file);
+                  setCountdownBackgroundUrl(url);
+                  notify("תמונת הרקע נשמרה", { tone: "success" });
+                } catch (err) {
+                  notify(
+                    err?.message === "file_too_large"
+                      ? "התמונה גדולה מדי. בחרו תמונה עד 8MB."
+                      : err?.message === "image_required"
+                        ? "בחרו קובץ תמונה."
+                        : "שמירת תמונת הרקע נכשלה. נסו שוב.",
+                    { tone: "error" }
+                  );
+                }
+              }}
+              adminStats={adminStats}
             />
           )}
           {active === "checklist" && (

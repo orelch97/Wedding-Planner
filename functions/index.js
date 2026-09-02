@@ -104,6 +104,23 @@ exports.syncMyClaims = onCall({ region: REGION }, async (request) => {
   return { weddingIds: await refreshWeddingClaims(env, uid) };
 });
 
+exports.getAdminStats = onCall({ region: REGION }, async (request) => {
+  requireAuth(request);
+  if (String(request.auth.token.email || "").toLowerCase() !== "orelch97@gmail.com") {
+    throw new HttpsError("permission-denied", "אין הרשאה.");
+  }
+
+  const weddings = await envRoot("prod").collection("weddings").get();
+  const cutoff = new Date(Date.now() - 10 * 60 * 1000);
+  const active = await db
+    .collectionGroup("members")
+    .where("lastSeenAt", ">", cutoff)
+    .get();
+  const userIds = new Set(active.docs.map((snap) => snap.id));
+
+  return { weddings: weddings.size, activeUsers: userIds.size };
+});
+
 /* =============================================================================
  *  addPartner — צירוף בן/בת זוג
  * -----------------------------------------------------------------------------

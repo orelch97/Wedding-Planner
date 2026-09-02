@@ -126,6 +126,19 @@ export async function saveWeddingSettings(weddingId, settings) {
   return stripMeta(snap.exists() ? snap.data() : {});
 }
 
+export async function uploadCountdownBackground(weddingId, file) {
+  requireWeddingId(weddingId);
+  requireAuth();
+  if (!file?.type?.startsWith("image/")) throw new Error("image_required");
+  if (file.size > 8 * 1024 * 1024) throw new Error("file_too_large");
+
+  const path = `${FIREBASE_ENV}/weddings/${weddingId}/countdown-background`;
+  await uploadBytes(ref(storage, path), file, { contentType: file.type });
+  const url = await getDownloadURL(ref(storage, path));
+  await saveWeddingSettings(weddingId, { countdownBackgroundUrl: url });
+  return url;
+}
+
 /** האם החתונה ריקה לגמרי (כדי לזרוע אותה בפעם הראשונה). */
 export async function cloudIsEmpty(weddingId) {
   requireWeddingId(weddingId);
@@ -422,6 +435,11 @@ const callAddPartner = callable("addPartner");
 const callCreateInvite = callable("createInvite");
 const callAcceptInvite = callable("acceptInvite");
 const callSyncClaims = callable("syncMyClaims");
+const callAdminStats = callable("getAdminStats");
+
+export async function getAdminStats() {
+  return callAdminStats({});
+}
 
 /**
  *  צירוף בן/בת זוג. לכל אחד סיסמה משלו: החשבון נוצר בלי סיסמה,

@@ -106,6 +106,7 @@ import {
   addPartner,
   acceptInvite,
   listMembers,
+  touchMembership,
   removeMember,
   updateMember,
   hasScope,
@@ -6999,10 +7000,10 @@ const INITIAL_RESET_TOKEN = captureResetToken();
     מכאן מסיר את המסך באמצע ההנפשה, וארוך ממנו משאיר שכבה שקופה תקועה מעל
     הדשבורד אחרי שהיא כבר בלתי נראית.  */
 const BOOT_FADE_MS = 500;
-/*  רשת ביטחון בלבד, לא זמן טעינה צפוי. טעינה ראשונה של חתונה אמיתית
-    (‎595 מוזמנים) נמדדה ב-24–31 שניות, ולכן ערך נמוך מדי הבהב הודעת
-    שגיאה שנייה לפני שהנתונים הגיעו. 60 שניות תופסות רק תקיעה אמיתית.  */
-const BOOT_FAILSAFE_MS = 60_000;
+/*  רשת ביטחון בלבד, לא זמן טעינה צפוי: טעינה מלאה של חתונה עם
+    596 מוזמנים נמדדה בכ-2.4 שניות. הערך כאן תופס רק תקיעה אמיתית,
+    כמו רשת שנעלמה באמצע הטעינה.  */
+const BOOT_FAILSAFE_MS = 20_000;
 
 /*  מסך הטעינה של האפליקציה. הוא ממשיך ויזואלית את מסך הפתיחה שב-index.html,
     כך שהמעבר מה-HTML הסטטי ל-React אינו נראה כמו קפיצה. אחרי כמה שניות
@@ -7123,9 +7124,10 @@ export default function App() {
   //  מהקישור שבמייל רוצה לקבוע סיסמה חדשה גם אם במקרה עדיין יש לו סשן פתוח.
   if (isCloudConfigured && resetToken) {
     content = <ResetPasswordScreen token={resetToken} onDone={() => setResetToken("")} />;
-  } else if (!bootDone) {
-    //  אין עדיין מה להציג, ומסך הטעינה ממילא מכסה את כל המסך. רינדור מסך
-    //  ההתחברות כאן היה גורם לו להבהב לרגע כשמתברר שיש סשן.
+  } else if (isCloudConfigured && !authReady) {
+    /*  רק עד שהסשן ידוע. מכאן והלאה התוכן חייב להיות מורכב גם אם מסך
+        הטעינה עדיין מכסה אותו: הוא זה שטוען את הנתונים, ובלעדיו
+        initialDataReady לעולם לא יתקיים והמסך היה נשאר תקוע עד ה-failsafe.  */
     content = null;
   } else if (isCloudConfigured && !session) {
     content = <LoginScreen />;
@@ -8222,6 +8224,23 @@ function WeddingApp({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloudEnabled, weddingId, onInitialDataReady]);
+
+  //  נוכחות: מסמן שהמשתמש נמצא בחתונה עכשיו. בלי זה lastSeenAt נכתב רק
+  //  ביצירת החברות, ומסך "מי מחובר" ווידג׳ט המשתמשים הפעילים מציגים 0
+  //  גם כשיושבים במערכת. החלון בשרת הוא 10 דקות, ולכן די בדקות ספורות.
+  useEffect(() => {
+    if (!cloudEnabled || !weddingId) return;
+    touchMembership(weddingId);
+    const timer = setInterval(() => touchMembership(weddingId), 4 * 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") touchMembership(weddingId);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [cloudEnabled, weddingId]);
 
   // Debounced per-dataset cloud sync (upsert changes + soft-delete removed).
   // צופה (viewer) לעולם לא כותב – ה-DB גם ידחה אותו, ואין טעם ברעש.

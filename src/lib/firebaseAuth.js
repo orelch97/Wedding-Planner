@@ -157,9 +157,12 @@ export async function signIn(email, password) {
   }
 
   //  כללי ה-Storage נשענים על custom claim, והוא עלול להיות מיושן אחרי
-  //  שינוי הרשאות. רענון בכניסה מבטיח שהקבצים ייפתחו.
-  const { syncStorageClaims } = await import("./firebaseStore.js");
-  await syncStorageClaims();
+  //  שינוי הרשאות. רענון בכניסה מבטיח שהקבצים ייפתחו — אבל הוא קריאה
+  //  ל-Cloud Function שעולה קרה, ולכן הוא לא מעכב את הכניסה עצמה.
+  //  הקבצים נדרשים רק במסך הספקים, הרבה אחרי שהרענון מספיק להסתיים.
+  import("./firebaseStore.js")
+    .then((m) => m.syncStorageClaims())
+    .catch(() => {});
 
   return setSession(user);
 }

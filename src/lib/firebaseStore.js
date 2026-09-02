@@ -16,6 +16,8 @@ import {
   getDoc,
   getDocs,
   onSnapshot,
+  query,
+  limit,
   writeBatch,
   setDoc,
   updateDoc,
@@ -139,16 +141,26 @@ export async function uploadCountdownBackground(weddingId, file) {
   return url;
 }
 
-/** האם החתונה ריקה לגמרי (כדי לזרוע אותה בפעם הראשונה). */
+/**
+ * האם החתונה ריקה לגמרי (כדי לזרוע אותה בפעם הראשונה).
+ *
+ * מסמך אחד מכל אוסף מספיק, והכול במקביל. הגרסה הקודמת שלפה את כל
+ * האוספים במלואם ובטור — כלומר את כל 596 המוזמנים — רק כדי לגלות
+ * שהחתונה אינה ריקה, ומיד אחריה cloudFetchAll שלף אותם שוב.
+ *
+ * שורה שנמחקה מחיקה רכה נחשבת כאן כ"לא ריק" בכוונה: הזריעה נועדה
+ * לחתונה חדשה לגמרי, ועדיף להימנע ממנה מאשר לשכפל נתונים קיימים.
+ */
 export async function cloudIsEmpty(weddingId) {
   requireWeddingId(weddingId);
   requireAuth();
 
-  for (const key of ENTITY_KEYS) {
-    const snap = await getDocs(weddingCol(weddingId, ENTITIES[key].col));
-    if (snap.docs.some((d) => isAlive(d.data()))) return false;
-  }
-  return true;
+  const probes = await Promise.all(
+    ENTITY_KEYS.map((key) =>
+      getDocs(query(weddingCol(weddingId, ENTITIES[key].col), limit(1)))
+    )
+  );
+  return probes.every((snap) => snap.empty);
 }
 
 //  Firestore מגביל אצווה ל-500 פעולות.

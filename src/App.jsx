@@ -7271,9 +7271,18 @@ function LoginScreen() {
   async function passkeyLogin() {
     setError("");
     setInfo("");
+    /*  תמיד עם כתובת מייל. בקשה בלי allowCredentials נשענת על כך
+        שהמכשיר יציע בעצמו את החשבון, וזה נכשל בחלק מהדפדפנים ומחזיר
+        NotAllowedError שנראה למשתמש כמו ביטול. הכתובת נשמרת ברישום,
+        ולכן ברוב המקרים אין מה להקליד.  */
+    const address = email.trim() || rememberedEmail;
+    if (!address) {
+      setError("הקלידו את כתובת המייל ואז לחצו שוב על הכניסה המהירה.");
+      return;
+    }
     setPasskeyBusy(true);
     try {
-      await signInWithPasskey(email.trim() || rememberedEmail || null);
+      await signInWithPasskey(address);
       //  onAuthChange כבר מעדכן את App — אין צורך לנווט ידנית.
     } catch (err) {
       setError(passkeyErrorMessage(err));

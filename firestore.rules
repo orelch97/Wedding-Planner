@@ -162,6 +162,19 @@ service cloud.firestore {
         allow read: if isOwner(resource.data.weddingId);
         allow write: if false;
       }
+
+      /* ── Passkeys ─────────────────────────────────────────────────────── */
+      //  מפתחות ציבוריים ואתגרי WebAuthn. נכתבים ונקראים אך ורק ב-Cloud
+      //  Functions (Admin SDK עוקף את הכללים). חסימה מפורשת ולא הסתמכות
+      //  על ברירת המחדל: קריאה מהדפדפן הייתה חושפת אילו כתובות מייל רשומות,
+      //  וכתיבה הייתה מאפשרת לרשום מפתח לחשבון של מישהו אחר.
+      match /passkeys/{credentialId} {
+        allow read, write: if false;
+      }
+
+      match /webauthnChallenges/{challengeId} {
+        allow read, write: if false;
+      }
     }
 
     //  כל מה שלא הוזכר במפורש — חסום.

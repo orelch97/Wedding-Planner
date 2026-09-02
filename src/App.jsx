@@ -48,6 +48,7 @@ import {
   LogOut,
   Lock,
   Loader2,
+  Fingerprint,
   ChevronUp,
   ChevronDown,
   ChevronsUpDown,
@@ -91,6 +92,16 @@ import {
   requestPasswordReset,
   resetPassword,
 } from "./lib/firebaseAuth";
+import {
+  passkeySupported,
+  platformAuthenticatorAvailable,
+  registerPasskey,
+  signInWithPasskey,
+  listPasskeys,
+  deletePasskey,
+  rememberedPasskeyEmail,
+  passkeyErrorMessage,
+} from "./lib/passkeys";
 import {
   cloudFetchAll,
   cloudIsEmpty,
@@ -7240,6 +7251,36 @@ function LoginScreen() {
   //  חדש בכל רנדור היה מכניס אותו ללולאת מדידה אינסופית.
   const authSteps = useMemo(() => authTourSteps(setMode), []);
 
+  /*  הכניסה המהירה מוצגת רק כשיש חיישן ביומטרי במכשיר. כפתור שנכשל תמיד
+      גרוע מכפתור שלא קיים, במיוחד במסך שכל מטרתו להכניס אנשים פנימה.  */
+  const [biometricReady, setBiometricReady] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const rememberedEmail = useMemo(() => rememberedPasskeyEmail(), []);
+
+  useEffect(() => {
+    let alive = true;
+    platformAuthenticatorAvailable().then((ok) => {
+      if (alive) setBiometricReady(ok);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function passkeyLogin() {
+    setError("");
+    setInfo("");
+    setPasskeyBusy(true);
+    try {
+      await signInWithPasskey(email.trim() || rememberedEmail || null);
+      //  onAuthChange כבר מעדכן את App — אין צורך לנווט ידנית.
+    } catch (err) {
+      setError(passkeyErrorMessage(err));
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
+
   function closeTour() {
     setTourOn(false);
     markGuideSeen("auth");
@@ -7441,6 +7482,34 @@ function LoginScreen() {
         {busy ? <Loader2 size={16} className="animate-spin" /> : <Lock size={16} />}
         {forgot ? "שליחת קישור לאיפוס" : signup ? "הרשמה" : "התחברות"}
       </button>
+
+      {/*  כניסה ביומטרית רק במסך ההתחברות: בהרשמה עוד אין חשבון לקשור
+          אליו מכשיר, ובאיפוס סיסמה זה היה מבלבל בין שני מסלולים.  */}
+      {!signup && !forgot && biometricReady && (
+        <>
+          <div className="flex items-center gap-3">
+            <span className="h-px flex-1 bg-slate-200" />
+            <span className="text-[11px] font-medium text-slate-400">או</span>
+            <span className="h-px flex-1 bg-slate-200" />
+          </div>
+          <button
+            type="button"
+            onClick={passkeyLogin}
+            disabled={passkeyBusy || busy}
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:opacity-60"
+          >
+            {passkeyBusy ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Fingerprint size={16} className="text-gold-600" />
+            )}
+            כניסה עם Face ID או טביעת אצבע
+          </button>
+          <p className="text-center text-[11px] text-slate-400">
+            עובד רק אחרי שהפעלתם את הכניסה המהירה במכשיר הזה, מתוך „הגדרות החתונה”.
+          </p>
+        </>
+      )}
 
       {/*  min-h-11: קישורי טקסט בגובה של שורה אחת קטנים מדי ללחיצה באצבע.  */}
       <div className="space-y-1">
@@ -9414,6 +9483,135 @@ function ScopePicker({ scopes, onChange, idPrefix }) {
  * (כפתור "שינוי תאריך" באמצע הדאשבורד, עריכת שמות בכותרת), וזה גם הסתיר
  * אותם וגם הפריע לשימוש היומיומי.
  */
+function PasskeyPanel() {
+  const [supported, setSupported] = useState(false);
+  const [keys, setKeys] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async () => {
+    try {
+      setKeys(await listPasskeys());
+    } catch {
+      setKeys([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    platformAuthenticatorAvailable().then((ok) => {
+      if (!alive) return;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSupported(ok);
+      if (ok) refresh();
+    });
+    return () => {
+      alive = false;
+    };
+  }, [refresh]);
+
+  if (!passkeySupported() || !supported) return null;
+
+  async function enable() {
+    setMsg("");
+    setError("");
+    setBusy(true);
+    try {
+      await registerPasskey(navigator.platform || "מכשיר");
+      await refresh();
+      setMsg("הכניסה המהירה הופעלה במכשיר הזה.");
+    } catch (err) {
+      setError(passkeyErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id) {
+    const ok = await confirmDialog({
+      title: "ביטול כניסה מהירה",
+      message: "לבטל את הכניסה הביומטרית מהמכשיר הזה? תמיד אפשר להפעיל שוב.",
+      confirmLabel: "ביטול הכניסה",
+      tone: "danger",
+    });
+    if (!ok) return;
+    try {
+      await deletePasskey(id);
+      await refresh();
+      setMsg("הכניסה המהירה בוטלה.");
+    } catch {
+      setError("הביטול נכשל. נסו שוב.");
+    }
+  }
+
+  return (
+    <div className="rounded-2xl bg-sage-50/60 p-3.5 ring-1 ring-sage-200">
+      <div className="flex items-start gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-sage-600 shadow-sm">
+          <Fingerprint size={17} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-slate-700">כניסה מהירה</p>
+          <p className="mt-1 text-[11px] leading-5 text-slate-500">
+            במקום להקליד מייל וסיסמה — Face ID או טביעת אצבע. הביומטריה נשארת
+            במכשיר ולא נשלחת לשום מקום.
+          </p>
+
+          {keys.length > 0 && (
+            <ul className="mt-3 space-y-1.5">
+              {keys.map((k) => (
+                <li
+                  key={k.id}
+                  className="flex items-center justify-between gap-2 rounded-xl bg-white px-2.5 py-1.5 text-[11px] ring-1 ring-sage-200"
+                >
+                  <span className="min-w-0 truncate text-slate-600">
+                    {k.label || "מכשיר"}
+                    {k.lastUsedAt && (
+                      <span className="text-slate-400">
+                        {" "}
+                        · שימוש אחרון {new Date(k.lastUsedAt).toLocaleDateString("he-IL")}
+                      </span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => remove(k.id)}
+                    className="shrink-0 rounded-lg px-2 py-1 text-rose-500 transition hover:bg-rose-50"
+                  >
+                    ביטול
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <button
+            type="button"
+            onClick={enable}
+            disabled={busy}
+            className="mt-3 inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-sage-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-sage-600 disabled:opacity-60"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Fingerprint size={14} />}
+            {keys.length ? "הוספת המכשיר הנוכחי" : "הפעלת כניסה מהירה"}
+          </button>
+
+          {msg && (
+            <p className="mt-2 rounded-lg bg-white px-2.5 py-1.5 text-[11px] text-sage-700 ring-1 ring-sage-200">
+              {msg}
+            </p>
+          )}
+          {error && (
+            <p className="mt-2 rounded-lg bg-rose-50 px-2.5 py-1.5 text-[11px] text-rose-600 ring-1 ring-rose-200">
+              {error}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ShareAppPanel() {
   const [installPrompt, setInstallPrompt] = useState(null);
 
@@ -9773,6 +9971,7 @@ function WeddingSettingsModal({
                     ))}
 
                     <ShareAppPanel />
+          <PasskeyPanel />
                   </div>
                 </div>
               )}

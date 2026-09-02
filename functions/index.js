@@ -24,6 +24,12 @@ const { initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { randomBytes, createHash } = require("node:crypto");
+const {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  generateAuthenticationOptions,
+  verifyAuthenticationResponse,
+} = require("@simplewebauthn/server");
 
 initializeApp();
 const db = getFirestore();
@@ -130,6 +136,221 @@ exports.getAdminStats = onCall({ region: REGION }, async (request) => {
   );
 
   return { weddings: weddings.size, activeUsers: active.size };
+});
+
+/* =============================================================================
+ *  Passkeys — כניסה עם Face ID / טביעת אצבע
+ * -----------------------------------------------------------------------------
+ *  WebAuthn מחליף סיסמה במפתח שנוצר במכשיר ולא עוזב אותו. הביומטריה עצמה
+ *  לעולם לא מגיעה לשרת — היא רק פותחת את המפתח הפרטי מקומית, והשרת מאמת
+ *  חתימה מול המפתח הציבורי ששמור אצלו.
+ *
+ *  ⚠ המפתח נצמד ל-RP ID, שהוא הדומיין. מפתח שנרשם ב-localhost לא יעבוד
+ *    בייצור ולהפך — זו התנהגות מוגדרת של התקן, לא באג.
+ *
+ *  ⚠ האתגר חייב להישמר בצד השרת ולהיבדק פעם אחת בלבד. בלי זה אפשר
+ *    להקליט חתימה ולשחזר אותה (replay).
+ * ========================================================================== */
+
+//  הדומיינים שמהם מותר להירשם ולהיכנס. כל מקור אחר נדחה, אחרת אתר זר
+//  יכול לבקש חתימה עבור המשתמשים שלנו.
+const RP_NAME = "תכנון החתונה שלי";
+const ALLOWED_ORIGINS = {
+  "https://wedding-planner-web.onrender.com": "wedding-planner-web.onrender.com",
+  "https://wedding-planner-vixy.onrender.com": "wedding-planner-vixy.onrender.com",
+  "http://localhost:4173": "localhost",
+  "http://localhost:5173": "localhost",
+};
+
+function resolveRp(origin) {
+  const rpID = ALLOWED_ORIGINS[String(origin || "")];
+  if (!rpID) throw new HttpsError("permission-denied", "מקור לא מורשה.");
+  return { rpID, origin };
+}
+
+const passkeyCol = (env) => envRoot(env).collection("passkeys");
+const challengeCol = (env) => envRoot(env).collection("webauthnChallenges");
+
+const CHALLENGE_TTL_MS = 5 * 60_000;
+
+async function putChallenge(env, key, challenge) {
+  await challengeCol(env).doc(key).set({
+    challenge,
+    createdAt: FieldValue.serverTimestamp(),
+    expiresAt: Date.now() + CHALLENGE_TTL_MS,
+  });
+}
+
+/** שולף אתגר ומוחק אותו מיד — שימוש חד-פעמי בלבד. */
+async function takeChallenge(env, key) {
+  const ref = challengeCol(env).doc(key);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError("failed-precondition", "האתגר פג. נסו שוב.");
+  await ref.delete();
+  const data = snap.data();
+  if (!data.expiresAt || data.expiresAt < Date.now()) {
+    throw new HttpsError("failed-precondition", "האתגר פג. נסו שוב.");
+  }
+  return data.challenge;
+}
+
+exports.passkeyRegisterOptions = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+  const env = envOf(request.data);
+  const { rpID } = resolveRp(request.data && request.data.origin);
+
+  const user = await auth.getUser(uid);
+  const existing = await passkeyCol(env).where("userId", "==", uid).get();
+
+  const options = await generateRegistrationOptions({
+    rpName: RP_NAME,
+    rpID,
+    userID: Buffer.from(uid, "utf8"),
+    userName: user.email || uid,
+    userDisplayName: user.email || uid,
+    attestationType: "none",
+    //  מונע רישום כפול של אותו מכשיר.
+    excludeCredentials: existing.docs.map((d) => ({ id: d.id })),
+    authenticatorSelection: {
+      residentKey: "required",
+      userVerification: "required",
+    },
+  });
+
+  await putChallenge(env, `reg_${uid}`, options.challenge);
+  return options;
+});
+
+exports.passkeyRegisterVerify = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+  const env = envOf(request.data);
+  const { rpID, origin } = resolveRp(request.data && request.data.origin);
+  const expectedChallenge = await takeChallenge(env, `reg_${uid}`);
+
+  const verification = await verifyRegistrationResponse({
+    response: request.data.credential,
+    expectedChallenge,
+    expectedOrigin: origin,
+    expectedRPID: rpID,
+    requireUserVerification: true,
+  });
+
+  if (!verification.verified || !verification.registrationInfo) {
+    throw new HttpsError("invalid-argument", "אימות המכשיר נכשל.");
+  }
+
+  const { credential } = verification.registrationInfo;
+  const user = await auth.getUser(uid);
+
+  await passkeyCol(env).doc(credential.id).set({
+    userId: uid,
+    emailLower: String(user.email || "").toLowerCase(),
+    publicKey: Buffer.from(credential.publicKey).toString("base64url"),
+    counter: credential.counter || 0,
+    transports: credential.transports || [],
+    label: String((request.data && request.data.label) || "המכשיר שלי").slice(0, 60),
+    createdAt: FieldValue.serverTimestamp(),
+    lastUsedAt: null,
+  });
+
+  return { ok: true, credentialId: credential.id };
+});
+
+exports.passkeyLoginOptions = onCall({ region: REGION }, async (request) => {
+  const env = envOf(request.data);
+  const { rpID } = resolveRp(request.data && request.data.origin);
+  const email = normalizeEmail(request.data && request.data.email);
+
+  //  בלי מייל נשענים על discoverable credentials: המכשיר עצמו מציע את
+  //  החשבונות ששמורים בו, וזו החוויה של "להצמיד אצבע ולהיכנס".
+  let allowCredentials;
+  if (email) {
+    const snap = await passkeyCol(env).where("emailLower", "==", email).get();
+    allowCredentials = snap.docs.map((d) => ({
+      id: d.id,
+      transports: d.get("transports") || undefined,
+    }));
+  }
+
+  const options = await generateAuthenticationOptions({
+    rpID,
+    userVerification: "required",
+    ...(allowCredentials && allowCredentials.length ? { allowCredentials } : {}),
+  });
+
+  //  מפתח האתגר אינו יכול להישען על זהות (עוד אין), ולכן הוא מוחזר ללקוח
+  //  ומוחזר בבקשת האימות. הוא אקראי, חד-פעמי ובעל תוקף קצר.
+  const key = `auth_${randomBytes(16).toString("hex")}`;
+  await putChallenge(env, key, options.challenge);
+  return { options, challengeKey: key };
+});
+
+exports.passkeyLoginVerify = onCall({ region: REGION }, async (request) => {
+  const env = envOf(request.data);
+  const { rpID, origin } = resolveRp(request.data && request.data.origin);
+  const key = String((request.data && request.data.challengeKey) || "");
+  if (!key.startsWith("auth_")) throw new HttpsError("invalid-argument", "בקשה לא תקינה.");
+
+  const expectedChallenge = await takeChallenge(env, key);
+  const credentialId = String(request.data.credential && request.data.credential.id);
+  const snap = await passkeyCol(env).doc(credentialId).get();
+  if (!snap.exists) throw new HttpsError("not-found", "המכשיר אינו רשום.");
+
+  const stored = snap.data();
+  const verification = await verifyAuthenticationResponse({
+    response: request.data.credential,
+    expectedChallenge,
+    expectedOrigin: origin,
+    expectedRPID: rpID,
+    requireUserVerification: true,
+    credential: {
+      id: credentialId,
+      publicKey: Buffer.from(stored.publicKey, "base64url"),
+      counter: stored.counter || 0,
+      transports: stored.transports || undefined,
+    },
+  });
+
+  if (!verification.verified) {
+    throw new HttpsError("permission-denied", "האימות נכשל.");
+  }
+
+  //  מונה עולה מגלה שכפול של מפתח. שמירה שלו היא חלק מהתקן.
+  await snap.ref.update({
+    counter: verification.authenticationInfo.newCounter,
+    lastUsedAt: FieldValue.serverTimestamp(),
+  });
+
+  return { token: await auth.createCustomToken(stored.userId) };
+});
+
+exports.passkeyList = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+  const env = envOf(request.data);
+  const snap = await passkeyCol(env).where("userId", "==", uid).get();
+  return {
+    passkeys: snap.docs.map((d) => ({
+      id: d.id,
+      label: d.get("label") || "",
+      createdAt: d.get("createdAt") ? d.get("createdAt").toDate().toISOString() : null,
+      lastUsedAt: d.get("lastUsedAt") ? d.get("lastUsedAt").toDate().toISOString() : null,
+    })),
+  };
+});
+
+exports.passkeyDelete = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+  const env = envOf(request.data);
+  const id = String((request.data && request.data.credentialId) || "");
+  const ref = passkeyCol(env).doc(id);
+  const snap = await ref.get();
+  //  מחיקה רק של מפתח ששייך לפונה. בלי הבדיקה כל משתמש היה יכול למחוק
+  //  את הכניסה המהירה של אחרים.
+  if (!snap.exists || snap.get("userId") !== uid) {
+    throw new HttpsError("not-found", "המכשיר לא נמצא.");
+  }
+  await ref.delete();
+  return { ok: true };
 });
 
 /* =============================================================================

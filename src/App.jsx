@@ -6999,7 +6999,10 @@ const INITIAL_RESET_TOKEN = captureResetToken();
     מכאן מסיר את המסך באמצע ההנפשה, וארוך ממנו משאיר שכבה שקופה תקועה מעל
     הדשבורד אחרי שהיא כבר בלתי נראית.  */
 const BOOT_FADE_MS = 500;
-const BOOT_FAILSAFE_MS = 15_000;
+/*  רשת ביטחון בלבד, לא זמן טעינה צפוי. טעינה ראשונה של חתונה אמיתית
+    (‎595 מוזמנים) נמדדה ב-24–31 שניות, ולכן ערך נמוך מדי הבהב הודעת
+    שגיאה שנייה לפני שהנתונים הגיעו. 60 שניות תופסות רק תקיעה אמיתית.  */
+const BOOT_FAILSAFE_MS = 60_000;
 
 /*  מסך הטעינה של האפליקציה. הוא ממשיך ויזואלית את מסך הפתיחה שב-index.html,
     כך שהמעבר מה-HTML הסטטי ל-React אינו נראה כמו קפיצה. אחרי כמה שניות
@@ -7092,11 +7095,18 @@ export default function App() {
     (authReady && (!session || initialDataReady));
   const [bootMounted, setBootMounted] = useState(!bootDone);
 
+  /*  שני הכיוונים באותו effect. הכניסה למערכת מחזירה את bootDone ל-false
+      (יש סשן, הנתונים עוד לא נטענו), ואם המסך לא מורכב מחדש נשאר מסך לבן
+      ריק עד שהנתונים מגיעים — כי בשלב הזה גם התוכן עדיין null.  */
   useEffect(() => {
-    if (!bootDone || !bootMounted) return;
+    if (!bootDone) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBootMounted(true);
+      return;
+    }
     const t = setTimeout(() => setBootMounted(false), BOOT_FADE_MS);
     return () => clearTimeout(t);
-  }, [bootDone, bootMounted]);
+  }, [bootDone]);
 
   useEffect(() => {
     if (bootDone || !isCloudConfigured || resetToken) return;

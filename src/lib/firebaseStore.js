@@ -22,11 +22,12 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  deleteField,
   arrayUnion,
   arrayRemove,
   serverTimestamp,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
 import {
   db,
@@ -575,18 +576,20 @@ export async function listVendorFiles(weddingId) {
   requireWeddingId(weddingId);
   requireAuth();
   const snap = await getDocs(weddingCol(weddingId, "files"));
-  return snap.docs.map((d) => {
-    const f = d.data();
-    return {
-      id: d.id,
-      vendorId: f.vendorId == null ? null : Number(f.vendorId),
-      name: f.name ?? "",
-      mime: f.mime ?? "application/octet-stream",
-      size: Number(f.size) || 0,
-      storagePath: f.storagePath ?? "",
-      createdAt: toIso(f.createdAt),
-    };
-  });
+  return snap.docs
+    .map((d) => d.data())
+    .filter(isAlive)
+    .map((f) => {
+      return {
+        id: f.id,
+        vendorId: f.vendorId == null ? null : Number(f.vendorId),
+        name: f.name ?? "",
+        mime: f.mime ?? "application/octet-stream",
+        size: Number(f.size) || 0,
+        storagePath: f.storagePath ?? "",
+        createdAt: toIso(f.createdAt),
+      };
+    });
 }
 
 export async function uploadVendorFile(weddingId, vendorId, file) {
@@ -614,23 +617,28 @@ export async function uploadVendorFile(weddingId, vendorId, file) {
   return { ...record, createdAt: new Date().toISOString() };
 }
 
+/**
+ * מחיקה רכה בלבד — הקובץ עצמו נשאר ב-Storage.
+ *
+ * קודם המחיקה הייתה קשה ובלתי הפיכה: מחיקת ספק מחקה את כל
+ * החוזים שלו מהאחסון, בעוד הספק עצמו נמחק רכה וניתן לשחזור.
+ * לבוקט אין גרסאות, ולכן לא הייתה שום דרך חזרה.
+ */
 export async function deleteVendorFile(weddingId, fileId) {
   requireWeddingId(weddingId);
   requireAuth();
+  await updateDoc(doc(weddingCol(weddingId, "files"), fileId), {
+    deletedAt: serverTimestamp(),
+  });
+}
 
-  const snap = await getDoc(doc(weddingCol(weddingId, "files"), fileId));
-  const path = snap.exists() ? snap.data().storagePath : null;
-
-  //  קודם המסמך ואז הקובץ: אם המחיקה מ-Storage תיכשל נשארת רק פסולת
-  //  שקטה, ולא רשומה שמצביעה לקובץ שכבר לא קיים.
-  await deleteDoc(doc(weddingCol(weddingId, "files"), fileId));
-  if (path) {
-    try {
-      await deleteObject(ref(storage, path));
-    } catch {
-      /* הקובץ כבר לא שם — אין מה לתקן */
-    }
-  }
+/** מבטל מחיקה של קובץ. */
+export async function restoreVendorFile(weddingId, fileId) {
+  requireWeddingId(weddingId);
+  requireAuth();
+  await updateDoc(doc(weddingCol(weddingId, "files"), fileId), {
+    deletedAt: deleteField(),
+  });
 }
 
 /**

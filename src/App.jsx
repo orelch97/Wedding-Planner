@@ -127,6 +127,7 @@ import {
   listVendorFiles,
   uploadVendorFile,
   deleteVendorFile,
+  restoreVendorFile,
   vendorFileUrl,
   subscribeCollection,
   MAX_FILE_BYTES,
@@ -2104,12 +2105,16 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   // Live refs so stable callbacks (memoized rows) can read current data.
   const guestsRef = useRef(guests);
   const tablesRef = useRef(tables);
+  const categoriesRef = useRef(categories);
   useEffect(() => {
     guestsRef.current = guests;
   }, [guests]);
   useEffect(() => {
     tablesRef.current = tables;
   }, [tables]);
+  useEffect(() => {
+    categoriesRef.current = categories;
+  }, [categories]);
 
   const totals = useMemo(() => {
     const notDeclined = guests.filter((g) => g.rsvp !== "declined");
@@ -2315,10 +2320,35 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   }, [setCategories, setGuests]);
 
   const deleteCategory = useCallback((name, fallback) => {
+    const prevCategories = categoriesRef.current;
+    const idx = prevCategories.indexOf(name);
+    //  אילו רשומות באמת שויכו מחדש — רק הן יחזרו לקטגוריה המקורית בביטול.
+    const moved = guestsRef.current.filter((g) => g.category === name).map((g) => g.id);
     setCategories((prev) => prev.filter((c) => c !== name));
     setGuests((prev) =>
       prev.map((g) => (g.category === name ? { ...g, category: fallback } : g))
     );
+    notify(`הקטגוריה “${name}” נמחקה`, {
+      tone: "success",
+      duration: 8000,
+      action: {
+        label: "בטל מחיקה",
+        onClick: () => {
+          setCategories((prev) => {
+            if (prev.includes(name)) return prev;
+            const arr = [...prev];
+            arr.splice(Math.min(idx < 0 ? arr.length : idx, arr.length), 0, name);
+            return arr;
+          });
+          if (moved.length) {
+            const back = new Set(moved);
+            setGuests((prev) =>
+              prev.map((g) => (back.has(g.id) ? { ...g, category: name } : g))
+            );
+          }
+        },
+      },
+    });
   }, [setCategories, setGuests]);
 
   const updateName = useCallback((id, name) => {
@@ -2444,12 +2474,43 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       tone: "danger",
     });
     if (!ok) return;
+    //  צילום מצב לפני המחיקה: השחזור חייב להחזיר גם את השיבוץ לשולחנות,
+    //  אחרת "בטל מחיקה" מחזיר רשומות שאיבדו את המקום שלהן.
+    const removed = guestsRef.current.filter((g) => ids.has(g.id));
+    const seating = tablesRef.current.map((t) => ({
+      id: t.id,
+      guestIds: t.guestIds.filter((gid) => ids.has(gid)),
+    }));
     setGuests((prev) => prev.filter((g) => !ids.has(g.id)));
     setTables((prev) =>
       prev.map((t) => ({ ...t, guestIds: t.guestIds.filter((gid) => !ids.has(gid)) }))
     );
     setSelectedIds(new Set());
-    notify(`${ids.size} רשומות נמחקו`, { tone: "success" });
+    notify(`${ids.size} רשומות נמחקו`, {
+      tone: "success",
+      duration: 8000,
+      action: {
+        label: "בטל מחיקה",
+        onClick: () => {
+          setGuests((prev) => {
+            const have = new Set(prev.map((g) => g.id));
+            const back = removed.filter((g) => !have.has(g.id));
+            return back.length ? [...prev, ...back] : prev;
+          });
+          setTables((prev) =>
+            prev.map((t) => {
+              const restore = seating.find((s) => s.id === t.id);
+              if (!restore || !restore.guestIds.length) return t;
+              const have = new Set(t.guestIds);
+              return {
+                ...t,
+                guestIds: [...t.guestIds, ...restore.guestIds.filter((g) => !have.has(g))],
+              };
+            })
+          );
+        },
+      },
+    });
   }, [selectedIds, setGuests, setTables]);
 
   const bulkRsvp = useCallback(
@@ -4051,7 +4112,23 @@ function Seating({ guests, tables, setTables }) {
       confirmLabel: "מחק שולחן",
       tone: "danger",
     }).then((ok) => {
-      if (ok) setTables((prev) => prev.filter((t) => t.id !== tableId));
+      if (!ok) return;
+      const idx = tables.findIndex((x) => x.id === tableId);
+      setTables((prev) => prev.filter((x) => x.id !== tableId));
+      notify(`השולחן “${t?.name || ""}” נמחק`, {
+        tone: "success",
+        duration: 8000,
+        action: {
+          label: "בטל מחיקה",
+          onClick: () =>
+            setTables((prev) => {
+              if (prev.some((x) => x.id === tableId)) return prev;
+              const arr = [...prev];
+              arr.splice(Math.min(idx, arr.length), 0, t);
+              return arr;
+            }),
+        },
+      });
     });
   }
 
@@ -4568,13 +4645,29 @@ function Checklist({ items, setItems }) {
 
   async function remove(id) {
     const item = items.find((i) => i.id === id);
+    const idx = items.findIndex((i) => i.id === id);
     const ok = await confirmDialog({
       title: "מחיקת משימה",
       message: `למחוק את "${item?.title ?? ""}" מהצ׳קליסט?`,
       confirmLabel: "מחיקה",
       tone: "danger",
     });
-    if (ok) setItems((prev) => prev.filter((i) => i.id !== id));
+    if (!ok) return;
+    setItems((prev) => prev.filter((i) => i.id !== id));
+    notify(`“${item?.title ?? ""}” נמחקה`, {
+      tone: "success",
+      duration: 8000,
+      action: {
+        label: "בטל מחיקה",
+        onClick: () =>
+          setItems((prev) => {
+            if (prev.some((i) => i.id === id)) return prev;
+            const arr = [...prev];
+            arr.splice(Math.min(idx, arr.length), 0, item);
+            return arr;
+          }),
+      },
+    });
   }
 
   function addItem(e) {
@@ -5000,13 +5093,47 @@ function Vendors({
       //  setOpenId מחושב מראש ולא מתוך ה-updater של setVendors: עדכון state
       //  של קומפוננטה אחת בתוך updater של אחרת מפיק אזהרת React ועלול
       //  להישבר בגרסאות עתידיות.
+      const idx = vendors.findIndex((v) => v.id === id);
       const remaining = vendors.filter((v) => v.id !== id);
       setVendors(remaining);
       setOpenId((cur) => (cur === id ? remaining[0]?.id ?? null : cur));
       //  אותו שיקול של מיחזור מזהים: סעיף שנשאר מאחוריו היה נראה
       //  כשייך לספק הבא שיקבל את אותו מספר.
-      if (setBudget) setBudget((prev) => prev.filter((b) => b.vendorId !== id));
-      notify("הספק נמחק", { tone: "success" });
+      const budgetRows = [];
+      if (setBudget)
+        setBudget((prev) => {
+          budgetRows.push(...prev.filter((b) => b.vendorId === id));
+          return prev.filter((b) => b.vendorId !== id);
+        });
+
+      notify(`הספק “${vendor?.name || ""}” נמחק`, {
+        tone: "success",
+        duration: 8000,
+        action: {
+          label: "בטל מחיקה",
+          onClick: async () => {
+            setVendors((prev) => {
+              if (prev.some((v) => v.id === id)) return prev;
+              const arr = [...prev];
+              arr.splice(Math.min(idx, arr.length), 0, vendor);
+              return arr;
+            });
+            if (budgetRows.length)
+              setBudget((prev) =>
+                prev.some((b) => b.vendorId === id) ? prev : [...prev, ...budgetRows]
+              );
+            for (const f of attached) {
+              try {
+                await restoreVendorFile(weddingId, f.id);
+              } catch (err) {
+                console.error("Failed to restore vendor file:", err);
+              }
+            }
+            if (attached.length) reloadFiles();
+            setOpenId(id);
+          },
+        },
+      });
     });
   }
 
@@ -5474,15 +5601,30 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
   async function remove(file) {
     const ok = await confirmDialog({
       title: `למחוק את “${file.name}”?`,
-      message: "הקובץ יימחק לצמיתות ולא ניתן יהיה לשחזר אותו.",
+      message: "הקובץ יוסר מרשימת הקבצים של הספק. אפשר לבטל מיד אחרי המחיקה.",
       confirmLabel: "מחיקה",
       tone: "danger",
     });
     if (!ok) return;
     try {
       await deleteVendorFile(weddingId, file.id);
-      notify("הקובץ נמחק", { tone: "success" });
       onChanged();
+      notify(`“${file.name}” נמחק`, {
+        tone: "success",
+        duration: 8000,
+        action: {
+          label: "בטל מחיקה",
+          onClick: async () => {
+            try {
+              await restoreVendorFile(weddingId, file.id);
+              onChanged();
+            } catch (err) {
+              console.error(err);
+              notify("שחזור הקובץ נכשל", { tone: "error" });
+            }
+          },
+        },
+      });
     } catch (err) {
       console.error(err);
       notify("מחיקת הקובץ נכשלה", { tone: "error" });
@@ -5833,11 +5975,27 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
     }
     confirmDialog({
       title: `למחוק את הסעיף “${b?.category || ""}”?`,
-      message: "סעיף התקציב יוסר לצמיתות.",
+      message: "סעיף התקציב יוסר מהרשימה. אפשר לבטל מיד אחרי המחיקה.",
       confirmLabel: "מחק סעיף",
       tone: "danger",
     }).then((ok) => {
-      if (ok) setBudget((prev) => prev.filter((b) => b.id !== id));
+      if (!ok) return;
+      const idx = budget.findIndex((x) => x.id === id);
+      setBudget((prev) => prev.filter((x) => x.id !== id));
+      notify(`הסעיף “${b?.category || ""}” נמחק`, {
+        tone: "success",
+        duration: 8000,
+        action: {
+          label: "בטל מחיקה",
+          onClick: () =>
+            setBudget((prev) => {
+              if (prev.some((x) => x.id === id)) return prev;
+              const arr = [...prev];
+              arr.splice(Math.min(idx, arr.length), 0, b);
+              return arr;
+            }),
+        },
+      });
     });
   }
 

@@ -111,14 +111,25 @@ exports.getAdminStats = onCall({ region: REGION }, async (request) => {
   }
 
   const weddings = await envRoot("prod").collection("weddings").get();
-  const cutoff = new Date(Date.now() - 10 * 60 * 1000);
-  const active = await db
-    .collectionGroup("members")
-    .where("lastSeenAt", ">", cutoff)
-    .get();
-  const userIds = new Set(active.docs.map((snap) => snap.id));
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  const active = new Set();
 
-  return { weddings: weddings.size, activeUsers: userIds.size };
+  //  מעבר על החתונות ולא collectionGroup: שאילתה חוצת-אוספים על
+  //  members.lastSeenAt דורשת אינדקס חריג שצריך לתחזק בנפרד, ומספר
+  //  החתונות כאן קטן מכדי להצדיק אותו.
+  await Promise.all(
+    weddings.docs.map(async (wedding) => {
+      const members = await wedding.ref.collection("members").get();
+      for (const member of members.docs) {
+        const seen = member.get("lastSeenAt");
+        if (seen && typeof seen.toMillis === "function" && seen.toMillis() > cutoff) {
+          active.add(member.id);
+        }
+      }
+    })
+  );
+
+  return { weddings: weddings.size, activeUsers: active.size };
 });
 
 /* =============================================================================

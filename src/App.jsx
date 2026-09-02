@@ -7013,8 +7013,10 @@ async function signOutAndWipe() {
 
 export default function App() {
   const [authReady, setAuthReady] = useState(!isCloudConfigured);
+  const [initialDataReady, setInitialDataReady] = useState(!isCloudConfigured);
   const [session, setSession] = useState(null);
   const [resetToken, setResetToken] = useState(INITIAL_RESET_TOKEN);
+  const handleInitialDataReady = useCallback(() => setInitialDataReady(true), []);
 
   useEffect(() => {
     if (!isCloudConfigured) return;
@@ -7034,7 +7036,8 @@ export default function App() {
 
   /*  מי שהגיע מקישור איפוס סיסמה מדלג על מסך הטעינה: המסך שלו מוכן מיד
       ואינו ממתין לסשן, ולכן אין מה לכסות.  */
-  const bootDone = !isCloudConfigured || authReady || Boolean(resetToken);
+  const bootDone =
+    !isCloudConfigured || Boolean(resetToken) || (authReady && (!session || initialDataReady));
   const [bootMounted, setBootMounted] = useState(!bootDone);
 
   useEffect(() => {
@@ -7064,7 +7067,7 @@ export default function App() {
       </StoragePrefixContext.Provider>
     );
   } else {
-    content = <WeddingShell session={session} />;
+    content = <WeddingShell session={session} onInitialDataReady={handleInitialDataReady} />;
   }
 
   return (
@@ -7530,7 +7533,7 @@ function ResetPasswordScreen({ token, onDone }) {
  *  ובוחר את החתונה הפעילה. מרנדר את WeddingApp עם key ייחודי לכל צירוף
  *  משתמש+חתונה, כך שכל המצב (וה-localStorage שמאחוריו) מתאפס בהחלפה.
  * ---------------------------------------------------------------------- */
-function WeddingShell({ session }) {
+function WeddingShell({ session, onInitialDataReady }) {
   const userId = session.user.id;
   const activeKey = `${STORAGE_ROOT}${userId}:activeWeddingId`;
 
@@ -7585,6 +7588,7 @@ function WeddingShell({ session }) {
         if (cancelled) return;
         setRetrying(false);
         setWeddings(list);
+        onInitialDataReady?.();
         setActiveWeddingId((cur) => {
           if (target && list.some((w) => w.id === target)) return target;
           if (cur && list.some((w) => w.id === cur)) return cur;
@@ -7610,6 +7614,7 @@ function WeddingShell({ session }) {
         }
 
         setRetrying(false);
+        onInitialDataReady?.();
         setError(
           transient
             ? "המערכת עדיין מתעוררת. המתינו רגע ונסו שוב."
@@ -7622,7 +7627,7 @@ function WeddingShell({ session }) {
       if (timer) clearTimeout(timer);
     };
     //  attempt בכוונה ברשימה — הגדלתו היא שמפעילה ניסיון טעינה נוסף.
-  }, [attempt]);
+  }, [attempt, onInitialDataReady]);
 
   useEffect(() => {
     try {
@@ -7666,14 +7671,7 @@ function WeddingShell({ session }) {
   }
 
   if (weddings === null) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3">
-        <Loader2 className="animate-spin text-gold-500" size={32} />
-        {retrying && (
-          <p className="text-xs text-slate-400">המערכת מתעוררת, עוד רגע…</p>
-        )}
-      </div>
-    );
+    return null;
   }
 
   const activeWedding = weddings.find((w) => w.id === activeWeddingId) ?? null;

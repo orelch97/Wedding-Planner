@@ -18,7 +18,7 @@ import { loadEnv } from "../server/env.mjs";
 loadEnv();
 
 const sa = JSON.parse(readFileSync("./firebase-service-account.json", "utf8"));
-const APP_URL = (process.argv[2] || process.env.APP_URL || "https://wedding-planner-vixy.onrender.com")
+const APP_URL = (process.argv[2] || process.env.APP_URL || "https://wedding-planner-web.onrender.com")
   .replace(/\/+$/, "");
 
 const now = Math.floor(Date.now() / 1000);

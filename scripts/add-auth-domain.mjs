@@ -6,7 +6,7 @@ import { loadEnv } from "../server/env.mjs";
 loadEnv();
 
 const sa = JSON.parse(readFileSync("./firebase-service-account.json", "utf8"));
-const host = new URL(process.argv[2] || "https://wedding-planner-vixy.onrender.com").hostname;
+const host = new URL(process.argv[2] || "https://wedding-planner-web.onrender.com").hostname;
 
 const now = Math.floor(Date.now() / 1000);
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");

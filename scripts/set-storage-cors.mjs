@@ -21,11 +21,15 @@ const sa = JSON.parse(readFileSync("./firebase-service-account.json", "utf8"));
 const bucket = process.env.FIREBASE_STORAGE_BUCKET;
 
 //  APP_URL מאפשר להוסיף את דומיין הייצור בלי לגעת בקוד.
+//  שתי כתובות הייצור רשומות במפורש כדי שהרשימה תישאר נכונה גם כשהסקריפט
+//  רץ בלי APP_URL: הראשונה היא הכניסה הראשית, והשנייה היא הכתובת הישנה
+//  שממשיכה להגיש עותק של הממשק כדי שקישורים שכבר נשלחו לא יישברו.
 const origins = [
   "http://localhost:5173",
   "http://localhost:5176",
   "http://localhost:4173",
   process.env.APP_URL,
+  "https://wedding-planner-web.onrender.com",
   "https://wedding-planner-vixy.onrender.com",
 ].filter(Boolean);
 

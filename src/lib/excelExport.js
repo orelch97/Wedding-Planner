@@ -47,6 +47,7 @@ export function buildSheets({
   tables = [],
   vendors = [],
   budget = [],
+  checklist = [],
   budgetGoal = 0,
 } = {}) {
   const guestById = new Map(guests.map((g) => [g.id, g]));
@@ -260,7 +261,29 @@ export function buildSheets({
     ],
   };
 
-  return [guestsSheet, vendorsSheet, seatingSheet, budgetSheet];
+  /* ── גיליון 5: צ׳קליסט ────────────────────────────── */
+  //  המשימות היו עד כה רק בגיליון השחזור, כלומר לא ניתנו
+  //  לקריאה בקובץ שהזוג פותח באקסל.
+  const assigneeLabel = { both: "שניהם", bride: "כלה", groom: "חתן" };
+  const checklistSheet = {
+    name: "צ׳קליסט",
+    columns: [
+      { header: "מס׳", key: "id", width: 8 },
+      { header: "משימה", key: "title", width: 44 },
+      { header: "קטגוריה", key: "category", width: 20 },
+      { header: "אחראי", key: "assignee", width: 12 },
+      { header: "הושלם", key: "done", width: 10 },
+    ],
+    rows: checklist.map((c) => ({
+      id: num(c.id),
+      title: text(c.title),
+      category: text(c.category || "כללי"),
+      assignee: assigneeLabel[c.assignee] || assigneeLabel.both,
+      done: yesNo(c.done),
+    })),
+  };
+
+  return [guestsSheet, vendorsSheet, seatingSheet, budgetSheet, checklistSheet];
 }
 
 /** שם קובץ בטוח: בלי תווים שאסורים במערכות קבצים ובלי רווחים כפולים. */

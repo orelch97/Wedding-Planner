@@ -8526,7 +8526,7 @@ function WeddingApp({
     setExcelBusy(true);
     try {
       await exportWeddingWorkbook(
-        { guests, tables, vendors, budget, budgetGoal, backup: backupPayload() },
+        { guests, tables, vendors, budget, checklist, budgetGoal, backup: backupPayload() },
         coupleTitle || activeWedding?.name
       );
       notify("קובץ האקסל הורד", { tone: "success" });

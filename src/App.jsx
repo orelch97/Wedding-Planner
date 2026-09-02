@@ -3585,16 +3585,19 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                   לא סימנתי — תעריכו בשבילי
                 </span>
                 <span className="mt-1.5 flex flex-wrap items-center gap-2">
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={percent}
-                    onChange={(e) => setPercent(e.target.value)}
-                    onFocus={() => setSource("percent")}
-                    className={fieldNarrow}
-                    aria-label="אחוז האורחים ששותים אלכוהול"
-                  />
+                  <span className="relative inline-flex items-center">
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={percent}
+                      onChange={(e) => setPercent(e.target.value)}
+                      onFocus={() => setSource("percent")}
+                      className={`${fieldNarrow} pe-8`}
+                      aria-label="אחוז האורחים ששותים אלכוהול"
+                    />
+                    <span className="pointer-events-none absolute end-2 text-sm font-semibold text-gold-600">%</span>
+                  </span>
                   <span className="text-sm text-slate-600">מהאורחים שותים</span>
                 </span>
                 {/*  ההסבר המילולי חשוב יותר מהמספר עצמו: בלעדיו אי אפשר
@@ -7213,7 +7216,7 @@ function LoginScreen() {
         //  נוסח מכוון-מעורפל: השרת לא מסגיר אם הכתובת רשומה, ולכן גם
         //  ההודעה כאן לא יכולה לאשר זאת.
         setInfo(
-          "אם הכתובת רשומה במערכת, נשלח אליה קישור לאיפוס הסיסמה. הקישור תקף לשעה."
+          "קישור לאיפוס סיסמא נשלח! אנא בדקו גם את תיבת הדואר הזבל (Spam) שלכם. הקישור תקף לשעה."
         );
         setPassword("");
       } else if (signup) {
@@ -7567,7 +7570,6 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
   //  על השנייה. בלי הניסיון החוזר המשתמש נתקע במסך שגיאה שהמוצא היחיד
   //  ממנו הוא יציאה מהחשבון — והוא לא אמור לדעת שמדובר במסד שמתעורר.
   const [attempt, setAttempt] = useState(0);
-  const [retrying, setRetrying] = useState(false);
 
   const retry = useCallback(() => {
     setError("");
@@ -7603,7 +7605,6 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
         //  החתונה שלכם" מהבהב למי שכבר יש לו חתונה.
         const list = await listWeddings();
         if (cancelled) return;
-        setRetrying(false);
         setWeddings(list);
         onInitialDataReady?.();
         setActiveWeddingId((cur) => {
@@ -7625,12 +7626,10 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
           err?.code === "timeout";
 
         if (transient && attempt < 3) {
-          setRetrying(true);
           timer = setTimeout(() => setAttempt((n) => n + 1), 2000 * 2 ** attempt);
           return;
         }
 
-        setRetrying(false);
         onInitialDataReady?.();
         setError(
           transient
@@ -8705,6 +8704,7 @@ function WeddingApp({
           couple={couple}
           weddingDate={activeWedding?.weddingDate}
           budgetGoal={budgetGoal}
+          currentUserId={session?.user?.id ?? null}
           canEditBasics={cloudEnabled ? isOwner : true}
           canEditBudgetGoal={canEdit && mayFinance}
           showDate={cloudEnabled}
@@ -9307,10 +9307,99 @@ function ScopePicker({ scopes, onChange, idPrefix }) {
  * (כפתור "שינוי תאריך" באמצע הדאשבורד, עריכת שמות בכותרת), וזה גם הסתיר
  * אותם וגם הפריע לשימוש היומיומי.
  */
+function ShareAppPanel() {
+  const [installPrompt, setInstallPrompt] = useState(null);
+
+  useEffect(() => {
+    const capturePrompt = (event) => {
+      event.preventDefault();
+      setInstallPrompt(event);
+    };
+    window.addEventListener("beforeinstallprompt", capturePrompt);
+    return () => window.removeEventListener("beforeinstallprompt", capturePrompt);
+  }, []);
+
+  async function shareApp() {
+    const shareData = {
+      title: "תכנון החתונה שלי",
+      text: "מערכת נעימה ופשוטה לתכנון חתונה יחד",
+      url: window.location.origin,
+    };
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+        return;
+      }
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareData.url);
+      } else {
+        const field = document.createElement("textarea");
+        field.value = shareData.url;
+        field.setAttribute("readonly", "");
+        field.style.position = "fixed";
+        field.style.opacity = "0";
+        document.body.appendChild(field);
+        field.select();
+        document.execCommand("copy");
+        field.remove();
+      }
+      notify("הקישור הועתק — אפשר לשלוח לחברים", { tone: "success" });
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      notify("לא הצלחנו לשתף. העתיקו את כתובת האתר מהדפדפן.", { tone: "error" });
+    }
+  }
+
+  async function installApp() {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    setInstallPrompt(null);
+  }
+
+  return (
+    <div className="rounded-2xl bg-gold-50/70 p-3.5 ring-1 ring-gold-200">
+      <div className="flex items-start gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-gold-600 shadow-sm">
+          <Share2 size={17} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-slate-700">שתפו את המערכת</p>
+          <p className="mt-1 text-[11px] leading-5 text-slate-500">
+            שלחו לחברים מאורסים קישור לתכנון מסודר של החתונה.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={shareApp}
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-gold-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-gold-600"
+            >
+              <Share2 size={14} /> שתפו את האפליקציה
+            </button>
+            {installPrompt && (
+              <button
+                type="button"
+                onClick={installApp}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-sage-700 ring-1 ring-sage-200 transition hover:bg-sage-50"
+              >
+                <Smartphone size={14} /> הוספה למסך הבית
+              </button>
+            )}
+          </div>
+          <p className="mt-2 text-[11px] text-slate-400">
+            בנייד: פתחו את תפריט הדפדפן ובחרו “הוספה למסך הבית”.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WeddingSettingsModal({
   couple,
   weddingDate,
   budgetGoal,
+  currentUserId,
   canEditBasics,
   canEditBudgetGoal,
   showDate,
@@ -9331,6 +9420,22 @@ function WeddingSettingsModal({
   const [partnerBusy, setPartnerBusy] = useState(false);
   const [partnerMsg, setPartnerMsg] = useState("");
   const [partnerError, setPartnerError] = useState("");
+  const [linkedPartners, setLinkedPartners] = useState([]);
+
+  const loadLinkedPartners = useCallback(async () => {
+    if (!weddingId) return;
+    try {
+      const list = await listMembers(weddingId);
+      setLinkedPartners(list.filter((member) => member.userId !== currentUserId && member.email));
+    } catch {
+      setLinkedPartners([]);
+    }
+  }, [currentUserId, weddingId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadLinkedPartners();
+  }, [loadLinkedPartners]);
 
   async function addPartnerAccount() {
     const address = partnerEmail.trim();
@@ -9345,6 +9450,7 @@ function WeddingSettingsModal({
     try {
       const res = await addPartner(weddingId, address);
       setPartnerEmail("");
+      await loadLinkedPartners();
       setPartnerMsg(
         res?.alreadyMember
           ? `${res.email} כבר משותף/ת בחתונה הזו — לא בוצע שינוי.`
@@ -9544,6 +9650,25 @@ function WeddingSettingsModal({
                 נפרדת לאותה חתונה, עם גישה מלאה לכל המסכים. הסיסמה שלהם
                 נפרדת משלכם — אתם לא רואים אותה והם לא רואים את שלכם.
               </p>
+              {linkedPartners.length > 0 && (
+                <div className="mt-3 space-y-1.5">
+                  <p className="text-[11px] font-semibold text-slate-500">שותפים עם גישה לחתונה</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {linkedPartners.map((member) => (
+                      <span
+                        key={member.userId}
+                        className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-[11px] text-slate-600 ring-1 ring-sage-200"
+                        dir="ltr"
+                      >
+                        <UserCheck size={12} className="shrink-0 text-sage-500" />
+                        <span className="truncate">{member.email}</span>
+                      </span>
+                    ))}
+
+                    <ShareAppPanel />
+                  </div>
+                </div>
+              )}
               {partnerMsg && (
                 <p className="mt-2 rounded-lg bg-sage-50 px-2.5 py-1.5 text-[11px] text-sage-700 ring-1 ring-sage-200">
                   {partnerMsg}

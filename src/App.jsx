@@ -751,9 +751,10 @@ function SplitLegendItem({ color, label, value }) {
   );
 }
 
-function Card({ children, className = "" }) {
+function Card({ children, className = "", style }) {
   return (
     <div
+      style={style}
       /*  רווח פנימי קטן יותר בנייד: ב-390px כל כרטיס ביזבז 40px מהרוחב
           ו-40px מהגובה רק על ריפוד, ויש עשרות כרטיסים במסך.  */
       className={`glass rounded-2xl p-3.5 shadow-[0_10px_40px_-15px_rgba(51,65,85,0.25)] sm:rounded-3xl sm:p-5 ${className}`}

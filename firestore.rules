@@ -105,6 +105,13 @@ service cloud.firestore {
           allow update: if isOwner(weddingId)
                         && request.resource.data.role in ['editor', 'viewer'];
 
+          //  נוכחות: כל חבר מסמן שהוא כאן, על השורה של עצמו בלבד ורק על
+          //  השדה הזה. בלי הכלל הזה גם הבעלים נחסם — הכלל שמעליו דורש
+          //  שהתפקיד החדש יהיה editor/viewer, ותפקידו הוא 'owner'.
+          allow update: if uid() == memberId
+                        && request.resource.data.diff(resource.data)
+                             .affectedKeys().hasOnly(['lastSeenAt']);
+
           //  הבעלים מסיר כל חבר; כל חבר מסיר את עצמו (עזיבה). שורת הבעלים
           //  מוגנת, כדי שלא יינעל מחוץ לחתונה שלו.
           allow delete: if (isOwner(weddingId) || uid() == memberId)

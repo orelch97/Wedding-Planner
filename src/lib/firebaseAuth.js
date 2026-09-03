@@ -16,7 +16,7 @@ import {
   sendPasswordResetEmail,
   confirmPasswordReset,
 } from "firebase/auth";
-import { doc, getDoc, setDoc, writeBatch, serverTimestamp } from "firebase/firestore";import { auth, db, firebaseConfigured, weddingRef, weddingCol, userRef } from "./firebase.js";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";import { auth, db, firebaseConfigured, weddingRef, weddingCol, userRef } from "./firebase.js";
 
 let currentSession = null;
 const listeners = new Set();
@@ -104,8 +104,10 @@ export async function signUp(
     joinedWeddingId = await acceptInvite(inviteToken);
   } else {
     const weddingId = crypto.randomUUID();
-    const batch = writeBatch(db);
-    batch.set(weddingRef(weddingId), {
+    /*  שתי כתיבות נפרדות ולא אצווה: כלל האבטחה על מסמך החברות עושה
+        `get()` על החתונה, ו-`get()` בכללים רואה רק מה שכבר נכתב. באצווה
+        החתונה עדיין לא קיימת כשהכלל נבדק, וכל הרשמה נדחתה.  */
+    await setDoc(weddingRef(weddingId), {
       id: weddingId,
       name: "החתונה שלי",
       weddingDate: weddingDate || null,
@@ -114,7 +116,7 @@ export async function signUp(
       ownerId: user.id,
       createdAt: serverTimestamp(),
     });
-    batch.set(doc(weddingCol(weddingId, "members"), user.id), {
+    await setDoc(doc(weddingCol(weddingId, "members"), user.id), {
       userId: user.id,
       email: user.email ?? "",
       ownerId: user.id,
@@ -123,7 +125,6 @@ export async function signUp(
       createdAt: serverTimestamp(),
       lastSeenAt: serverTimestamp(),
     });
-    await batch.commit();
     //  הרמז ש-listWeddings נשען עליו. בלעדיו המשתמש לא יראה את החתונה שלו.
     await setDoc(userRef(user.id), { weddingIds: [weddingId] }, { merge: true });
   }

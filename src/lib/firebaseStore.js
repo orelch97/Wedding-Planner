@@ -326,13 +326,23 @@ async function rememberWedding(weddingId) {
   await setDoc(userRef(user.uid), { weddingIds: arrayUnion(weddingId) }, { merge: true });
 }
 
-/** יוצר חתונה חדשה בבעלות המשתמש המחובר. */
+/**
+ * יוצר חתונה חדשה בבעלות המשתמש המחובר.
+ *
+ * שתי כתיבות נפרדות ולא writeBatch אחד. כלל האבטחה על מסמך החברות שואל
+ * `get()` על החתונה כדי לוודא שהיוצר הוא הבעלים, ו-`get()` בכללים קורא
+ * רק נתונים שכבר נכתבו. באצווה החתונה עדיין לא קיימת ברגע שהכלל נבדק,
+ * ולכן כל יצירת חתונה מהממשק נדחתה ב-permission-denied.
+ *
+ * המחיר הוא שהפעולה אינה אטומית: אם הכתיבה השנייה תיכשל תישאר חתונה בלי
+ * שורת חברות. היא בלתי נראית (listWeddings מדלג על חתונה בלי חברות),
+ * ולכן עדיף להשאיר אותה מאשר להיכשל ביצירה.
+ */
 export async function createWedding(name, date) {
   const user = requireAuth();
   const id = crypto.randomUUID();
 
-  const batch = writeBatch(db);
-  batch.set(weddingRef(id), {
+  await setDoc(weddingRef(id), {
     id,
     name: String(name || "").trim() || "החתונה שלי",
     weddingDate: date || null,
@@ -341,7 +351,8 @@ export async function createWedding(name, date) {
     ownerId: user.uid,
     createdAt: serverTimestamp(),
   });
-  batch.set(doc(weddingCol(id, "members"), user.uid), {
+
+  await setDoc(doc(weddingCol(id, "members"), user.uid), {
     userId: user.uid,
     email: user.email ?? "",
     ownerId: user.uid,
@@ -350,7 +361,7 @@ export async function createWedding(name, date) {
     createdAt: serverTimestamp(),
     lastSeenAt: serverTimestamp(),
   });
-  await batch.commit();
+
   await rememberWedding(id);
 
   const snap = await getDoc(weddingRef(id));

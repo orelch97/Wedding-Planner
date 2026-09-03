@@ -131,7 +131,7 @@ await wb.xlsx.load(buffer);
 eq(
   "הגיליונות לקריאה נשארו במקומם",
   wb.worksheets.map((w) => w.name),
-  ["מוזמנים", "ספקים", "סדר הושבה", "ניהול תקציב", BACKUP_SHEET_NAME]
+  ["מוזמנים", "ספקים", "סדר הושבה", "ניהול תקציב", "צ׳קליסט", BACKUP_SHEET_NAME]
 );
 eq("גיליון המוזמנים מלא", wb.getWorksheet("מוזמנים").rowCount, guests.length + 1);
 

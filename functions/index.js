@@ -23,6 +23,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getStorage } = require("firebase-admin/storage");
 const { randomBytes, createHash } = require("node:crypto");
 const {
   generateRegistrationOptions,
@@ -31,9 +32,10 @@ const {
   verifyAuthenticationResponse,
 } = require("@simplewebauthn/server");
 
-initializeApp();
+initializeApp({ storageBucket: "wedding-planner-c3d62.firebasestorage.app" });
 const db = getFirestore();
 const auth = getAuth();
+const storage = getStorage();
 
 //  חייב להתאים ל-getFunctions(app, "europe-west1") ב-src/lib/firebase.js,
 //  אחרת הקריאה מהלקוח מגיעה ל-404.
@@ -110,6 +112,31 @@ exports.syncMyClaims = onCall({ region: REGION }, async (request) => {
   return { weddingIds: await refreshWeddingClaims(env, uid) };
 });
 
+/** מחזיר את כל החתונות שבהן הפונה חבר. מקור האמת הוא members, לא user.weddingIds. */
+exports.listMyWeddings = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+  const env = envOf(request.data);
+  const candidates = await envRoot(env).collection("weddings").get();
+  const weddings = await Promise.all(
+    candidates.docs.map(async (wedding) => {
+      const membership = await wedding.ref.collection("members").doc(uid).get();
+      if (!membership.exists) return null;
+      const member = membership.data();
+      return {
+        id: wedding.id,
+        name: wedding.get("name") || "",
+        weddingDate: wedding.get("weddingDate") || null,
+        partnerA: wedding.get("partnerA") || "",
+        partnerB: wedding.get("partnerB") || "",
+        ownerId: wedding.get("ownerId") || "",
+        role: member.role || "viewer",
+        scopes: Array.isArray(member.scopes) && member.scopes.length ? member.scopes : ["all"],
+      };
+    })
+  );
+  return { weddings: weddings.filter(Boolean) };
+});
+
 exports.getAdminStats = onCall({ region: REGION }, async (request) => {
   requireAuth(request);
   if (String(request.auth.token.email || "").toLowerCase() !== "orelch97@gmail.com") {
@@ -139,6 +166,63 @@ exports.getAdminStats = onCall({ region: REGION }, async (request) => {
 });
 
 /* =============================================================================
+ *  deleteWedding — מחיקה לצמיתות של חתונה
+ * -----------------------------------------------------------------------------
+ *  הפעולה נשארת בצד השרת: מחיקת שורש Firestore לא מוחקת תת-אוספים, והדפדפן
+ *  גם אינו רשאי למחוק חתונה לפי הכללים. שם החתונה משמש אישור מפורש נוסף
+ *  מעבר לחלון האזהרה ב-UI, כדי שלא תוכל להיקרא בטעות ממסך אחר.
+ * ========================================================================== */
+
+exports.deleteWedding = onCall({ region: REGION, timeoutSeconds: 120 }, async (request) => {
+  const uid = requireAuth(request);
+  const env = envOf(request.data);
+  const weddingId = String((request.data && request.data.weddingId) || "");
+  const confirmationName = String((request.data && request.data.confirmationName) || "").trim();
+  if (!weddingId) throw new HttpsError("invalid-argument", "חסר מזהה חתונה.");
+
+  const wedding = await requireOwner(env, weddingId, uid);
+  const weddingName = String(wedding.name || "החתונה שלי").trim();
+  if (confirmationName !== weddingName) {
+    throw new HttpsError("failed-precondition", "שם החתונה אינו תואם לאישור המחיקה.");
+  }
+
+  const root = weddingRef(env, weddingId);
+  const [members, files, settings] = await Promise.all([
+    root.collection("members").get(),
+    root.collection("files").limit(1).get(),
+    root.collection("settings").doc("main").get(),
+  ]);
+  const memberIds = members.docs.map((member) => member.id);
+  const invites = await envRoot(env).collection("invites").where("weddingId", "==", weddingId).get();
+  const hasStorageAssets = !files.empty || Boolean(settings.get("countdownBackgroundUrl"));
+
+  //  ההזמנות חיות מחוץ לתת-העץ של החתונה, ולכן הן נמחקות בנפרד.
+  for (let start = 0; start < invites.docs.length; start += 450) {
+    const batch = db.batch();
+    for (const invite of invites.docs.slice(start, start + 450)) batch.delete(invite.ref);
+    await batch.commit();
+  }
+
+  //  מנקים לכל חבר את רמז החתונה ואת claim ה-Storage, לפני מחיקת החברות.
+  for (const memberId of memberIds) {
+    await envRoot(env).collection("users").doc(memberId).set(
+      { weddingIds: FieldValue.arrayRemove(weddingId) },
+      { merge: true }
+    );
+  }
+
+  //  מוחקים את הקבצים קודם. כשל באחסון חייב להשאיר את החתונה שלמה כדי
+  //  שלא ייווצר מצב שבו הנתונים נעלמו אבל קבצים פרטיים נותרו בבאקט.
+  if (hasStorageAssets) {
+    await storage.bucket().deleteFiles({ prefix: `${env}/weddings/${weddingId}/` });
+  }
+  await db.recursiveDelete(root);
+
+  await Promise.all(memberIds.map((memberId) => refreshWeddingClaims(env, memberId)));
+  return { ok: true };
+});
+
+/* =============================================================================
  *  Passkeys — כניסה עם Face ID / טביעת אצבע
  * -----------------------------------------------------------------------------
  *  WebAuthn מחליף סיסמה במפתח שנוצר במכשיר ולא עוזב אותו. הביומטריה עצמה
@@ -160,6 +244,7 @@ const ALLOWED_ORIGINS = {
   "https://wedding-planner-vixy.onrender.com": "wedding-planner-vixy.onrender.com",
   "http://localhost:4173": "localhost",
   "http://localhost:5173": "localhost",
+  "http://localhost:5174": "localhost",
 };
 
 function resolveRp(origin) {

@@ -342,7 +342,7 @@ const MAX_ATTEMPTS = 20;
  */
 function makeRateLimit(countAlways = false, extraCodes = []) {
   return function rateLimit(req, res, next) {
-    const key = req.ip || "unknown";
+    const key = `${req.ip || "unknown"}:${req.path}`;
     const now = Date.now();
     const entry = attempts.get(key);
 

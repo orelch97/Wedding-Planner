@@ -135,6 +135,7 @@ export async function uploadCountdownBackground(weddingId, file) {
   if (!file?.type?.startsWith("image/")) throw new Error("image_required");
   if (file.size > 8 * 1024 * 1024) throw new Error("file_too_large");
 
+  await syncStorageClaims();
   const path = `${FIREBASE_ENV}/weddings/${weddingId}/countdown-background`;
   await uploadBytes(ref(storage, path), file, { contentType: file.type });
   const url = await getDownloadURL(ref(storage, path));
@@ -294,6 +295,17 @@ function mapWedding(data, membership) {
  */
 export async function listWeddings() {
   const user = requireAuth();
+
+  try {
+    const result = await callListMyWeddings({});
+    const weddings = Array.isArray(result?.weddings) ? result.weddings : [];
+    weddings.sort((a, b) => String(a.name).localeCompare(String(b.name), "he"));
+    return weddings;
+  } catch {
+    //  בזמן פיתוח מקומי או פריסה מדורגת הפונקציה עדיין עשויה לא להיות זמינה
+    //  (הדפדפן מדווח עליה לעתים כ-CORS/internal). כניסה למערכת אינה תלויה
+    //  בשיפור הזה, ולכן תמיד נופלים בחזרה לרשימת הרמזים הקיימת.
+  }
 
   const me = await getDoc(userRef(user.uid));
   const ids = me.exists() && Array.isArray(me.data().weddingIds) ? me.data().weddingIds : [];
@@ -460,9 +472,17 @@ const callCreateInvite = callable("createInvite");
 const callAcceptInvite = callable("acceptInvite");
 const callSyncClaims = callable("syncMyClaims");
 const callAdminStats = callable("getAdminStats");
+const callListMyWeddings = callable("listMyWeddings");
+const callDeleteWedding = callable("deleteWedding");
 
 export async function getAdminStats() {
   return callAdminStats({});
+}
+
+/** מוחק לצמיתות חתונה שבבעלות המשתמש, את נתוניה ואת קבציה. */
+export async function deleteWedding(weddingId, confirmationName) {
+  requireWeddingId(weddingId);
+  return callDeleteWedding({ weddingId, confirmationName: String(confirmationName || "").trim() });
 }
 
 /**
@@ -608,6 +628,7 @@ export async function uploadVendorFile(weddingId, vendorId, file) {
   requireAuth();
   if (file.size > MAX_FILE_BYTES) throw new Error("file_too_large");
 
+  await syncStorageClaims();
   const id = crypto.randomUUID();
   const path = storagePathFor(FIREBASE_ENV, weddingId, id, file.name);
 

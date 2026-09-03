@@ -21,7 +21,7 @@ import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore, collection, doc } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
-import { getFunctions } from "firebase/functions";
+import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
 
 const config = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -61,6 +61,9 @@ export const db = app ? getFirestore(app) : null;
 export const storage = app ? getStorage(app) : null;
 //  האזור חייב להתאים לזה שב-functions/index.js, אחרת הקריאה מגיעה ל-404.
 export const functions = app ? getFunctions(app, "europe-west1") : null;
+if (functions && import.meta.env.DEV) {
+  connectFunctionsEmulator(functions, "localhost", 5001);
+}
 
 function requireDb() {
   if (!db) {

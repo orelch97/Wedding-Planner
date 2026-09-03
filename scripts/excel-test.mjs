@@ -70,9 +70,9 @@ console.log("\n🔎 בדיקת הייצוא לאקסל\n");
 console.log("1. מבנה החוברת");
 const sheets = buildSheets(data);
 check(
-  "ארבעה גיליונות בשמות הנכונים",
+  "חמישה גיליונות בשמות הנכונים",
   JSON.stringify(sheets.map((s) => s.name)) ===
-    JSON.stringify(["מוזמנים", "ספקים", "סדר הושבה", "ניהול תקציב"]),
+    JSON.stringify(["מוזמנים", "ספקים", "סדר הושבה", "ניהול תקציב", "צ׳קליסט"]),
   sheets.map((s) => s.name).join(", ")
 );
 check("אין גיליון פורטל ספקים", !sheets.some((s) => s.name.includes("פורטל")));
@@ -88,7 +88,7 @@ check(
     );
   })
 );
-check("קלט ריק לא מפיל את הבנייה", buildSheets({}).length === 4);
+check("קלט ריק לא מפיל את הבנייה", buildSheets({}).length === 5);
 check(
   "שם הקובץ מנקה תווים אסורים",
   workbookFileName('א/ב:ג*ד?ה"ו<ז>ח|ט').startsWith("אבגדהוזחט - "),
@@ -102,7 +102,7 @@ check("נוצר קובץ לא ריק", buffer.byteLength > 5000, `${buffer.byteL
 
 const wb = new ExcelJS.Workbook();
 await wb.xlsx.load(buffer);
-check("הקובץ נפתח מחדש עם 4 גיליונות", wb.worksheets.length === 4);
+check("הקובץ נפתח מחדש עם 5 גיליונות", wb.worksheets.length === 5);
 check(
   "כל הגיליונות מוגדרים מימין לשמאל",
   wb.worksheets.every((ws) => ws.views?.[0]?.rightToLeft === true)
@@ -125,10 +125,10 @@ const readSheet = (name) => {
 console.log("\n3. גיליון \u201eמוזמנים\u201d");
 const G = readSheet("מוזמנים");
 const guestHeaders = [
-  "מס׳", "שם", "נייד", "קטגוריה", "מקור", "כיסאות", "אישור הגעה",
+  "מס׳", "שם", "נייד", "קטגוריה", "כיסאות", "אישור הגעה",
   "כמה אישרו", "כנראה יבוא", "לשקול", "גלאט", "שותים", "מתנה", "שולחן", "אזכור",
 ];
-check("כל 15 העמודות קיימות ובסדר הנכון", JSON.stringify(G.headers) === JSON.stringify(guestHeaders), G.headers.join(" | "));
+check("כל 14 העמודות קיימות ובסדר הנכון", JSON.stringify(G.headers) === JSON.stringify(guestHeaders), G.headers.join(" | "));
 check(`כל ${SEED_GUESTS.length} המוזמנים יורדו`, G.rows.length === SEED_GUESTS.length, `${G.rows.length}`);
 
 const byId = new Map(G.rows.map((r) => [Number(r["מס׳"]), r]));
@@ -141,7 +141,6 @@ for (const g of SEED_GUESTS) {
     "שם": g.name ?? "",
     "נייד": g.phone ?? "",
     "קטגוריה": g.category ?? "",
-    "מקור": g.source ?? "",
     "כיסאות": seats,
     "אישור הגעה": RSVP_LABELS[g.rsvp] || RSVP_LABELS.pending,
     "כמה אישרו": g.attendingCount != null ? Math.min(Math.round(g.attendingCount), seats) : seats,

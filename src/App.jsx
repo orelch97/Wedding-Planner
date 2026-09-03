@@ -109,6 +109,7 @@ import {
   cloudSyncDataset,
   listWeddings,
   createWedding,
+  deleteWedding,
   updateWedding,
   saveWeddingSettings,
   uploadCountdownBackground,
@@ -804,6 +805,7 @@ const NAV = [
   //  שזוג שואל כשהוא נכנס — “מה עוד נשאר לנו?”
   { key: "checklist", label: "צ׳קליסט", icon: ListChecks, scope: "checklist" },
   { key: "guests", label: "מוזמנים", icon: Users, scope: "guests" },
+  { key: "alcohol", label: "חישוב אלכוהול", icon: Wine, scope: "guests" },
   //  ההושבה יושבת על אותו היקף הרשאות כמו המוזמנים (אותה טבלה בפועל),
   //  אבל היא מסך נפרד: היא נפתחת בשלב אחר של התכנון ודורשת מסך מלא.
   { key: "seating", label: "סידור הושבה", icon: Armchair, scope: "guests" },
@@ -2052,11 +2054,6 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   //  קריאת קובץ Excel גדול לוקחת זמן מורגש בנייד. בלי חיווי המשתמש
   //  לוחץ שוב ושוב על "ייבוא" וחושב שהכפתור לא עובד.
   const [importing, setImporting] = useState(false);
-  //  המסך מאחד שתי עבודות נפרדות. כשהן זו מתחת לזו, כל כניסה
-  //  לסידור ההושבה דורשת לגלול דרך מאות מוזמנים — בלתי אפשרי בנייד.
-  //  לכן נפרד לשני טאבים; כבונוס, רשימת 592 השורות לא מרונדרת כלל
-  //  כשעובדים על ההושבה.
-  const [tab, setTab] = useState("list");
   const [form, setForm] = useState({
     name: "",
     phone: "",
@@ -2740,57 +2737,6 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         />
       </div>
 
-      {/*  מתג בין שתי העבודות על הרשימה — ניהול המוזמנים מול
-          מחשבון האלכוהול שנגזר ממנה. דביק לראש המסך כדי שאפשר יהיה
-          לעבור ביניהן מכל נקודה ברשימה, בלי לגלול חזרה למעלה.  */}
-      <div className="sticky top-2 z-20 -mx-1 px-1">
-        <div
-          role="tablist"
-          aria-label="תצוגת מוזמנים"
-          className="glass flex gap-1 rounded-2xl p-1 shadow-sm ring-1 ring-slate-200/70"
-        >
-          {[
-            { key: "list", label: "רשימת המוזמנים", icon: Users, count: totals.count },
-            { key: "alcohol", label: "מחשבון אלכוהול", icon: Wine, count: totals.drinkers },
-          ].map((t) => {
-            const active = tab === t.key;
-            return (
-              <button
-                key={t.key}
-                role="tab"
-                aria-selected={active}
-                onClick={() => {
-                  setTab(t.key);
-                  //  מחליפים טאב לרוב מאמצע הרשימה; בלי זה נוחתים
-                  //  בתוך התוכן החדש בלי להבין איפה אנחנו.
-                  window.scrollTo({ top: 0, behavior: "smooth" });
-                }}
-                className={`flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition ${
-                  active
-                    ? "bg-gradient-to-br from-gold-500 to-gold-600 text-white shadow-md shadow-gold-500/25"
-                    : /*  לטאב לא-פעיל היה רק hover, שאינו קיים במגע: בטלפון
-                          הוא נראה כמו טקסט אפור ולא כמו משהו שאפשר ללחוץ.
-                          רקע וטבעת קבועים נותנים לו נראות של כפתור.  */
-                      "bg-white/60 text-slate-600 ring-1 ring-slate-200 hover:bg-white hover:text-slate-800 hover:ring-slate-300 active:bg-slate-100"
-                }`}
-              >
-                <t.icon size={17} className="shrink-0" />
-                <span className="truncate">{t.label}</span>
-                <span
-                  className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs tabular-nums ${
-                    active ? "bg-white/25" : "bg-slate-100 text-slate-500"
-                  }`}
-                >
-                  {t.count}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {tab === "list" && (
-        <>
       {/* RSVP summary */}
       <Card>
         {/*  \u05d1\u05e0\u05d9\u05d9\u05d3 \u05d4\u05db\u05d5\u05ea\u05e8\u05ea \u05d9\u05d5\u05e9\u05d1\u05ea \u05de\u05e2\u05dc \u05d4\u05e6\u05d9\u05e4\u05e1 \u05d5\u05dc\u05d0 \u05dc\u05e6\u05d9\u05d3\u05dd. \u05db\u05e9\u05d4\u05db\u05dc \u05d4\u05d9\u05d4 \u05d1\u05e9\u05d5\u05e8\u05d4
@@ -3325,16 +3271,6 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           )}
         </div>
       </Card>
-        </>
-      )}
-
-      {tab === "alcohol" && (
-        <AlcoholCalculator
-          drinkers={totals.drinkers}
-          expectedSeats={totals.confirmedPeople || totals.probablySeats || totals.seatsTotal}
-          setBudget={setBudget}
-        />
-      )}
 
       <CategoryManager
         open={catManagerOpen}
@@ -3534,8 +3470,6 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
 //  עוגן ההמרה הפנימי: בקבוק ליטר של משקה חריף נותן כ-25 שוטים של 40 מ״ל.
 //  המספר לא מוצג ולא ניתן לעריכה — הוא רק המכנה המשותף שמאפשר לחלק את
 //  הכמות בין הסוגים. זוג שמתכנן חתונה לא צריך להתעסק במספר הזה.
-const BOTTLE_SHOTS = 25;
-
 //  בעברית “1 אנשים” נראה כמו תקלה, ולכן יש טיפול בצורת היחיד.
 const peopleLabel = (n) => (n === 1 ? "אדם אחד" : `${n} אנשים`);
 
@@ -3551,13 +3485,13 @@ const DRINK_LEVELS = [
     צריך לדעת כמה שוטים יש בבקבוק. sizeLabel מתאר את אריזת הקנייה
     כטקסט קבוע, כדי שיהיה ברור מה סופרים. רק המחיר ניתן לעריכה,
     כי הוא באמת משתנה בין ספקים והזוג יודע מה הוא שילם.  */
-const DRINK_TYPES = [
-  { key: "vodka", label: "וודקה", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", portions: 25, price: 90, share: 25 },
-  { key: "whiskey", label: "וויסקי", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", portions: 25, price: 150, share: 15 },
-  { key: "arak", label: "ערק", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", portions: 20, price: 50, share: 15 },
-  { key: "beer", label: "בירה", unitOne: "ארגז", unitMany: "ארגזים", sizeLabel: "ארגז של 24", portions: 24, price: 120, share: 25 },
-  { key: "wine", label: "יין", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק 750 מ״ל", portions: 5, price: 45, share: 10 },
-  { key: "excel", label: "אקסלים", unitOne: "מגש", unitMany: "מגשים", sizeLabel: "מגש", portions: 80, price: 280, share: 10 },
+const DEFAULT_DRINK_TYPES = [
+  { key: "vodka", label: "וודקה", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", liters: 1, price: 90 },
+  { key: "whiskey", label: "וויסקי", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", liters: 1, price: 150 },
+  { key: "arak", label: "ערק", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", liters: 1, price: 50 },
+  { key: "beer", label: "בירה", unitOne: "ארגז", unitMany: "ארגזים", sizeLabel: "ארגז של 24", liters: 7.92, price: 120 },
+  { key: "wine", label: "יין", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק 750 מ״ל", liters: 0.75, price: 45 },
+  { key: "excel", label: "אקסלים", unitOne: "מגש", unitMany: "מגשים", sizeLabel: "מגש", liters: 1, price: 280 },
 ];
 
 
@@ -3567,18 +3501,26 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
   const canEdit = useCanEdit();
   //  כל עוד אף אחד לא סומן ברשימה אין טעם להציג 0 — עוברים אוטומטית
   //  להערכה לפי אחוז מהאורחים, שהיא הדרך שבה רוב הזוגות מתחילים.
-  const [source, setSource] = useState(drinkers > 0 ? "marked" : "percent");
-  const [percent, setPercent] = useState(80);
-  const [peoplePerBottle, setPeoplePerBottle] = useState(6);
-  const [enabled, setEnabled] = useState(() =>
-    Object.fromEntries(DRINK_TYPES.map((t) => [t.key, true]))
+  const [source, setSource] = usePersistentState("alcoholSource", drinkers > 0 ? "marked" : "percent");
+  const [percent, setPercent] = usePersistentState("alcoholPercent", 80);
+  const [peoplePerBottle, setPeoplePerBottle] = usePersistentState("alcoholPeoplePerBottle", 6);
+  const [drinkTypes, setDrinkTypes] = usePersistentState("alcoholDrinkTypes", DEFAULT_DRINK_TYPES);
+  const [enabled, setEnabled] = usePersistentState(
+    "alcoholEnabled",
+    Object.fromEntries(DEFAULT_DRINK_TYPES.map((t) => [t.key, true]))
   );
-  const [shares, setShares] = useState(() =>
-    Object.fromEntries(DRINK_TYPES.map((t) => [t.key, t.share]))
+  const [prices, setPrices] = usePersistentState(
+    "alcoholPrices",
+    Object.fromEntries(DEFAULT_DRINK_TYPES.map((t) => [t.key, t.price]))
   );
-  const [prices, setPrices] = useState(() =>
-    Object.fromEntries(DRINK_TYPES.map((t) => [t.key, t.price]))
+  const [quantities, setQuantities] = usePersistentState(
+    "alcoholQuantities",
+    Object.fromEntries(DEFAULT_DRINK_TYPES.map((t) => [t.key, 0]))
   );
+  const [newDrink, setNewDrink] = useState({
+    label: "",
+    price: "0",
+  });
 
   const base = expectedSeats || 0;
   const estimated = Math.round(
@@ -3588,30 +3530,73 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
   const drinkerCount = Math.max(0, source === "marked" ? drinkers : estimated);
 
   const perBottle = Math.max(1, Number(peoplePerBottle) || 1);
-  //  “בקבוק לכל N אנשים” → כמה בקבוקים בסך הכל → כמה מנות בסך הכל.
-  //  המנות הן מטבע פנימי בלבד ולא מוצגות בשום מקום במסך.
-  const totalBottles = drinkerCount / perBottle;
-  const totalPortions = totalBottles * BOTTLE_SHOTS;
+  const targetLiters = drinkerCount / perBottle;
 
-  //  האחוזים מחולקים רק בין הסוגים שסומנו לקנייה, ומנורמלים ביניהם. כך
-  //  כיבוי “בירה” מחלק את החלק שלה בין השאר במקום להשאיר חור בכמות.
-  const shareTotal = DRINK_TYPES.reduce(
-    (s, t) => s + (enabled[t.key] ? Math.max(0, Number(shares[t.key]) || 0) : 0),
-    0
-  );
-
-  const lines = DRINK_TYPES.map((t) => {
+  const lines = drinkTypes.map((t) => {
     const on = !!enabled[t.key];
-    const share =
-      on && shareTotal > 0 ? Math.max(0, Number(shares[t.key]) || 0) / shareTotal : 0;
-    const per = Math.max(1, t.portions);
-    const units = on ? Math.ceil((totalPortions * share) / per) : 0;
+    const units = Math.max(0, Math.round(Number(quantities[t.key]) || 0));
+    const liters = Math.max(0, Number(t.liters) || 1);
     const cost = units * Math.max(0, Number(prices[t.key]) || 0);
-    return { ...t, on, share, per, units, cost };
+    return { ...t, on, units, liters, cartLiters: on ? units * liters : 0, cost: on ? cost : 0 };
   });
 
   const totalCost = lines.reduce((s, l) => s + l.cost, 0);
+  const cartLiters = lines.reduce((sum, line) => sum + line.cartLiters, 0);
   const activeCount = lines.filter((l) => l.on).length;
+
+  function addDrinkType(e) {
+    e.preventDefault();
+    const label = newDrink.label.trim();
+    if (!label) {
+      notify("מלאו שם משקה", { tone: "error" });
+      return;
+    }
+    const key = `custom-${crypto.randomUUID()}`;
+    const type = {
+      key,
+      label,
+      unitOne: "בקבוק",
+      unitMany: "בקבוקים",
+      sizeLabel: "בקבוק ליטר",
+      liters: 1,
+      price: Math.max(0, Number(newDrink.price) || 0),
+    };
+    setDrinkTypes((types) => [...types, type]);
+    setEnabled((values) => ({ ...values, [key]: true }));
+    setPrices((values) => ({ ...values, [key]: type.price }));
+    setQuantities((values) => ({ ...values, [key]: 0 }));
+    setNewDrink({ label: "", price: "0" });
+    notify(`“${label}” נוסף לרשימת הקנייה`, { tone: "success" });
+  }
+
+  async function removeDrinkType(key) {
+    const type = drinkTypes.find((drink) => drink.key === key);
+    if (!type) return;
+    const ok = await confirmDialog({
+      title: `למחוק את “${type.label}”?`,
+      message: "המשקה יוסר מרשימת הקנייה.",
+      confirmLabel: "מחיקה",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setDrinkTypes((types) => types.filter((drink) => drink.key !== key));
+    setEnabled((values) => {
+      const next = { ...values };
+      delete next[key];
+      return next;
+    });
+    setPrices((values) => {
+      const next = { ...values };
+      delete next[key];
+      return next;
+    });
+    setQuantities((values) => {
+      const next = { ...values };
+      delete next[key];
+      return next;
+    });
+    notify(`“${type.label}” נמחק מרשימת הקנייה`, { tone: "success" });
+  }
 
   function pushToBudget() {
     if (!setBudget || totalCost <= 0) return;
@@ -3661,76 +3646,23 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
           <p className="mb-1 text-sm font-semibold text-slate-700">
             1. כמה מהאורחים שותים אלכוהול?
           </p>
-          <p className="mb-2.5 text-xs text-slate-500">
-            זה המספר שכל השאר מחושב ממנו.
-          </p>
-          <div className="space-y-2">
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl p-2 transition hover:bg-slate-50">
-              <input
-                type="radio"
-                name="drinkers-source"
-                checked={source === "marked"}
-                onChange={() => setSource("marked")}
-                className="mt-0.5 h-4 w-4 accent-gold-500 focus-visible:ring-2 focus-visible:ring-gold-400"
-              />
-              <span className="min-w-0">
-                <span className="block text-sm font-medium text-slate-700">
-                  לפי מי שסומן ברשימה — {peopleLabel(drinkers)}
-                </span>
-                <span className="block text-xs text-slate-500">
-                  {drinkers > 0
-                    ? "סכום העמודה „שותים” בכל הרשומות שלא סירבו להגיע"
-                    : "עדיין לא סומן אף אחד. בוחרים שורות ברשימה ולוחצים „סמן כשותים”"}
-                </span>
-              </span>
-            </label>
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl p-2 transition hover:bg-slate-50">
-              <input
-                type="radio"
-                name="drinkers-source"
-                checked={source === "percent"}
-                onChange={() => setSource("percent")}
-                className="mt-0.5 h-4 w-4 accent-gold-500 focus-visible:ring-2 focus-visible:ring-gold-400"
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium text-slate-700">
-                  לא סימנתי — תעריכו בשבילי
-                </span>
-                <span className="mt-1.5 flex flex-wrap items-center gap-2">
-                  <span className="relative inline-flex items-center">
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={percent}
-                      onChange={(e) => setPercent(e.target.value)}
-                      onFocus={() => setSource("percent")}
-                      className={`${fieldNarrow} pe-8`}
-                      aria-label="אחוז האורחים ששותים אלכוהול"
-                    />
-                    <span className="pointer-events-none absolute end-2 text-sm font-semibold text-gold-600">%</span>
-                  </span>
-                  <span className="text-sm text-slate-600">מהאורחים שותים</span>
-                </span>
-                {/*  ההסבר המילולי חשוב יותר מהמספר עצמו: בלעדיו אי אפשר
-                    לדעת מאיפה הגיע ה-“מתוך כמה”.  */}
-                <span className="mt-1.5 block text-xs text-slate-500">
-                  {base > 0 ? (
-                    <>
-                      צפויים להגיע {base} אנשים (לפי אישורי ההגעה ברשימה), ולכן{" "}
-                      <b className="text-slate-700">{peopleLabel(estimated)} שותים</b>.
-                    </>
-                  ) : (
-                    "עדיין אין מספיק נתוני הגעה ברשימה כדי להעריך."
-                  )}
-                </span>
-                <span className="mt-0.5 block text-xs text-slate-400">
-                  80% הוא המספר שרוב הזוגות מתחילים ממנו. קהל מבוגר או דתי — פחות,
-                  קהל צעיר — יותר.
-                </span>
-              </span>
-            </label>
+          <div className="grid grid-cols-2 rounded-xl bg-slate-100 p-1">
+            <button type="button" onClick={() => setSource("marked")} className={`min-h-11 rounded-lg px-3 text-xs font-semibold transition ${source === "marked" ? "bg-white text-gold-700 shadow-sm" : "text-slate-500"}`}>
+              מרשימת המוזמנים
+              <span className="block text-[10px] font-normal">אוטומטי: {peopleLabel(drinkers)}</span>
+            </button>
+            <button type="button" onClick={() => setSource("percent")} className={`min-h-11 rounded-lg px-3 text-xs font-semibold transition ${source === "percent" ? "bg-white text-gold-700 shadow-sm" : "text-slate-500"}`}>
+              הערכה ידנית
+              <span className="block text-[10px] font-normal">לפי אחוז</span>
+            </button>
           </div>
+          {source === "percent" && (
+            <label className="mt-3 flex items-center gap-2 text-sm text-slate-600">
+              אחוז שותים
+              <span className="relative"><input type="number" min="0" max="100" value={percent} onChange={(e) => setPercent(e.target.value)} className={`${fieldNarrow} pe-7`} aria-label="אחוז האורחים ששותים אלכוהול" /><span className="pointer-events-none absolute end-2 top-2.5 font-semibold text-gold-600">%</span></span>
+              <span className="text-xs text-slate-400">{peopleLabel(estimated)}</span>
+            </label>
+          )}
         </div>
 
         {/* שאלה 2 — עוצמת השתייה, בשפה של בקבוקים */}
@@ -3781,12 +3713,10 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
           </p>
         </div>
 
-        {/* השורה שמחברת בין שתי השאלות לטבלה */}
-        <div className="mt-4 rounded-2xl bg-gradient-to-l from-gold-50 to-white p-4 ring-1 ring-gold-200">
-          <p className="text-sm text-slate-700">
-            לפי <b>{peopleLabel(drinkerCount)}</b> ששותים, ובקבוק אחד לכל{" "}
-            <b>{perBottle}</b> מהם — זה מה שצריך להזמין:
-          </p>
+        <div className="mt-4 rounded-2xl bg-gradient-to-l from-gold-500 to-sage-500 p-5 text-white shadow-lg shadow-gold-500/20">
+          <p className="text-xs font-semibold opacity-85">יעד מומלץ</p>
+          <p className="mt-1 text-3xl font-extrabold tabular-nums">{targetLiters.toFixed(1)} ליטר</p>
+          <p className="mt-1 text-xs opacity-90">לפי {peopleLabel(drinkerCount)} ובקבוק לכל {perBottle} אנשים</p>
         </div>
       </Card>
 
@@ -3795,6 +3725,17 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
           icon={ShoppingCart}
           title="רשימת הקנייה"
           subtitle="מכבים כל סוג שאתם לא קונים — למשל אם האולם מביא בירה ויין על חשבונו"        />
+
+        {canEdit && (
+          <details className="mb-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-700">הוספת סוג משקה</summary>
+            <form onSubmit={addDrinkType} className="mt-3 flex flex-wrap gap-2">
+              <input value={newDrink.label} onChange={(e) => setNewDrink((v) => ({ ...v, label: e.target.value }))} placeholder="שם המשקה" aria-label="שם סוג המשקה" className="min-h-11 min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-200" />
+              <input type="number" min="0" value={newDrink.price} onChange={(e) => setNewDrink((v) => ({ ...v, price: e.target.value }))} placeholder="מחיר לבקבוק" aria-label="מחיר ליחידת משקה" className="min-h-11 w-32 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-200" />
+              <button type="submit" className="flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-sage-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sage-600"><Plus size={16} /> הוספה לרשימה</button>
+            </form>
+          </details>
+        )}
 
         {/*  במסך רחב טבלה אמיתית: השורה נקראת משמאל לימין כמו רשימת קנייה —
             מה קונים, כמה מזמינים, כמה זה עולה. בנייד אותה שורה נפרסת
@@ -3805,10 +3746,10 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
               <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
                 <th className="px-2 py-2.5 text-right">קונים?</th>
                 <th className="px-2 py-2.5 text-right">סוג השתייה</th>
-                <th className="px-2 py-2.5 text-center">כמה מזה שותים</th>
                 <th className="px-2 py-2.5 text-center">כמה להזמין</th>
                 <th className="px-2 py-2.5 text-center">מחיר ליחידה</th>
                 <th className="px-2 py-2.5 text-center">סה״כ</th>
+                <th className="px-2 py-2.5 text-center"><span className="sr-only">מחיקה</span></th>
               </tr>
             </thead>
             <tbody>
@@ -3844,34 +3785,11 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                     <p className="mt-0.5 text-xs text-slate-500">{l.sizeLabel}</p>
                   </td>
                   <td className="px-2 py-3 text-center">
-                    <span className="inline-flex items-center gap-1">
-                      <input
-                        type="number"
-                        min="0"
-                        value={shares[l.key]}
-                        onChange={(e) =>
-                          setShares((p) => ({ ...p, [l.key]: e.target.value }))
-                        }
-                        disabled={!l.on}
-                        className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center tabular-nums outline-none focus:border-gold-400 disabled:bg-slate-100 disabled:text-slate-400"
-                        aria-label={`כמה מהאלכוהול יהיה ${l.label}, באחוזים`}
-                      />
-                      <span className="text-xs text-slate-400">%</span>
-                    </span>
-                  </td>
-                  <td className="px-2 py-3 text-center">
-                    {l.on ? (
-                      <>
-                        <span className="text-2xl font-bold tabular-nums text-slate-800">
-                          {l.units}
-                        </span>{" "}
-                        <span className="text-xs text-slate-500">
-                          {l.units === 1 ? l.unitOne : l.unitMany}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-xs text-slate-400">לא קונים</span>
-                    )}
+                    <div className="inline-flex items-center rounded-lg ring-1 ring-slate-200">
+                      <button type="button" disabled={!l.on || l.units === 0} onClick={() => setQuantities((p) => ({ ...p, [l.key]: Math.max(0, l.units - 1) }))} className="grid h-9 w-9 place-items-center text-slate-500 hover:bg-slate-100 disabled:opacity-30" aria-label={`הפחתת ${l.label}`}><Minus size={14} /></button>
+                      <input type="number" min="0" value={l.units} onChange={(e) => setQuantities((p) => ({ ...p, [l.key]: e.target.value }))} disabled={!l.on} className="h-9 w-12 border-x border-slate-200 bg-white text-center tabular-nums outline-none disabled:bg-slate-100" aria-label={`כמות ${l.label}`} />
+                      <button type="button" disabled={!l.on} onClick={() => setQuantities((p) => ({ ...p, [l.key]: l.units + 1 }))} className="grid h-9 w-9 place-items-center text-slate-500 hover:bg-slate-100 disabled:opacity-30" aria-label={`הוספת ${l.label}`}><Plus size={14} /></button>
+                    </div>
                   </td>
                   <td className="px-2 py-3 text-center">
                     <input
@@ -3888,6 +3806,13 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                   </td>
                   <td className="px-2 py-3 text-center font-semibold tabular-nums text-slate-700">
                     {l.on ? fmt(l.cost) : "—"}
+                  </td>
+                  <td className="px-2 py-3 text-center">
+                    {canEdit && (
+                      <button type="button" onClick={() => removeDrinkType(l.key)} aria-label={`מחיקת ${l.label}`} title={`מחיקת ${l.label}`} className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500">
+                        <Trash2 size={16} />
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -3934,16 +3859,18 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                   >
                     {l.label}
                   </span>
+                  {l.key.startsWith("custom-") && canEdit && (
+                    <button type="button" onClick={() => removeDrinkType(l.key)} aria-label={`מחיקת ${l.label}`} title={`מחיקת ${l.label}`} className="grid h-9 w-9 place-items-center rounded-lg text-rose-500 hover:bg-rose-50">
+                      <Trash2 size={15} />
+                    </button>
+                  )}
                 </label>
                 {l.on ? (
                   <div className="text-left">
                     <p className="text-2xl font-bold tabular-nums text-slate-800">
-                      {l.units}{" "}
-                      <span className="text-sm font-medium text-slate-500">
-                        {l.units === 1 ? l.unitOne : l.unitMany}
-                      </span>
+                      {fmt(l.cost)}
                     </p>
-                    <p className="text-xs text-slate-500">{fmt(l.cost)}</p>
+                    <p className="text-xs text-slate-500">{l.cartLiters.toFixed(1)} ליטר</p>
                   </div>
                 ) : (
                   <span className="text-xs font-medium text-slate-400">לא קונים</span>
@@ -3955,16 +3882,12 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                   <p className="text-xs text-slate-500">{l.sizeLabel}</p>
                   <div className="grid grid-cols-2 gap-2">
                     <label className="block">
-                      <span className={fieldLabel}>כמה מזה שותים (%)</span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={shares[l.key]}
-                        onChange={(e) =>
-                          setShares((p) => ({ ...p, [l.key]: e.target.value }))
-                        }
-                        className={field}
-                      />
+                      <span className={fieldLabel}>כמות</span>
+                      <div className="flex overflow-hidden rounded-xl border border-slate-200 bg-white">
+                        <button type="button" title={`הפחתת ${l.label}`} aria-label={`הפחתת ${l.label}`} onClick={() => setQuantities((p) => ({ ...p, [l.key]: Math.max(0, l.units - 1) }))} className="grid h-11 w-11 place-items-center border-l border-slate-200 text-slate-500"><Minus size={16} /></button>
+                        <input type="number" min="0" value={l.units} onChange={(e) => setQuantities((p) => ({ ...p, [l.key]: e.target.value }))} className="min-w-0 flex-1 text-center tabular-nums outline-none" aria-label={`כמות ${l.label}`} />
+                        <button type="button" title={`הוספת ${l.label}`} aria-label={`הוספת ${l.label}`} onClick={() => setQuantities((p) => ({ ...p, [l.key]: l.units + 1 }))} className="grid h-11 w-11 place-items-center border-r border-slate-200 text-slate-500"><Plus size={16} /></button>
+                      </div>
                     </label>
                     <label className="block">
                       <span className={fieldLabel}>מחיר ל{l.unitOne} (₪)</span>
@@ -3983,6 +3906,14 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
               )}
             </div>
           ))}
+        </div>
+
+        <div className="mt-4 rounded-xl border border-sage-200 bg-sage-50 p-4">
+          <div className="flex items-end justify-between gap-3">
+            <div><p className="text-xs font-semibold text-sage-700">ליטרים בעגלה</p><p className="mt-1 text-2xl font-extrabold tabular-nums text-slate-800">{cartLiters.toFixed(1)} <span className="text-sm font-medium text-slate-500">מתוך {targetLiters.toFixed(1)} ליטר</span></p></div>
+            <p className="text-xs font-semibold text-sage-700">{cartLiters >= targetLiters ? "היעד הושג" : `חסרים ${(targetLiters - cartLiters).toFixed(1)} ליטר`}</p>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-sage-100"><div className="h-full rounded-full bg-sage-500 transition-all" style={{ width: `${Math.min(100, targetLiters ? (cartLiters / targetLiters) * 100 : 0)}%` }} /></div>
         </div>
 
         {activeCount === 0 && (
@@ -4011,13 +3942,8 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
 
         <div className="mt-2 space-y-1 text-xs text-slate-400">
           <p>
-            האחוזים אומרים איזה חלק מכל האלכוהול יהיה מכל סוג — למשל רבע
-            וודקה ועשירית יין. הם מתחלקים אוטומטית בין הסוגים שסימנתם —
-            לא חייבים להגיע ל-100.
-          </p>
-          <p>
-            המחירים הם הערכה ממוצעת לאריזה הרשומה ליד כל סוג — עדכנו
-            אותם לפי מה שקיבלתם מהספק, והסכום מתעדכן מיד.
+            הכמות בעגלה היא הכמות שאתם מתכננים לקנות בפועל. המחיר והליטרים
+            מתעדכנים מיד לפי הכמות שבחרתם.
           </p>
           <p>
             העברה לתקציב יוצרת (או מעדכנת) סעיף בשם „{ALCOHOL_BUDGET_CATEGORY}” בשדה
@@ -4737,7 +4663,7 @@ function Checklist({ items, setItems }) {
           title="הצ׳קליסט של החתונה"
           subtitle="כל מה שצריך לסגור עד היום הגדול, במקום אחד"
           action={
-            canEdit && (
+            canEdit && items.length > 0 && (
               <button
                 onClick={loadTemplate}
                 className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:w-auto"
@@ -4804,8 +4730,7 @@ function Checklist({ items, setItems }) {
         )}
       </Card>
 
-      {items.length > 0 && (
-        <Card>
+      <Card>
           {canEdit && (
             <form onSubmit={addItem} className="mb-4 grid gap-2 sm:grid-cols-[1fr_auto_auto_auto]">
               <input
@@ -4922,8 +4847,7 @@ function Checklist({ items, setItems }) {
               })}
             </div>
           )}
-        </Card>
-      )}
+      </Card>
     </div>
   );
 }
@@ -5367,6 +5291,7 @@ function Vendors({
                         className="min-h-11 w-44 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
                       />
                       <button
+                        type="button"
                         onClick={() => addTask(v.id)}
                         title="הוספת משימה"
                         aria-label="הוספת משימה"
@@ -5420,6 +5345,7 @@ function Vendors({
                                       ריחוף כלל, ולכן אי אפשר היה למחוק משימה
                                       מהטלפון. עכשיו הוא תמיד גלוי, רק עמום יותר.  */}
                                   <button
+                                    type="button"
                                     onClick={() => removeTask(v.id, t.id)}
                                     title="מחיקת משימה"
                                     aria-label={`מחיקת המשימה ${t.title}`}
@@ -5433,6 +5359,7 @@ function Vendors({
                                     (c) => c.key !== t.status
                                   ).map((c) => (
                                     <button
+                                      type="button"
                                       key={c.key}
                                       onClick={() => moveTask(v.id, t.id, c.key)}
                                       aria-label={`העברת המשימה ${t.title} ל-${c.label}`}
@@ -5577,19 +5504,15 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
   async function download(file) {
     setDownloading(file.id);
     try {
-      const res = await fetch(await vendorFileUrl(weddingId, file.id));
-      if (!res.ok) throw new Error(`status ${res.status}`);
-
-      const url = URL.createObjectURL(await res.blob());
       const a = document.createElement("a");
-      a.href = url;
+      a.href = await vendorFileUrl(weddingId, file.id);
       a.download = file.name;
+      a.target = "_blank";
+      a.rel = "noopener";
       //  חלק מהדפדפנים מתעלמים מלחיצה על עוגן שאינו מחובר ל-DOM.
       document.body.appendChild(a);
       a.click();
       a.remove();
-      //  שחרור מיידי קוטע את ההורדה בחלק מהדפדפנים בנייד.
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
       console.error("Download failed:", err);
       notify("הורדת הקובץ נכשלה — נסו שוב", { tone: "error" });
@@ -8172,10 +8095,10 @@ function WeddingApp({
   }, [sidebarOpen]);
   const [membersOpen, setMembersOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  //  הדרכה: הסיור עולה לבד פעם אחת בחשבון, וההסבר בראש המסך נשאר עד
-  //  שמסתירים אותו — לכל מסך בנפרד, כי כל מסך נלמד בזמן אחר.
+  //  הדרכה: הסיור עולה לבד פעם אחת בחשבון. סגירת ההסבר בראש מסך אחד
+  //  מסתירה אותו בכל המסכים, כדי שלא לחייב את המשתמש לסגור אותו שוב ושוב.
   const [tourOn, setTourOn] = useState(false);
-  const [introHidden, setIntroHidden] = usePersistentState("introHidden", {});
+  const [introHidden, setIntroHidden] = usePersistentState("introHidden", false);
   useEffect(() => {
     if (guideSeen("app")) return;
     //  הדגל נרשם רק כשהסיור באמת נפתח. אם נרשום אותו מיד, טעינת החתונה
@@ -8994,6 +8917,7 @@ function WeddingApp({
     overview: "דאשבורד ראשי",
     checklist: "צ׳קליסט",
     guests: "מוזמנים",
+    alcohol: "חישוב אלכוהול",
     seating: "סידור הושבה",
     vendors: "ספקים",
     finance: "ניהול תקציב",
@@ -9006,6 +8930,7 @@ function WeddingApp({
       ? `${checklist.filter((c) => c.done).length} מתוך ${checklist.length} משימות הושלמו`
       : "עדיין לא נוספו משימות",
     guests: `${guests.length} רשומות ברשימה`,
+    alcohol: `${guests.filter((guest) => Number(guest.drinkers) > 0).length} מוזמנים שותים`,
     seating: `${tables.length} שולחנות · ${tables.reduce(
       (s, t) => s + (t.guestIds?.length || 0),
       0
@@ -9036,6 +8961,7 @@ function WeddingApp({
         <WeddingSettingsModal
           couple={couple}
           weddingDate={activeWedding?.weddingDate}
+          weddingName={activeWedding?.name || "החתונה שלי"}
           budgetGoal={budgetGoal}
           currentUserId={session?.user?.id ?? null}
           canEditBasics={cloudEnabled ? isOwner : true}
@@ -9044,6 +8970,11 @@ function WeddingApp({
           weddingId={cloudEnabled && isOwner ? weddingId : null}
           onSaveBasics={saveWeddingBasics}
           onSetBudgetGoal={setBudgetGoal}
+          onDeleteWedding={async (confirmationName) => {
+            await deleteWedding(weddingId, confirmationName);
+            setSettingsOpen(false);
+            await onWeddingChanged?.();
+          }}
           onClose={() => setSettingsOpen(false)}
         />
       )}
@@ -9111,7 +9042,7 @@ function WeddingApp({
             <button
               data-tour="help"
               onClick={() =>
-                setIntroHidden((prev) => ({ ...prev, [active]: false }))
+                setIntroHidden(false)
               }
               title="מה עושים במסך הזה?"
               aria-label="הסבר על המסך והדרכה"
@@ -9326,13 +9257,11 @@ function WeddingApp({
         <div key={active} className="animate-fade-in-up p-3 sm:p-5 lg:p-8">
           {/*  הסבר קצר על המסך. יושב מחוץ ל-fieldset המושבת כדי שגם צופה
               בלבד (viewer) יוכל לסגור אותו ולפתוח את הסיור.  */}
-          {!introHidden[active] && (
+          {introHidden !== true && (
             <ScreenIntro
               guide={screenGuide(active, canEdit)}
               onStartTour={startTour}
-              onDismiss={() =>
-                setIntroHidden((prev) => ({ ...prev, [active]: true }))
-              }
+              onDismiss={() => setIntroHidden(true)}
             />
           )}
           {/*  הרשאת העריכה עוברת ב-context וכל מסך מסתיר בעצמו את מה שכותב.
@@ -9384,6 +9313,19 @@ function WeddingApp({
                 setBudget={mayFinance ? setBudget : null}
               />
             </CategoriesContext.Provider>
+          )}
+          {active === "alcohol" && (
+            <AlcoholCalculator
+              drinkers={guests
+                .filter((guest) => guest.rsvp !== "declined")
+                .reduce((sum, guest) => sum + Math.min(guest.seats || 1, Math.max(0, Number(guest.drinkers) || 0)), 0)}
+              expectedSeats={
+                guests.filter((guest) => guest.rsvp === "confirmed").reduce((sum, guest) => sum + Math.min(guest.seats || 1, Math.max(0, Number(guest.attendingCount) || guest.seats || 1)), 0) ||
+                guests.filter((guest) => guest.rsvp !== "declined" && guest.probablyComing).reduce((sum, guest) => sum + (guest.seats || 1), 0) ||
+                guests.filter((guest) => guest.rsvp !== "declined").reduce((sum, guest) => sum + (guest.seats || 1), 0)
+              }
+              setBudget={mayFinance ? setBudget : null}
+            />
           )}
           {active === "seating" && (
             <Seating guests={guests} tables={tables} setTables={setTables} />
@@ -9843,9 +9785,9 @@ function ShareAppPanel() {
           <Share2 size={17} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-slate-700">שתפו את המערכת</p>
+          <p className="text-sm font-semibold text-slate-700">שתפו את האפליקציה</p>
           <p className="mt-1 text-[11px] leading-5 text-slate-500">
-            שלחו לחברים מאורסים קישור לתכנון מסודר של החתונה.
+            קישור כללי לחברים מאורסים. הוא לא מעניק גישה לחתונה שלכם.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <button
@@ -9877,6 +9819,7 @@ function ShareAppPanel() {
 function WeddingSettingsModal({
   couple,
   weddingDate,
+  weddingName,
   budgetGoal,
   currentUserId,
   canEditBasics,
@@ -9885,6 +9828,7 @@ function WeddingSettingsModal({
   weddingId = null,
   onSaveBasics,
   onSetBudgetGoal,
+  onDeleteWedding,
   onClose,
 }) {
   const [partnerA, setPartnerA] = useState(couple?.partnerA || "");
@@ -9972,6 +9916,38 @@ function WeddingSettingsModal({
     } catch (err) {
       console.error("Failed to save wedding settings:", err);
       notify("שמירת ההגדרות נכשלה. נסו שוב.", { tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeWedding() {
+    const confirmationName = await promptDialog({
+      title: "מחיקת החתונה וכל הנתונים",
+      message: `הפעולה תמחק לצמיתות את כל המוזמנים, הספקים, התקציב, הקבצים והחברים. כדי להמשיך, הקלידו: ${weddingName}`,
+      initialValue: "",
+      confirmLabel: "המשך",
+    });
+    if (confirmationName === null) return;
+    if (confirmationName.trim() !== weddingName) {
+      notify("שם החתונה אינו תואם. המחיקה בוטלה.", { tone: "error" });
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: "האם למחוק לצמיתות?",
+      message: "לא ניתן לשחזר את החתונה או את הנתונים שלה לאחר המחיקה.",
+      confirmLabel: "מחיקה לצמיתות",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+
+    setBusy(true);
+    try {
+      await onDeleteWedding(confirmationName.trim());
+      notify("החתונה וכל הנתונים נמחקו", { tone: "success" });
+    } catch (err) {
+      console.error("Failed to delete wedding:", err);
+      notify("מחיקת החתונה נכשלה. נסו שוב.", { tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -10162,8 +10138,24 @@ function WeddingSettingsModal({
           {/*  מחוץ לבלוק של הבעלים בכוונה: הכניסה המהירה נרשמת לכל משתמש
               ולכל מכשיר בנפרד, ולכן בן/בת הזוג חייבים לראות אותה גם כשהם
               אינם הבעלים. אותו דבר לגבי שיתוף האפליקציה.  */}
-          <ShareAppPanel />
           <PasskeyPanel />
+
+          {canEditBasics && weddingId && onDeleteWedding && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3.5">
+              <p className="text-sm font-semibold text-rose-700">מחיקת החתונה</p>
+              <p className="mt-1 text-[11px] leading-5 text-rose-600">
+                מחיקה לצמיתות של החתונה, כל הנתונים והקבצים המצורפים שלה.
+              </p>
+              <button
+                type="button"
+                onClick={removeWedding}
+                disabled={busy}
+                className="mt-3 rounded-xl border border-rose-300 bg-white px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
+              >
+                מחיקת החתונה
+              </button>
+            </div>
+          )}
         </div>
 
         {!canEditBasics && (
@@ -10394,6 +10386,10 @@ function MembersModal({
             title="שיתוף החתונה"
             subtitle="הזמינו בן/בת זוג, מפיק או משפחה – למערכת כולה או למסך אחד"
           />
+        </div>
+
+        <div className="mb-5">
+          <ShareAppPanel />
         </div>
 
         {isOwner && (

@@ -10143,9 +10143,6 @@ function WeddingSettingsModal({
                         <span className="truncate">{member.email}</span>
                       </span>
                     ))}
-
-                    <ShareAppPanel />
-          <PasskeyPanel />
                   </div>
                 </div>
               )}
@@ -10161,6 +10158,12 @@ function WeddingSettingsModal({
               )}
             </div>
           )}
+
+          {/*  מחוץ לבלוק של הבעלים בכוונה: הכניסה המהירה נרשמת לכל משתמש
+              ולכל מכשיר בנפרד, ולכן בן/בת הזוג חייבים לראות אותה גם כשהם
+              אינם הבעלים. אותו דבר לגבי שיתוף האפליקציה.  */}
+          <ShareAppPanel />
+          <PasskeyPanel />
         </div>
 
         {!canEditBasics && (

@@ -865,10 +865,11 @@ function BudgetFigure({ label, value, tone = "slate" }) {
   );
 }
 
-function Card({ children, className = "", tourId }) {
+function Card({ children, className = "", tourId, style }) {
   return (
     <div
       data-tour={tourId}
+      style={style}
       /*  רווח פנימי קטן יותר בנייד: ב-390px כל כרטיס ביזבז 40px מהרוחב
           ו-40px מהגובה רק על ריפוד, ויש עשרות כרטיסים במסך.  */
       className={`glass rounded-2xl p-3.5 shadow-[0_10px_40px_-15px_rgba(51,65,85,0.25)] sm:rounded-3xl sm:p-5 ${className}`}
@@ -1386,7 +1387,8 @@ function Countdown({
     <Card
       className="relative overflow-hidden bg-gradient-to-br from-slate-800 via-slate-700 to-slate-800 text-white"
       style={backgroundUrl ? {
-        backgroundImage: `linear-gradient(rgba(15, 23, 42, 0.68), rgba(15, 23, 42, 0.78)), url(${backgroundUrl})`,
+        // Quoted and escaped: the URL comes from the database and carries a ?alt=media&token= query.
+        backgroundImage: `linear-gradient(rgba(15, 23, 42, 0.68), rgba(15, 23, 42, 0.78)), url("${backgroundUrl.replace(/["\\]/g, "\\$&")}")`,
         backgroundSize: "cover",
         backgroundPosition: "center",
       } : undefined}

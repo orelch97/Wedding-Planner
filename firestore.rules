@@ -149,7 +149,11 @@ service cloud.firestore {
         //  ההגדרות מרכזות מפתחות מכמה היקפים (יעד תקציב, קטגוריות מוזמנים).
         //  כל היקף במסמך נפרד, מפני שכללי Firestore אינם מסתירים שדות במסמך.
         match /settings/{docId} {
+          //  'owner' נכתב רק על ידי הבעלים, אבל מוצג לכל חבר: שם נשמרת תמונת
+          //  הרקע של הספירה לאחור, והיא חלק מהדאשבורד שכל השותפים רואים.
+          //  כללי Storage כבר מתירים לכל חבר לקרוא את אותה תמונה.
           allow read: if isOwner(weddingId)
+                      || (docId == 'owner' && isMember(weddingId))
                       || (docId == 'finance' && hasScope(weddingId, 'finance'))
                       || (docId == 'guests' && hasScope(weddingId, 'guests'));
           allow write: if (docId == 'finance'

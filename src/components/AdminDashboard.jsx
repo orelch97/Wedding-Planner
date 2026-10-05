@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Activity, AlertCircle, Clock3, RefreshCw, Users } from "lucide-react";
-import { getAdminActivity } from "../lib/firebaseStore.js";
+import { Activity, AlertCircle, Clock3, Heart, RefreshCw, UserCheck, Users } from "lucide-react";
+import { getAdminActivity, getAdminStats } from "../lib/firebaseStore.js";
 
 const dateLabel = (value) => {
   if (!value) return "טרם נרשם";
@@ -10,22 +10,49 @@ const dateLabel = (value) => {
     : new Intl.DateTimeFormat("he-IL", { dateStyle: "medium", timeStyle: "short" }).format(date);
 };
 
+function StatTile({ icon: Icon, label, value, hint, loading }) {
+  return (
+    <div className="min-w-0 rounded-2xl bg-white/10 p-4 ring-1 ring-white/15 backdrop-blur-sm">
+      <p className="flex items-center gap-2 text-xs font-semibold text-slate-300">
+        <Icon size={15} className="shrink-0 text-gold-300" />
+        <span className="truncate">{label}</span>
+      </p>
+      <p className="mt-2 text-3xl font-bold tabular-nums text-white sm:text-4xl">
+        {loading ? (
+          <span role="status" aria-label="טוען" className="inline-block h-9 w-14 animate-pulse rounded-lg bg-white/15 align-middle" />
+        ) : (
+          value ?? "—"
+        )}
+      </p>
+      <p className="mt-1 text-[11px] leading-4 text-slate-400">{hint}</p>
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
   const [rows, setRows] = useState([]);
+  const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
 
   const load = useCallback(async (activeRef) => {
-    try {
-      const result = await getAdminActivity();
-      if (activeRef.current) setRows(result);
-    } catch (err) {
-      console.error("Failed to load admin activity:", err);
-      if (activeRef.current) setError("לא ניתן לטעון פעילות מערכת כרגע. בדקו הרשאה וחיבור ונסו שוב.");
-    } finally {
-      if (activeRef.current) setLoading(false);
+    // Independent requests: a failing counter must not hide the activity table, or vice versa.
+    const [activity, summary] = await Promise.allSettled([getAdminActivity(), getAdminStats()]);
+    if (!activeRef.current) return;
+    if (activity.status === "fulfilled") {
+      setRows(activity.value);
+    } else {
+      console.error("Failed to load admin activity:", activity.reason);
+      setError("לא ניתן לטעון פעילות מערכת כרגע. בדקו הרשאה וחיבור ונסו שוב.");
     }
+    if (summary.status === "fulfilled") {
+      setStats(summary.value);
+    } else {
+      console.error("Failed to load admin stats:", summary.reason);
+      setStats(null);
+    }
+    setLoading(false);
   }, []);
 
   const refresh = () => {
@@ -65,6 +92,23 @@ export default function AdminDashboard() {
           >
             <RefreshCw size={16} className={loading ? "animate-spin" : ""} /> רענון
           </button>
+        </div>
+
+        <div data-tour="admin-stats" className="mt-5 grid grid-cols-2 gap-3 sm:max-w-xl">
+          <StatTile
+            icon={Heart}
+            label="חתונות במערכת"
+            value={stats?.weddings}
+            hint="כל החתונות ב-Production"
+            loading={loading}
+          />
+          <StatTile
+            icon={UserCheck}
+            label="משתמשים פעילים"
+            value={stats?.activeUsers}
+            hint="נראו ב-10 הדקות האחרונות"
+            loading={loading}
+          />
         </div>
       </section>
 

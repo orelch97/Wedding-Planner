@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import ExcelJS from "exceljs";
-import { assertEmulatorEnvironment, expectAppHealthy, uniqueIdentity, signUp, signIn, navigateTo, openNavigationMenu, expectGuestPresent } from "./helpers/emulator.js";
+import { assertEmulatorEnvironment, expectAppHealthy, uniqueIdentity, signUp, signIn, navigateTo, openNavigationMenu, expectGuestPresent, openAddGuestForm } from "./helpers/emulator.js";
 
 assertEmulatorEnvironment();
 
@@ -156,6 +156,10 @@ test.describe("emulator isolation and account lifecycle", () => {
     await navigateTo(page, "guests");
 
     const guestName = `E2E guest ${Date.now()}`;
+    // Collapsed until asked for, so its fields are not reachable yet.
+    await expect(page.locator('[data-tour="guests-add"]').getByRole("button", { name: "הוספת מוזמן חדש" })).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByRole("textbox", { name: "שם האורח או המשפחה" })).toHaveCount(0);
+    await openAddGuestForm(page);
     await page.getByRole("textbox", { name: "שם האורח או המשפחה" }).fill(guestName);
     await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
     await expectGuestPresent(page, guestName);
@@ -171,6 +175,7 @@ test.describe("emulator isolation and account lifecycle", () => {
     await navigateTo(page, "guests");
 
     const guestName = `E2E backup guest ${Date.now()}`;
+    await openAddGuestForm(page);
     await page.getByRole("textbox", { name: "שם האורח או המשפחה" }).fill(guestName);
     await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
     await expectGuestPresent(page, guestName);
@@ -326,11 +331,15 @@ test.describe("emulator isolation and account lifecycle", () => {
     test.setTimeout(120_000);
     await signUp(page, uniqueIdentity("alcohol"));
     await navigateTo(page, "guests");
+    await openAddGuestForm(page);
     await page.getByRole("textbox", { name: "שם האורח או המשפחה" }).fill(`E2E drinkers ${Date.now()}`);
     await page.getByRole("spinbutton", { name: "מספר כיסאות" }).fill("8");
     await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
     await navigateTo(page, "alcohol");
 
+    // The guest list has 8 seats, but the headcount is the couple's own estimate, not the RSVPs.
+    await expect(page.locator('[data-tour="alcohol-result"]')).toContainText("0 אנשים");
+    await page.getByRole("spinbutton", { name: "מספר האורחים המשוער באירוע" }).fill("8");
     await page.getByRole("spinbutton", { name: "אחוז האורחים ששותים אלכוהול" }).fill("50");
     await expect(page.locator('[data-tour="alcohol-result"]')).toContainText("4 אנשים");
     await page.getByRole("button", { name: /שותים הרבה/ }).click();
@@ -340,9 +349,20 @@ test.describe("emulator isolation and account lifecycle", () => {
     await expect(page.locator('[data-tour="alcohol-shopping-list"]')).toContainText("הרשימה עדיין ריקה");
 
     const addDrink = page.locator('[data-tour="alcohol-add-drink"]');
+    // The form is collapsed until asked for, and its fields are out of the tab order meanwhile.
+    const addToggle = addDrink.getByRole("button", { name: "הוספת משקה חדש" });
+    await expect(addToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(addDrink.getByRole("textbox", { name: "שם המשקה" })).toHaveCount(0);
+    await addToggle.click();
+    await expect(addToggle).toHaveAttribute("aria-expanded", "true");
     await addDrink.getByRole("textbox", { name: "שם המשקה" }).fill("QA Vodka");
     await addDrink.getByRole("spinbutton", { name: "ליטר לבקבוק" }).fill("1");
     await addDrink.getByRole("button", { name: "הוספה" }).click();
+    // The form stays open after adding; closing it is the user's call.
+    await expect(addToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(addDrink.getByRole("textbox", { name: "שם המשקה" })).toHaveValue("");
+    await addToggle.click();
+    await expect(addToggle).toHaveAttribute("aria-expanded", "false");
     await expect(page.getByRole("spinbutton", { name: "כמות QA Vodka" })).toHaveValue("1");
 
     // Every field lives in the row itself and is editable in place.
@@ -378,6 +398,7 @@ test.describe("emulator isolation and account lifecycle", () => {
     await signUp(page, uniqueIdentity("seating"));
     await navigateTo(page, "guests");
     const guestName = `E2E seated guest ${Date.now()}`;
+    await openAddGuestForm(page);
     await page.getByRole("textbox", { name: "שם האורח או המשפחה" }).fill(guestName);
     await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
     await expectGuestPresent(page, guestName);

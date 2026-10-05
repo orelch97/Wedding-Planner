@@ -31,12 +31,21 @@ export async function openSignup(page) {
 
 export async function openNavigationMenu(page) {
   const menuButton = page.getByRole("button", { name: "פתיחת תפריט הניווט" });
-  if (await menuButton.isVisible()) await menuButton.click();
+  if (!(await menuButton.isVisible())) return;
+  // The drawer may already be open (e.g. after using the sidebar's share button).
+  if ((await menuButton.getAttribute("aria-expanded")) === "true") return;
+  await menuButton.click();
 }
 
 export async function navigateTo(page, key) {
   await openNavigationMenu(page);
   await page.locator(`[data-tour="nav-${key}"]`).click();
+}
+
+// The add-guest form is collapsed by default.
+export async function openAddGuestForm(page) {
+  const toggle = page.locator('[data-tour="guests-add"]').getByRole("button", { name: "הוספת מוזמן חדש" });
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
 }
 
 export async function expectGuestPresent(page, name) {

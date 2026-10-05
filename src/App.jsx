@@ -137,7 +137,6 @@ import {
   restoreVendorFile,
   vendorFileUrl,
   uploadCountdownBackground,
-  getAdminStats,
   deleteWedding,
   ensureMyWedding,
   migrateVendorIds,
@@ -879,6 +878,49 @@ function Card({ children, className = "", tourId, style }) {
   );
 }
 
+// Grid 0fr→1fr animates to the content's real height. Closed = inert, so the fields
+// leave the tab order and the screen reader; data-tour sits on the wrapper so the guided tour
+// still finds the button while the form is collapsed.
+function CollapsibleAdd({ label, open, onToggle, panelId, toggleRef, tourId, className = "", children }) {
+  return (
+    <div data-tour={tourId} className={className}>
+      <button
+        ref={toggleRef}
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={panelId}
+        className={`group flex min-h-12 w-full items-center justify-between gap-3 rounded-2xl border-2 border-dashed px-3.5 py-2 text-start transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 ${
+          open
+            ? "border-gold-400 bg-gold-50 text-gold-700"
+            : "border-gold-300 bg-gold-50/50 text-gold-700 hover:border-gold-400 hover:bg-gold-50"
+        }`}
+      >
+        <span className="flex min-w-0 items-center gap-2.5">
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gold-500 text-white shadow-sm shadow-gold-500/30 transition group-hover:bg-gold-600">
+            <Plus size={16} className={`transition-transform duration-300 ${open ? "rotate-45" : ""}`} />
+          </span>
+          <span className="truncate text-sm font-bold">{label}</span>
+        </span>
+        <ChevronDown
+          size={18}
+          className={`shrink-0 text-gold-600 transition-transform duration-300 ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      <div
+        id={panelId}
+        inert={!open}
+        aria-hidden={!open}
+        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none ${
+          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+        }`}
+      >
+        <div className="min-h-0 overflow-hidden">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 function SectionTitle({ icon: Icon, title, subtitle, action }) {
   return (
     <div className="mb-4 flex flex-wrap items-end justify-between gap-3 sm:mb-6">
@@ -918,7 +960,7 @@ const NAV = [
   //  שזוג שואל כשהוא נכנס — “מה עוד נשאר לנו?”
   { key: "checklist", label: "צ׳קליסט", icon: ListChecks, scope: "checklist" },
   { key: "guests", label: "מוזמנים", icon: Users, scope: "guests" },
-  { key: "alcohol", label: "מחשבון אלכוהול", icon: Wine, scope: "guests" },
+  { key: "alcohol", label: "חישוב אלכוהול", icon: Wine, scope: "guests" },
   //  ההושבה יושבת על אותו היקף הרשאות כמו המוזמנים (אותה טבלה בפועל),
   //  אבל היא מסך נפרד: היא נפתחת בשלב אחר של התכנון ודורשת מסך מלא.
   { key: "seating", label: "סידור הושבה", icon: Armchair, scope: "guests" },
@@ -1481,7 +1523,6 @@ function Overview({
   canAddVendor = false,
   dataLoading = false,
   dataUnavailable = false,
-  adminStats,
   backgroundUrl,
   onBackgroundChange,
 }) {
@@ -1607,26 +1648,6 @@ function Overview({
           />
         </StatCard>
       </div>
-
-      {adminStats && (
-        <Card className="border border-gold-200 bg-gold-50/70">
-          <SectionTitle
-            icon={Settings2}
-            title="נתוני מערכת"
-            subtitle="תצוגת מנהל מערכת"
-          />
-          <div className="grid grid-cols-2 gap-3 text-center sm:max-w-md">
-            <div className="rounded-xl bg-white/80 p-3 ring-1 ring-gold-100">
-              <p className="text-xs text-slate-500">חתונות פעילות</p>
-              <p className="mt-1 text-2xl font-bold tabular-nums text-slate-800">{adminStats.weddings}</p>
-            </div>
-            <div className="rounded-xl bg-white/80 p-3 ring-1 ring-gold-100">
-              <p className="text-xs text-slate-500">משתמשים פעילים</p>
-              <p className="mt-1 text-2xl font-bold tabular-nums text-slate-800">{adminStats.activeUsers}</p>
-            </div>
-          </div>
-        </Card>
-      )}
 
       {/* Vendors quick glance */}
       <Card tourId="overview-vendors">
@@ -2372,6 +2393,10 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   const canEdit = useCanEdit();
   const fileRef = useRef(null);
   const addGuestFormRef = useRef(null);
+  //  סגור כברירת מחדל: בנייד הטופס תופס מסך שלם, ורוב הביקורים הם בשביל חיפוש ועריכה.
+  const [isAddGuestOpen, setIsAddGuestOpen] = useState(false);
+  const addGuestToggleRef = useRef(null);
+  const addGuestTouched = useRef(false);
   const columnsButtonRef = useRef(null);
   const columnsPopoverRef = useRef(null);
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -2658,10 +2683,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
           <button
             type="button"
-            onClick={() => {
-              addGuestFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-              addGuestFormRef.current?.querySelector("input")?.focus({ preventScroll: true });
-            }}
+            onClick={openAddGuest}
             className="btn-primary w-full sm:w-auto"
           >
             <Plus size={17} /> הוספת מוזמן
@@ -2735,6 +2757,20 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   //  בלי הנפילה לראשונה ה-select היה מוצג ריק והרשומה נשמרת עם קטגוריה שאינה קיימת.
   const formCategory = categories.includes(form.category) ? form.category : categories[0] || "";
 
+  useEffect(() => {
+    if (!addGuestTouched.current) return;
+    if (isAddGuestOpen) addGuestFormRef.current?.querySelector("input")?.focus({ preventScroll: true });
+    else addGuestToggleRef.current?.focus();
+  }, [isAddGuestOpen]);
+
+  //  גם הכפתור במצב „רשימה ריקה” מגיע לכאן, והוא נמצא רחוק מהטופס.
+  function openAddGuest() {
+    addGuestTouched.current = true;
+    addGuestToggleRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (isAddGuestOpen) addGuestFormRef.current?.querySelector("input")?.focus({ preventScroll: true });
+    else setIsAddGuestOpen(true);
+  }
+
   function addGuest(e) {
     e.preventDefault();
     if (!form.name.trim()) return;
@@ -2767,6 +2803,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       glatt: false,
       drinkers: false,
     });
+    //  נשארים פתוחים: מזינים בדרך כלל כמה מוזמנים ברצף, ולכן חוזרים לשדה השם.
+    addGuestFormRef.current?.querySelector("input")?.focus({ preventScroll: true });
   }
 
   const toggleFlag = useCallback((id, key) => {
@@ -3272,21 +3310,23 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         </div>
 
         {canEdit && (
+        <CollapsibleAdd
+          tourId="guests-add"
+          label="הוספת מוזמן חדש"
+          open={isAddGuestOpen}
+          onToggle={() => {
+            addGuestTouched.current = true;
+            setIsAddGuestOpen((open) => !open);
+          }}
+          panelId="guests-add-panel"
+          toggleRef={addGuestToggleRef}
+          className="mb-4 sm:mb-5"
+        >
         <form
           ref={addGuestFormRef}
           onSubmit={addGuest}
-          data-tour="guests-add"
-          className="mb-4 rounded-2xl border border-gold-200 bg-gradient-to-l from-gold-50/70 to-white p-3 shadow-sm sm:mb-5 sm:p-4"
+          className="mt-2.5 rounded-2xl border border-gold-200 bg-gradient-to-l from-gold-50/70 to-white p-3 sm:p-4"
         >
-          <div className="mb-3 flex items-center gap-2.5">
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gold-500 text-white shadow-md shadow-gold-500/30">
-              <Plus size={18} />
-            </span>
-            <div>
-              <p className="text-sm font-bold text-slate-800">הוספת מוזמן חדש</p>
-              <p className="text-xs text-slate-500">מלאו את הפרטים ולחצו “הוסף לרשימה”</p>
-            </div>
-          </div>
           {/*  בנייד שתי עמודות ולא אחת. שבעה שדות ברוחב מלא הפכו טופס אחד
               ל-330px של גלילה, ושדות כמו "כיסאות" קיבלו שורה שלמה כדי להציג
               ספרה אחת.  */}
@@ -3355,7 +3395,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             גלאט
           </label>
           <label
-            title="המוזמנים ברשומה הזו שותים אלכוהול — משמש למחשבון האלכוהול"
+            title="המוזמנים ברשומה הזו שותים אלכוהול — משמש לחישוב האלכוהול"
             className="flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-600 outline-none focus-within:border-gold-400 sm:min-h-0"
           >
             <input
@@ -3374,6 +3414,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           </button>
           </div>
         </form>
+        </CollapsibleAdd>
         )}
 
         {/* Search & Filters */}
@@ -3964,7 +4005,7 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
 }
 
 /* =============================================================================
- *  מחשבון אלכוהול
+ *  חישוב אלכוהול
  * -----------------------------------------------------------------------------
  *  המסך עונה על שאלה אחת: מה לקנות, כמה, ובכמה זה יוצא.
  *
@@ -4033,38 +4074,79 @@ const litersLabel = (value) => String(Number(toNum(value).toFixed(1)));
 
 const ALCOHOL_BUDGET_CATEGORY = "אלכוהול";
 
+//  המחשבון נשמר ב-settings/guests של החתונה, כדי שגם בן/בת הזוג יראו אותו ויערכו אותו.
+const ALCOHOL_DEFAULTS = { source: "percent", percent: 80, headcount: "", peoplePerBottle: 6, drinks: [] };
+
+function normalizeAlcohol(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return {
+    source: raw.source === "marked" ? "marked" : "percent",
+    percent: raw.percent ?? ALCOHOL_DEFAULTS.percent,
+    headcount: raw.headcount ?? "",
+    peoplePerBottle: raw.peoplePerBottle ?? ALCOHOL_DEFAULTS.peoplePerBottle,
+    drinks: Array.isArray(raw.drinks) ? raw.drinks.filter((d) => d && typeof d === "object") : [],
+  };
+}
+
+//  לפני שהמחשבון נשמר בענן הוא נשמר בדפדפן, בחמישה מפתחות נפרדים. מי שכבר
+//  עבד איתו לא מאבד דבר: הנתונים האלה הם נקודת ההתחלה, ומועלים לענן בטעינה.
+function readLocalAlcohol(prefix) {
+  const value = normalizeAlcohol({
+    source: loadStored(prefix, "alcoholCalculatorSource", ALCOHOL_DEFAULTS.source),
+    percent: loadStored(prefix, "alcoholCalculatorPercent", ALCOHOL_DEFAULTS.percent),
+    headcount: loadStored(prefix, "alcoholCalculatorHeadcount", ALCOHOL_DEFAULTS.headcount),
+    peoplePerBottle: loadStored(prefix, "alcoholCalculatorPeoplePerBottle", ALCOHOL_DEFAULTS.peoplePerBottle),
+    drinks: loadStored(prefix, "alcoholDrinks", ALCOHOL_DEFAULTS.drinks),
+  });
+  return JSON.stringify(value) === JSON.stringify(ALCOHOL_DEFAULTS) ? null : value;
+}
+
 function getAlcoholStats(guests) {
   const activeGuests = guests.filter((guest) => guest.rsvp !== "declined");
   const drinkers = activeGuests.reduce(
     (sum, guest) => sum + Math.min(guest.seats || 1, Math.max(0, Number(guest.drinkers) || 0)),
     0
   );
-  const seatsTotal = activeGuests.reduce((sum, guest) => sum + (guest.seats || 0), 0);
-  const probablySeats = activeGuests
-    .filter((guest) => guest.probablyComing)
-    .reduce((sum, guest) => sum + (guest.seats || 1), 0);
-  const confirmedPeople = guests.reduce((sum, guest) => {
-    if (guest.rsvp !== "confirmed") return sum;
-    const seats = guest.seats || 1;
-    return sum + (guest.attendingCount != null ? Math.min(guest.attendingCount, seats) : seats);
-  }, 0);
-  return { drinkers, expectedSeats: confirmedPeople || probablySeats || seatsTotal };
+  const listedSeats = activeGuests.reduce((sum, guest) => sum + (guest.seats || 0), 0);
+  return { drinkers, listedSeats };
 }
 
-function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
+function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcohol }) {
   const canEdit = useCanEdit();
   //  כל עוד אף אחד לא סומן ברשימה אין טעם להציג 0 — עוברים אוטומטית
   //  להערכה לפי אחוז מהאורחים, שהיא הדרך שבה רוב הזוגות מתחילים.
-  const [source, setSource] = usePersistentState("alcoholCalculatorSource", "percent");
-  const [percent, setPercent] = usePersistentState("alcoholCalculatorPercent", 80);
-  const [peoplePerBottle, setPeoplePerBottle] = usePersistentState("alcoholCalculatorPeoplePerBottle", 6);
-  //  רשימה אחת במקום שבע מפות מקבילות. כל שורה היא אובייקט שלם, ולכן
-  //  הוספה ומחיקה הן פעולה אחת ולא שש.
-  const [drinks, setDrinks] = usePersistentState("alcoholDrinks", []);
-  const drinkId = useRef(1 + Math.max(0, ...drinks.map((drink) => toNum(drink.id))));
+  //  האלכוהול נקנה לפני שהאישורים מגיעים, ולכן הבסיס (headcount) הוא מספר שהזוג
+  //  קובע ולא מצב ההגעה ברשימה. ריק עד שהוזן — בלי ניחוש שקט מנתוני המוזמנים.
+  //  רשימת המשקאות היא מערך אחד: כל שורה היא אובייקט שלם, ולכן הוספה ומחיקה
+  //  הן פעולה אחת.
+  const { source, percent, headcount, peoplePerBottle, drinks } = alcohol;
+  const patchAlcohol = (patch) => {
+    if (canEdit) setAlcohol((previous) => ({ ...previous, ...patch }));
+  };
+  const setSource = (value) => patchAlcohol({ source: value });
+  const setPercent = (value) => patchAlcohol({ percent: value });
+  const setHeadcount = (value) => patchAlcohol({ headcount: value });
+  const setPeoplePerBottle = (value) => patchAlcohol({ peoplePerBottle: value });
+  const setDrinks = (updater) => {
+    if (!canEdit) return;
+    setAlcohol((previous) => ({
+      ...previous,
+      drinks: typeof updater === "function" ? updater(previous.drinks) : updater,
+    }));
+  };
   const [newDrink, setNewDrink] = useState({ label: "", packKind: "bottle", packUnits: "24", unitLiters: "1" });
+  //  סגור כברירת מחדל: בנייד הטופס תופס מסך שלם, ורוב הזמן רק עורכים שורות קיימות.
+  const [isAddDrinkOpen, setIsAddDrinkOpen] = useState(false);
+  const addDrinkToggleRef = useRef(null);
+  const newDrinkNameRef = useRef(null);
+  const addDrinkTouched = useRef(false);
 
-  const base = expectedSeats || 0;
+  useEffect(() => {
+    if (!addDrinkTouched.current) return;
+    (isAddDrinkOpen ? newDrinkNameRef : addDrinkToggleRef).current?.focus();
+  }, [isAddDrinkOpen]);
+
+  const base = Math.max(0, Math.round(toNum(headcount)));
   const percentValue = Math.min(100, Math.max(0, toNum(percent)));
   const estimated = Math.round((base * percentValue) / 100);
   //  clamp על כל קלט: שדה ריק או ערך שלילי לא יפיל את החישוב.
@@ -4124,7 +4206,7 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
     setDrinks((previous) => [
       ...previous,
       {
-        id: drinkId.current++,
+        id: 1 + Math.max(0, ...previous.map((drink) => toNum(drink.id))),
         label: name,
         packKind: kind,
         packUnits: hasPackUnits(kind) ? Math.max(1, Math.round(toNum(packUnits, 1))) : 1,
@@ -4141,6 +4223,8 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
     e.preventDefault();
     if (createDrink(newDrink)) {
       setNewDrink({ label: "", packKind: "bottle", packUnits: "24", unitLiters: "1" });
+      //  נשארים פתוחים: סוגרים ידנית, וחוזרים לשדה השם להמשך הזנה.
+      newDrinkNameRef.current?.focus({ preventScroll: true });
     }
   }
 
@@ -4213,8 +4297,9 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                   key={option.key}
                   type="button"
                   onClick={() => setSource(option.key)}
+                  disabled={!canEdit}
                   aria-pressed={source === option.key}
-                  className={`min-h-12 rounded-xl px-2 py-1.5 text-center transition ${
+                  className={`min-h-12 rounded-xl px-2 py-1.5 text-center transition disabled:cursor-default ${
                     source === option.key
                       ? "bg-white text-slate-800 shadow-sm ring-1 ring-slate-200"
                       : "text-slate-500 hover:bg-white/60"
@@ -4228,7 +4313,37 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
 
             {source === "percent" ? (
               <div className="mt-3 rounded-2xl bg-gold-50/80 p-3 ring-1 ring-gold-200/80">
-                <div className="flex items-center gap-3">
+                {/*  המספר הזה הוא ההנחה של הזוג, לא ספירה: האלכוהול נקנה לפני
+                    שהאישורים מגיעים, ולכן הוא נקבע ידנית ולא נגזר מהרשימה.  */}
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-600">כמה אורחים אתם מעריכים שיהיו באירוע?</span>
+                  <div className={`${suffixBox} mt-1 border-gold-200 focus-within:border-gold-400 focus-within:ring-2 focus-within:ring-gold-200`}>
+                    <input
+                      type="number"
+                      min="0"
+                      inputMode="numeric"
+                      value={headcount}
+                      onChange={(e) => setHeadcount(e.target.value)}
+                      onFocus={() => setSource("percent")}
+                      disabled={!canEdit}
+                      placeholder="לדוגמה 400"
+                      aria-label="מספר האורחים המשוער באירוע"
+                      className={`${suffixInput} !text-start text-base`}
+                    />
+                    <span className="shrink-0 text-xs font-semibold text-gold-700">אורחים</span>
+                  </div>
+                </label>
+                {canEdit && listedSeats > 0 && listedSeats !== base && (
+                  <button
+                    type="button"
+                    onClick={() => setHeadcount(String(listedSeats))}
+                    className="mt-1.5 min-h-9 text-[11px] font-medium text-gold-700 underline decoration-gold-300 underline-offset-4 transition hover:text-gold-600"
+                  >
+                    להשתמש במספר המוזמנים ברשימה ({listedSeats})
+                  </button>
+                )}
+
+                <div className="mt-3 flex items-center gap-3 border-t border-gold-200/70 pt-3">
                   {/*  סימן ה-% יושב בתוך השדה ולא לידו, כדי שלא יהיה אפשר
                       לקרוא את “80” כמספר אנשים. מתחתיו מחוון, שמחזק את זה.  */}
                   <div className="flex h-14 w-28 shrink-0 items-center gap-1 rounded-xl border border-gold-200 bg-white px-3 transition focus-within:border-gold-400 focus-within:ring-2 focus-within:ring-gold-200">
@@ -4239,6 +4354,7 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                       value={percent}
                       onChange={(e) => setPercent(e.target.value)}
                       onFocus={() => setSource("percent")}
+                      disabled={!canEdit}
                       aria-label="אחוז האורחים ששותים אלכוהול"
                       className="w-full min-w-0 bg-transparent text-2xl font-bold tabular-nums text-slate-800 outline-none"
                     />
@@ -4247,10 +4363,10 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium text-slate-500">מהאורחים שותים אלכוהול</p>
                     <p className="mt-0.5 truncate text-base font-bold text-slate-800">
-                      {base > 0 ? `≈ ${peopleLabel(estimated)}` : "ממתין לנתוני הגעה"}
+                      {base > 0 ? `≈ ${peopleLabel(estimated)}` : "ממתין למספר אורחים"}
                     </p>
                     <p className="text-[11px] text-slate-500">
-                      {base > 0 ? `מתוך ${base} צפויים להגיע` : "אין עדיין אישורי הגעה ברשימה"}
+                      {base > 0 ? `מתוך ${base} אורחים` : "הזינו למעלה את ההערכה"}
                     </p>
                   </div>
                 </div>
@@ -4262,8 +4378,9 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                   value={percentValue}
                   onChange={(e) => setPercent(e.target.value)}
                   onFocus={() => setSource("percent")}
+                  disabled={!canEdit}
                   aria-label="מחוון אחוז השותים"
-                  className="mt-3 w-full cursor-pointer accent-gold-600"
+                  className="mt-3 w-full cursor-pointer accent-gold-600 disabled:cursor-default"
                 />
                 <p className="mt-1 text-[11px] text-slate-500">
                   80% הוא המספר שרוב הזוגות מתחילים ממנו. קהל מבוגר או דתי — פחות, קהל צעיר — יותר.
@@ -4301,6 +4418,7 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                 <button
                   key={p.key}
                   onClick={() => setPeoplePerBottle(p.perBottle)}
+                  disabled={!canEdit}
                   title={p.hint}
                   aria-pressed={Number(peoplePerBottle) === p.perBottle}
                   aria-label={`${p.label} — בקבוק לכל ${p.perBottle} אנשים. ${p.hint}`}
@@ -4324,6 +4442,7 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
                 min="1"
                 value={peoplePerBottle}
                 onChange={(e) => setPeoplePerBottle(e.target.value)}
+                disabled={!canEdit}
                 className="min-h-10 w-16 rounded-lg border border-slate-200 bg-white px-2 py-1 text-center text-sm font-semibold tabular-nums text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200"
                 aria-label="כמה אנשים לבקבוק אחד"
               />
@@ -4334,19 +4453,17 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
             </p>
           </div>
 
-          {/*  היעד יושב כעמודה שלישית ולא כפס רוחב מלא: אותו מידע, בלי
-              עוד 120 פיקסלים של גלילה.  */}
+          {/* כרטיס היעד ממורכז בכל רוחב: כותרת, המספר הגדול והסבר על אותו ציר. */}
           <div
             data-tour="alcohol-result"
-            className="flex items-center gap-3 rounded-2xl bg-gradient-to-l from-gold-500 to-sage-500 p-3.5 text-white shadow-lg shadow-gold-500/20 lg:flex-col lg:items-stretch lg:justify-center"
+            className="flex flex-col items-center justify-center gap-1 rounded-2xl bg-gradient-to-l from-gold-500 to-sage-500 px-4 py-5 text-center text-white shadow-lg shadow-gold-500/20"
           >
-            <div className="min-w-0 flex-1 lg:flex-none">
-              <p className="text-xs font-medium text-white/80">היעד שלכם</p>
-              <p className="text-3xl font-bold leading-tight">
-                {litersLabel(targetLiters)} <span className="text-lg">ליטר</span>
-              </p>
-            </div>
-            <p className="shrink-0 text-xs leading-5 text-white/85 lg:mt-1 lg:shrink">
+            <p className="text-xs font-semibold tracking-wide text-white/85">היעד שלכם</p>
+            <p className="text-4xl font-bold leading-none tabular-nums sm:text-5xl">
+              {litersLabel(targetLiters)}
+              <span className="ms-1.5 text-lg font-semibold text-white/90">ליטר</span>
+            </p>
+            <p className="mt-1 max-w-[16rem] text-xs leading-5 text-white/85">
               {peopleLabel(drinkerCount)} ששותים, בקבוק ליטר לכל {perBottle}.
             </p>
           </div>
@@ -4359,6 +4476,92 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
           title="רשימת הקנייה"
           subtitle="מוסיפים את מה שקונים, קובעים כמות ומחיר — והסכום מתעדכן"
         />
+
+        {/*  מי שרק צופה לא מקבל הוספה בכלל, ולכן אין כאן טופס מושבת.  */}
+        {canEdit && (
+          <CollapsibleAdd
+            tourId="alcohol-add-drink"
+            label="הוספת משקה חדש"
+            open={isAddDrinkOpen}
+            onToggle={() => {
+              addDrinkTouched.current = true;
+              setIsAddDrinkOpen((open) => !open);
+            }}
+            panelId="alcohol-add-drink-panel"
+            toggleRef={addDrinkToggleRef}
+            className="mb-3"
+          >
+            <form onSubmit={submitNewDrink} className="mt-2.5 rounded-2xl border border-slate-200 bg-slate-50/70 p-3 sm:p-3.5">
+              <div className="grid min-w-0 grid-cols-2 items-end gap-2.5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,.8fr)_minmax(0,.8fr)_auto]">
+                <label className="col-span-2 flex min-w-0 flex-col gap-1 lg:col-span-1">
+                  <span className={fieldLabel}>שם המשקה</span>
+                  <input
+                    ref={newDrinkNameRef}
+                    value={newDrink.label}
+                    onChange={(event) => setNewDrink((p) => ({ ...p, label: event.target.value }))}
+                    maxLength={40}
+                    placeholder="למשל: ואן גוך"
+                    className={`${field} min-w-0`}
+                    aria-label="שם המשקה"
+                  />
+                </label>
+                <label className="flex min-w-0 flex-col gap-1">
+                  <span className={fieldLabel}>סוג האריזה</span>
+                  <select
+                    value={newDrink.packKind}
+                    onChange={(event) => setNewDrink((p) => ({ ...p, packKind: event.target.value }))}
+                    className={`${field} min-w-0`}
+                    aria-label="סוג האריזה"
+                  >
+                    {PACK_KINDS.map((p) => (
+                      <option key={p.key} value={p.key}>{p.one}</option>
+                    ))}
+                  </select>
+                </label>
+
+                {/*  רק השדה שרלוונטי לאריזה שנבחרה. לבקבוק יש נפח, לארגז ולמגש
+                    יש כמה יש בפנים, וליחידה בודדת אין אף אחד מהם.  */}
+                {hasLiters(newDrink.packKind) && (
+                  <label className="flex min-w-0 flex-col gap-1">
+                    <span className={fieldLabel}>ליטר לבקבוק</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={newDrink.unitLiters}
+                      onChange={(event) => setNewDrink((p) => ({ ...p, unitLiters: event.target.value }))}
+                      className={`${field} min-w-0 text-center tabular-nums`}
+                      aria-label="ליטר לבקבוק"
+                    />
+                  </label>
+                )}
+                {hasPackUnits(newDrink.packKind) && (
+                  <label className="flex min-w-0 flex-col gap-1">
+                    <span className={fieldLabel}>יחידות באריזה</span>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={newDrink.packUnits}
+                      onChange={(event) => setNewDrink((p) => ({ ...p, packUnits: event.target.value }))}
+                      className={`${field} min-w-0 text-center tabular-nums`}
+                      aria-label="יחידות באריזה"
+                    />
+                  </label>
+                )}
+
+                <button type="submit" disabled={!newDrink.label.trim()} className="btn-primary col-span-2 w-full lg:col-span-1 lg:w-auto">
+                  <Plus size={16} /> הוספה
+                </button>
+              </div>
+
+              <p className="mt-2.5 text-[11px] leading-5 text-slate-500">
+                בקבוק נפתח עם נפח, ארגז או מגש עם „יחידות באריזה”. מחיר, כמות והחלטה אם
+                השורה נכנסת ליעד הליטרים נקבעים בשורה עצמה.
+              </p>
+            </form>
+          </CollapsibleAdd>
+        )}
 
         {/*  מד אחד שמחבר את היעד לרשימה. זה כל מה שצריך כדי לדעת אם
             קנינו מספיק — בלי אחוזים ובלי מספרים פנימיים.  */}
@@ -4389,7 +4592,7 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
           )}
         </div>
 
-        {quickAdd.length > 0 && (
+        {canEdit && quickAdd.length > 0 && (
           //  הצעות, לא ברירת מחדל: הרשימה נשארת ריקה עד שלוחצים.
           <div className="mb-3 flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] font-medium text-slate-500">הוספה מהירה:</span>
@@ -4414,8 +4617,9 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
             </div>
             <p className="mt-3 text-sm font-bold text-slate-800">הרשימה עדיין ריקה</p>
             <p className="mx-auto mt-1 max-w-sm text-xs leading-5 text-slate-500">
-              הוסיפו רק את המשקאות שאתם באמת מתכננים לקנות. לכל אחד תקבעו כמות ומחיר,
-              והמד למעלה יראה כמה אתם רחוקים מהיעד.
+              {canEdit
+                ? "הוסיפו רק את המשקאות שאתם באמת מתכננים לקנות. לכל אחד תקבעו כמות ומחיר, והמד למעלה יראה כמה אתם רחוקים מהיעד."
+                : "עדיין לא נוספו משקאות לרשימה."}
             </p>
           </div>
         ) : (
@@ -4582,85 +4786,6 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
             })}
           </ul>
         )}
-
-        <form data-tour="alcohol-add-drink" onSubmit={submitNewDrink} className="mt-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50/70 p-3 sm:p-3.5">
-          <p className="mb-2.5 flex items-center gap-2 text-sm font-bold text-slate-800">
-            <Plus size={15} className="text-gold-600" /> הוספת משקה לרשימה
-          </p>
-
-          <div className="grid min-w-0 grid-cols-2 items-end gap-2.5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,.8fr)_minmax(0,.8fr)_auto]">
-            <label className="col-span-2 flex min-w-0 flex-col gap-1 lg:col-span-1">
-              <span className={fieldLabel}>שם המשקה</span>
-              <input
-                value={newDrink.label}
-                onChange={(event) => setNewDrink((p) => ({ ...p, label: event.target.value }))}
-                maxLength={40}
-                placeholder="למשל: ואן גוך"
-                className={`${field} min-w-0`}
-                aria-label="שם המשקה"
-                disabled={!canEdit}
-              />
-            </label>
-            <label className="flex min-w-0 flex-col gap-1">
-              <span className={fieldLabel}>סוג האריזה</span>
-              <select
-                value={newDrink.packKind}
-                onChange={(event) => setNewDrink((p) => ({ ...p, packKind: event.target.value }))}
-                className={`${field} min-w-0`}
-                aria-label="סוג האריזה"
-                disabled={!canEdit}
-              >
-                {PACK_KINDS.map((p) => (
-                  <option key={p.key} value={p.key}>{p.one}</option>
-                ))}
-              </select>
-            </label>
-
-            {/*  רק השדה שרלוונטי לאריזה שנבחרה. לבקבוק יש נפח, לארגז ולמגש
-                יש כמה יש בפנים, וליחידה בודדת אין אף אחד מהם.  */}
-            {hasLiters(newDrink.packKind) && (
-              <label className="flex min-w-0 flex-col gap-1">
-                <span className={fieldLabel}>ליטר לבקבוק</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={newDrink.unitLiters}
-                  onChange={(event) => setNewDrink((p) => ({ ...p, unitLiters: event.target.value }))}
-                  className={`${field} min-w-0 text-center tabular-nums`}
-                  aria-label="ליטר לבקבוק"
-                  disabled={!canEdit}
-                />
-              </label>
-            )}
-            {hasPackUnits(newDrink.packKind) && (
-              <label className="flex min-w-0 flex-col gap-1">
-                <span className={fieldLabel}>יחידות באריזה</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={newDrink.packUnits}
-                  onChange={(event) => setNewDrink((p) => ({ ...p, packUnits: event.target.value }))}
-                  className={`${field} min-w-0 text-center tabular-nums`}
-                  aria-label="יחידות באריזה"
-                  disabled={!canEdit}
-                />
-              </label>
-            )}
-
-            <button type="submit" disabled={!canEdit || !newDrink.label.trim()} className="btn-primary col-span-2 w-full lg:col-span-1 lg:w-auto">
-              <Plus size={16} /> הוספה
-            </button>
-          </div>
-
-          <p className="mt-2.5 text-[11px] leading-5 text-slate-500">
-            בקבוק נפתח עם שדה נפח — למשל בקבוק ואן גוך של 1 ליטר. ארגז או מגש נפתחים עם
-            „יחידות באריזה”: כמה פריטים יש באריזה שאתם קונים (מגש אקסל של 24 → 24).
-            המחיר והכמות נקבעים בשורה עצמה, ושם גם קובעים בכפתור „מחושב באלכוהול”
-            אילו שורות נכנסות ליעד הליטרים — זו החלטה שלכם בכל סוג אריזה.
-          </p>
-        </form>
 
         {/*  הסיכום יושב בתחתית אותו כרטיס ולא בכרטיס נפרד: הוא התוצאה של
             הרשימה שמעליו, ולא נושא בפני עצמו.  */}
@@ -7643,6 +7768,17 @@ function CloudStatus({ status }) {
  * ====================================================================== */
 
 const INVITE_STORAGE_KEY = "wp:pendingInvite";
+
+// A token redeems exactly once, so a re-run of the loading effect must share the first attempt.
+const inviteAcceptances = new Map();
+function acceptInviteOnce(token) {
+  const existing = inviteAcceptances.get(token);
+  if (existing) return { promise: existing, first: false };
+  const promise = acceptInvite(token);
+  inviteAcceptances.set(token, promise);
+  promise.catch(() => inviteAcceptances.delete(token));
+  return { promise, first: true };
+}
 /** התנתקות אוטומטית לאחר חוסר פעילות (דקות). */
 const IDLE_LOGOUT_MINUTES = 30;
 
@@ -8485,12 +8621,13 @@ function WeddingShell({ session }) {
         let target = null;
         const token = sessionStorage.getItem(INVITE_STORAGE_KEY);
         if (token) {
+          const { promise, first } = acceptInviteOnce(token);
           try {
-            target = await acceptInvite(token);
+            target = await promise;
             sessionStorage.removeItem(INVITE_STORAGE_KEY);
-            notify("ההזמנה התקבלה – החתונה נוספה לרשימה שלך", { tone: "success" });
+            if (first) notify("ההזמנה התקבלה – החתונה נוספה לרשימה שלך", { tone: "success" });
           } catch (err) {
-            notify(inviteErrorMessage(err), { tone: "error", duration: 10000 });
+            if (first) notify(inviteErrorMessage(err), { tone: "error", duration: 10000 });
           }
         } else {
           try {
@@ -8932,6 +9069,15 @@ function WeddingApp({
     "categories",
     cloudEnabled ? [] : GUEST_CATEGORIES
   );
+  //  מחשבון האלכוהול הוא נתון של החתונה, כמו הקטגוריות: נשמר בענן כדי שגם
+  //  בן/בת הזוג יראו אותו. עד שהוא נטען משם ההתחלה היא מה שכבר נשמר בדפדפן הזה.
+  const storagePrefix = useContext(StoragePrefixContext);
+  const initialAlcohol = useMemo(
+    () => readLocalAlcohol(storagePrefix) ?? ALCOHOL_DEFAULTS,
+    [storagePrefix]
+  );
+  const [alcohol, setAlcohol] = usePersistentState("alcoholCalc", initialAlcohol);
+  const alcoholSyncedRef = useRef(null);
   //  שמות בני הזוג. במצב ענן הם חיים על רשומת החתונה עצמה, ולכן הם מסתנכרנים
   //  בין מכשירים ונראים גם למי שהחתונה שותפה איתו. במצב localStorage בלבד אין
   //  רשומת חתונה, ולכן נשמרת ברירת המחדל ההיסטורית של הדמו.
@@ -8947,25 +9093,6 @@ function WeddingApp({
     : localCouple;
   const coupleTitle = coupleToTitle(couple);
   const [countdownBackgroundUrl, setCountdownBackgroundUrl] = useState("");
-  const [adminStats, setAdminStats] = useState(null);
-
-  useEffect(() => {
-    if (!cloudEnabled || !adminAllowed) return undefined;
-    let active = true;
-    getAdminStats()
-      .then((stats) => {
-        if (active) setAdminStats(stats);
-      })
-      .catch((err) => {
-        if (active) setAdminStats(null);
-        if (err?.code !== "functions/permission-denied") {
-          console.error("Failed to load admin stats:", err);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [cloudEnabled, adminAllowed]);
 
   const handleCountdownBackgroundChange = useCallback(
     async (file) => {
@@ -9226,6 +9353,20 @@ function WeddingApp({
         //  גם רשימה ריקה היא ערך תקף — משתמש שמחק את כל הקטגוריות שלו
         //  לא אמור לקבל בחזרה את ברירת המחדל בטעינה הבאה.
         if (Array.isArray(s.categories)) setCategories(s.categories);
+        if (mayGuests) {
+          //  מה שבענן הוא מקור האמת. כשאין שם כלום, מי שרשאי לערוך מעלה את מה
+          //  שכבר הזין בדפדפן, כדי ששותף שייכנס אחר כך יראה אותו.
+          const remoteAlcohol = normalizeAlcohol(s.alcohol);
+          if (remoteAlcohol) {
+            alcoholSyncedRef.current = JSON.stringify(remoteAlcohol);
+            setAlcohol(remoteAlcohol);
+          } else if (canEdit && JSON.stringify(alcohol) !== JSON.stringify(ALCOHOL_DEFAULTS)) {
+            const uploaded = JSON.stringify(alcohol);
+            saveWeddingSettings(weddingId, { alcohol })
+              .then(() => { alcoholSyncedRef.current = uploaded; })
+              .catch((err) => console.error("Failed to upload alcohol calculator:", err));
+          }
+        }
         prevIdsRef.current = {
           guests: new Set(data.guests.map((g) => g.id)),
           tables: new Set(data.tables.map((t) => t.id)),
@@ -9545,6 +9686,25 @@ function WeddingApp({
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [budgetGoal, categories, countdownBackgroundUrl, financeLabels, syncRetry]);
+
+  //  מחשבון האלכוהול נשמר בנפרד מההגדרות: הוא שייך להיקף „מוזמנים", וגם הוא
+  //  מסתנכרן רק אחרי שהטעינה הסתיימה ורק למי שרשאי לערוך.
+  useEffect(() => {
+    if (!cloudEnabled || !canEdit || !mayGuests || !settingsReadyRef.current) return;
+    const json = JSON.stringify(alcohol);
+    if (json === alcoholSyncedRef.current) return;
+    const timer = setTimeout(async () => {
+      try {
+        await saveWeddingSettings(weddingId, { alcohol });
+        alcoholSyncedRef.current = json;
+      } catch (err) {
+        console.error("Cloud sync failed (alcohol):", err);
+        scheduleSyncRetry();
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alcohol, syncRetry]);
 
   // Show a subtle "saved" indicator whenever data changes.
   useEffect(() => {
@@ -10369,11 +10529,6 @@ function WeddingApp({
               canAddVendor={canEdit && mayVendors}
               dataLoading={cloudEnabled && ["connecting", "loading"].includes(cloudStatus)}
               dataUnavailable={cloudEnabled && cloudStatus === "error"}
-              adminStats={
-                adminAllowed
-                  ? adminStats
-                  : null
-              }
               backgroundUrl={countdownBackgroundUrl}
               onBackgroundChange={
                 cloudEnabled && isOwner ? handleCountdownBackgroundChange : null
@@ -10402,7 +10557,9 @@ function WeddingApp({
             return (
               <AlcoholCalculator
                 drinkers={stats.drinkers}
-                expectedSeats={stats.expectedSeats}
+                listedSeats={stats.listedSeats}
+                alcohol={alcohol}
+                setAlcohol={setAlcohol}
                 setBudget={mayFinance ? setBudget : null}
               />
             );

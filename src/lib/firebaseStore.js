@@ -145,14 +145,24 @@ export async function cloudFetchAll(weddingId, { scopes = ["all"], isOwner = fal
   if (isOwner || hasScope("guests")) {
     reads.push(["guests", getDoc(scopedSettingsRef(weddingId, "guests"))]);
   }
-  if (isOwner) reads.push(["owner", getDoc(scopedSettingsRef(weddingId, "owner"))]);
+  // The countdown background is shown on the dashboard, which every full-scope member sees.
+  // A denial only costs the picture, so it must not fail the whole load (older rules).
+  if (isOwner || isFullScope(scopes)) {
+    reads.push([
+      "owner",
+      getDoc(scopedSettingsRef(weddingId, "owner")).catch((error) => {
+        if (!isOwner && error?.code === "permission-denied") return null;
+        throw error;
+      }),
+    ]);
+  }
 
   const scopedSettings = {};
   const snapshots = await Promise.all(reads.map(([, promise]) => promise));
   for (let index = 0; index < reads.length; index++) {
     const [key] = reads[index];
     const snapshot = snapshots[index];
-    if (key !== "legacy" && snapshot.exists()) {
+    if (key !== "legacy" && snapshot?.exists()) {
       Object.assign(scopedSettings, stripMeta(snapshot.data()));
     }
   }
@@ -196,7 +206,7 @@ export async function saveWeddingSettings(weddingId, settings) {
       ["budgetGoal", "financeLabels"].filter((key) => key in patch).map((key) => [key, patch[key]])
     ),
     guests: Object.fromEntries(
-      ["categories"].filter((key) => key in patch).map((key) => [key, patch[key]])
+      ["categories", "alcohol"].filter((key) => key in patch).map((key) => [key, patch[key]])
     ),
     owner: Object.fromEntries(
       ["countdownBackgroundUrl"].filter((key) => key in patch).map((key) => [key, patch[key]])

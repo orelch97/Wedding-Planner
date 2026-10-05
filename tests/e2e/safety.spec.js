@@ -394,6 +394,66 @@ test.describe("emulator isolation and account lifecycle", () => {
     await expect(page.locator('[data-tour="finance-add-item"]')).toContainText("עלות");
   });
 
+  test("flags guests that share a mobile number (digits only) and stays silent otherwise", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signUp(page, uniqueIdentity("dupes"));
+    await navigateTo(page, "guests");
+
+    const flags = page.locator("[data-duplicate-phone]:visible");
+    const chip = page.getByRole("button", { name: /נייד כפול/ });
+    const guest = (name) => page.locator(`input[value="${name}"]:visible`).first();
+    const add = async (name, phone) => {
+      await openAddGuestForm(page);
+      await page.getByRole("textbox", { name: "שם האורח או המשפחה" }).fill(name);
+      await page.getByRole("textbox", { name: "מספר נייד" }).fill(phone);
+      await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
+      await expect(guest(name)).toBeVisible();
+    };
+
+    // Valid, empty and hyphen-only records must never raise an alert, however many there are.
+    await add("אורח א", "050-1111111");
+    await add("אורח ב", "052-2222222");
+    await add("ללא טלפון 1", "");
+    await add("ללא טלפון 2", "");
+    await add("מקף בלבד 1", "-");
+    await add("מקף בלבד 2", "-");
+    await add("מספר חלקי", "050-12");
+    await expect(flags).toHaveCount(0);
+    await expect(chip).toHaveCount(0);
+
+    // The first holder of a number is not a duplicate until a second one appears.
+    await add("כפול ראשון", "050-1234567");
+    await expect(flags).toHaveCount(0);
+
+    // Same digits, hyphen only: both records are flagged and name each other.
+    await add("כפול שני", "0501234567");
+    await expect(flags).toHaveCount(2);
+    await expect(chip).toContainText("(2)");
+    const labels = await flags.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("aria-label")));
+    expect(labels.filter((label) => label.includes("כפול שני"))).toHaveLength(1);
+    expect(labels.filter((label) => label.includes("כפול ראשון"))).toHaveLength(1);
+
+    // Spaces count as separators too.
+    await add("כפול שלישי", "050 123 4567");
+    await expect(flags).toHaveCount(3);
+    await expect(chip).toContainText("(3)");
+
+    // The filter shows exactly the flagged records and nothing else.
+    await chip.click();
+    await expect(guest("כפול ראשון")).toBeVisible();
+    await expect(guest("כפול שלישי")).toBeVisible();
+    await expect(page.locator('input[value="אורח א"]:visible')).toHaveCount(0);
+    await chip.click();
+    await expect(guest("אורח א")).toBeVisible();
+
+    // Resolving the duplicates removes every alert, including the filter chip.
+    await page.getByRole("button", { name: "מחיקת כפול שלישי" }).click();
+    await expect(flags).toHaveCount(2);
+    await page.getByRole("button", { name: "מחיקת כפול שני" }).click();
+    await expect(flags).toHaveCount(0);
+    await expect(chip).toHaveCount(0);
+  });
+
   test("creates a guest and table, then assigns the guest to the table", async ({ page }) => {
     await signUp(page, uniqueIdentity("seating"));
     await navigateTo(page, "guests");
@@ -561,6 +621,8 @@ test.describe("emulator isolation and account lifecycle", () => {
       await openNavigationMenu(page);
       await page.getByRole("button", { name: "הגדרות החתונה" }).click();
       const settings = page.getByRole("dialog", { name: "הגדרות החתונה" });
+      // The dialog moves focus to its first field one frame after opening; typing before that lands in the wrong field.
+      await expect(settings.getByRole("textbox", { name: "שם בן/בת זוג א׳" })).toBeFocused();
       await settings.getByRole("textbox", { name: "שם בן/בת זוג א׳" }).fill("QA Partner A");
       await settings.getByRole("textbox", { name: "שם בן/בת זוג ב׳" }).fill("QA Partner B");
       await settings.locator("#wedding-date").fill("2028-06-15");

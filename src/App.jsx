@@ -146,6 +146,7 @@ import {
 } from "./lib/firebaseStore";
 import AdminDashboard from "./components/AdminDashboard.jsx";
 import { isAdminEmail } from "./lib/adminConfig.js";
+import { findDuplicatePhones, describeDuplicates } from "./lib/guestDuplicates.js";
 import {
   encryptBackup,
   decryptBackup,
@@ -1859,6 +1860,7 @@ const GuestRow = memo(function GuestRow({
   tableLabel,
   visibleColumns,
   selected,
+  duplicateNote,
   onToggleSelect,
   updateName,
   updatePhone,
@@ -1916,16 +1918,36 @@ const GuestRow = memo(function GuestRow({
         />
       </td>
       <td className="px-2 py-3">
-        <input
-          value={phone}
-          readOnly={!canEdit}
-          onChange={(e) => setPhone(e.target.value)}
-          onBlur={() => phone !== (g.phone || "") && updatePhone(g.id, phone)}
-          placeholder="נייד"
-          type="tel"
-          dir="ltr"
-          className="min-h-11 w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-start text-sm tabular-nums outline-none focus:border-gold-400"
-        />
+        {/*  האזהרה מצוירת בתוך השדה ולא לצידו, כדי שרוחב העמודה וגובה השורה
+            (שהווירטואליזציה מניחה קבוע) לא ישתנו כשמופיעה כפילות.  */}
+        <div className="relative w-28">
+          <input
+            value={phone}
+            readOnly={!canEdit}
+            onChange={(e) => setPhone(e.target.value)}
+            onBlur={() => phone !== (g.phone || "") && updatePhone(g.id, phone)}
+            placeholder="נייד"
+            type="tel"
+            dir="ltr"
+            title={duplicateNote}
+            className={
+              "min-h-11 w-28 rounded-lg border px-2 py-1 text-start text-sm tabular-nums outline-none focus:border-gold-400 " +
+              (duplicateNote
+                ? "border-amber-400 bg-amber-50 pr-7"
+                : "border-slate-200 bg-white")
+            }
+          />
+          {duplicateNote && (
+            <span
+              role="img"
+              aria-label={duplicateNote}
+              data-duplicate-phone
+              className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-amber-600"
+            >
+              <AlertTriangle size={15} />
+            </span>
+          )}
+        </div>
       </td>
       {visibleColumns.category && <td className="px-2 py-3">
         <select
@@ -2117,6 +2139,7 @@ const GuestCard = memo(function GuestCard({
   g,
   tableLabel,
   selected,
+  duplicateNote,
   onToggleSelect,
   updateName,
   updatePhone,
@@ -2193,6 +2216,18 @@ const GuestCard = memo(function GuestCard({
             שלא יהיה צורך לפתוח כרטיס רק כדי לראות אותם.  */}
         {!open && (
           <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
+            {duplicateNote && (
+              <button
+                type="button"
+                onClick={() => setOpen(true)}
+                data-duplicate-phone
+                aria-label={duplicateNote}
+                title={duplicateNote}
+                className="grid h-8 w-8 place-items-center rounded-lg bg-amber-50 text-amber-600 ring-1 ring-amber-300"
+              >
+                <AlertTriangle size={15} />
+              </button>
+            )}
             <span className="tabular-nums" title="כיסאות">
               {g.seats ?? 1}
             </span>
@@ -2236,9 +2271,20 @@ const GuestCard = memo(function GuestCard({
             placeholder="נייד"
             type="tel"
             dir="ltr"
-            className={`${field} text-start tabular-nums`}
+            className={
+              field + " text-start tabular-nums" + (duplicateNote ? " !border-amber-400 !bg-amber-50" : "")
+            }
           />
         </label>
+        {duplicateNote && (
+          <p
+            data-duplicate-phone
+            className="col-span-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 ring-1 ring-amber-200"
+          >
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            {duplicateNote}
+          </p>
+        )}
         <label className="col-span-2 text-xs font-medium text-slate-500">
           קטגוריה
           <select
@@ -2438,6 +2484,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     onlyGlatt: false,
     onlyDrinkers: false,
     onlyUnassigned: false,
+    onlyDuplicatePhones: false,
   });
 
   const [sort, setSort] = useState({ key: null, dir: "asc" });
@@ -2591,6 +2638,14 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     };
   }, [guests]);
 
+  //  נתון על כל הרשימה ולא על התוצאות המסוננות: כפילות עם רשומה שהסינון מסתיר
+  //  היא עדיין כפילות. הערך הוא מחרוזת, כדי ששורות ממוזכרות לא יתרעננו שלא לצורך.
+  const duplicatePhoneNotes = useMemo(() => {
+    const notes = new Map();
+    for (const [id, others] of findDuplicatePhones(guests)) notes.set(id, describeDuplicates(others));
+    return notes;
+  }, [guests]);
+
   const filtered = useMemo(() => {
     const q = filters.search.trim().toLowerCase();
     const assigned = filters.onlyUnassigned
@@ -2607,10 +2662,11 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       if (filters.onlyConsidering && !g.considering) return false;
       if (filters.onlyGlatt && !g.glatt) return false;
       if (filters.onlyDrinkers && !(g.drinkers > 0)) return false;
+      if (filters.onlyDuplicatePhones && !duplicatePhoneNotes.has(g.id)) return false;
       if (assigned && assigned.has(g.id)) return false;
       return true;
     });
-  }, [guests, filters, tables]);
+  }, [guests, filters, tables, duplicatePhoneNotes]);
 
   const guestTableMap = useMemo(() => {
     const m = {};
@@ -2655,7 +2711,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     filters.onlyConsidering ||
     filters.onlyGlatt ||
     filters.onlyDrinkers ||
-    filters.onlyUnassigned
+    filters.onlyUnassigned ||
+    filters.onlyDuplicatePhones
   );
 
   const guestEmptyState = dataLoading ? (
@@ -2710,6 +2767,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           onClick={() => setFilters({
             search: "", category: "all", rsvp: "all", onlyProbably: false,
             onlyConsidering: false, onlyGlatt: false, onlyDrinkers: false, onlyUnassigned: false,
+            onlyDuplicatePhones: false,
           })}
           className="btn-secondary mt-3"
         >
@@ -3529,6 +3587,24 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             >
               <Armchair size={15} /> לא משובץ
             </button>
+            {/*  מופיע רק כשיש כפילות (או כשהסינון כבר פעיל), כדי שלא יהיה רעש ויזואלי.  */}
+            {(duplicatePhoneNotes.size > 0 || filters.onlyDuplicatePhones) && (
+              <button
+                onClick={() =>
+                  setFilters({ ...filters, onlyDuplicatePhones: !filters.onlyDuplicatePhones })
+                }
+                aria-pressed={filters.onlyDuplicatePhones}
+                title="רשומות שמספר הנייד שלהן מופיע ביותר מרשומה אחת"
+                className={
+                  "flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition " +
+                  (filters.onlyDuplicatePhones
+                    ? "bg-amber-500 text-slate-950"
+                    : "bg-amber-50 text-amber-800 ring-1 ring-amber-300 hover:bg-amber-100")
+                }
+              >
+                <AlertTriangle size={15} /> נייד כפול ({duplicatePhoneNotes.size})
+              </button>
+            )}
             {(filters.search ||
               filters.category !== "all" ||
               filters.rsvp !== "all" ||
@@ -3536,7 +3612,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               filters.onlyConsidering ||
               filters.onlyGlatt ||
               filters.onlyDrinkers ||
-              filters.onlyUnassigned) && (
+              filters.onlyUnassigned ||
+              filters.onlyDuplicatePhones) && (
               <button
                 onClick={() =>
                   setFilters({
@@ -3548,6 +3625,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                     onlyGlatt: false,
                     onlyDrinkers: false,
                     onlyUnassigned: false,
+                    onlyDuplicatePhones: false,
                   })
                 }
                 title="ניקוי כל הסינונים"
@@ -3696,6 +3774,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   tableLabel={guestTableMap[g.id]}
                   visibleColumns={visibleColumns}
                   selected={selectedIds.has(g.id)}
+                  duplicateNote={duplicatePhoneNotes.get(g.id)}
                   onToggleSelect={toggleSelect}
                   updateName={updateName}
                   updatePhone={updatePhone}
@@ -3735,6 +3814,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               g={g}
               tableLabel={guestTableMap[g.id]}
               selected={selectedIds.has(g.id)}
+              duplicateNote={duplicatePhoneNotes.get(g.id)}
               onToggleSelect={toggleSelect}
               updateName={updateName}
               updatePhone={updatePhone}

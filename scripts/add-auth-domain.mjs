@@ -1,7 +1,7 @@
 /* מוסיף את דומיין הייצור לרשימת הדומיינים המורשים של Firebase Auth. */
 import { readFileSync } from "node:fs";
 import { createSign } from "node:crypto";
-import { loadEnv } from "../server/env.mjs";
+import { loadEnv } from "./lib/env.mjs";
 
 loadEnv();
 

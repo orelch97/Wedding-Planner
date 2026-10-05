@@ -11,8 +11,8 @@ rules_version = '2';
  *  ⚠ ההרשאה נבדקת מול **custom claim** ולא מול Firestore.
  *    firestore.get() בתוך storage.rules מוחזר כ-403 בפרויקט הזה — נבדק
  *    אמפירית: אותה העלאה בדיוק עוברת ברגע שהתנאי מוסר. במקום זאת
- *    functions/index.js שומר על הטוקן claim בשם w_test / w_prod ובו
- *    רשימת מזהי החתונות שהמשתמש חבר בהן.
+ *    functions/index.js שומר claim בשם p_test / p_prod ובו מפת
+ *    weddingId→permission כדי שהיקפים ותפקידים ייאכפו גם ב-Storage.
  * ========================================================================== */
 
 service firebase.storage {
@@ -20,30 +20,45 @@ service firebase.storage {
 
     match /{env}/weddings/{weddingId}/vendor-files/{fileId} {
 
-      function memberOf() {
+      function canReadVendors() {
         return request.auth != null
-               && request.auth.token['w_' + env] is list
-               && weddingId in request.auth.token['w_' + env];
+               && request.auth.token['p_' + env] is map
+               && request.auth.token['p_' + env][weddingId]
+                    in ['vendor_read', 'vendor_write', 'owner'];
       }
 
-      allow read: if memberOf();
+      function canWriteVendors() {
+        return request.auth != null
+               && request.auth.token['p_' + env] is map
+               && request.auth.token['p_' + env][weddingId]
+                    in ['vendor_write', 'owner'];
+      }
+
+      allow read: if canReadVendors();
 
       //  התקרה זהה ל-MAX_FILE_BYTES בקוד. בלי מגבלה כאן חשבון אחד יכול
       //  למלא את מכסת האחסון של כל הפרויקט.
-      allow write: if memberOf() && request.resource.size < 5 * 1024 * 1024;
+      allow create, update: if canWriteVendors()
+                && request.resource.size < 5 * 1024 * 1024;
 
-      allow delete: if memberOf();
+      allow delete: if canWriteVendors();
     }
 
     match /{env}/weddings/{weddingId}/countdown-background {
       function memberOf() {
         return request.auth != null
-               && request.auth.token['w_' + env] is list
-               && weddingId in request.auth.token['w_' + env];
+               && request.auth.token['p_' + env] is map
+               && weddingId in request.auth.token['p_' + env];
+      }
+
+      function ownerOf() {
+        return request.auth != null
+               && request.auth.token['p_' + env] is map
+               && request.auth.token['p_' + env][weddingId] == 'owner';
       }
 
       allow read: if memberOf();
-      allow write: if memberOf()
+      allow write: if ownerOf()
                    && request.resource.size < 8 * 1024 * 1024
                    && request.resource.contentType.matches('image/.*');
     }

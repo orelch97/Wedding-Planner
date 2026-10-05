@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------------
  *  כללי ה-Storage לא יכולים לקרוא את Firestore (firestore.get מוחזר 403
  *  בפרויקט הזה), ולכן ההרשאה לקבצים נגזרת מ-claim על הטוקן:
- *      w_test / w_prod  →  רשימת מזהי החתונות שהמשתמש חבר בהן.
+ *      p_test / p_prod  →  weddingId → member/vendor/owner permission map.
  *
  *  אידמפוטנטי — נבנה מחדש מתוך מסמכי החברות בכל ריצה.
  *  בייצור השוטף התחזוקה נעשית ב-functions/index.js.
@@ -12,7 +12,7 @@
  * ========================================================================== */
 
 import { readFileSync } from "node:fs";
-import { loadEnv } from "../server/env.mjs";
+import { loadEnv } from "./lib/env.mjs";
 
 loadEnv();
 
@@ -33,6 +33,16 @@ const auth = getAuth(app);
 //  נאסף לכל המשתמשים בבת אחת, כדי לא לדרוס claim של סביבה אחת בשנייה.
 const byUser = new Map();
 
+let pageToken;
+do {
+  const page = await auth.listUsers(1000, pageToken);
+  for (const user of page.users) {
+    if (!byUser.has(user.uid)) byUser.set(user.uid, {});
+    for (const env of targets) byUser.get(user.uid)[`p_${env}`] = {};
+  }
+  pageToken = page.pageToken;
+} while (pageToken);
+
 for (const env of targets) {
   const root = db.collection("envs").doc(env);
   const weddings = await root.collection("weddings").get();
@@ -42,8 +52,16 @@ for (const env of targets) {
     for (const m of members.docs) {
       if (!byUser.has(m.id)) byUser.set(m.id, {});
       const claims = byUser.get(m.id);
-      const key = `w_${env}`;
-      claims[key] = [...(claims[key] ?? []), w.id];
+      const scopes = Array.isArray(m.get("scopes")) ? m.get("scopes") : ["all"];
+      const isOwner = m.get("role") === "owner" && w.get("ownerId") === m.id;
+      const vendorScope = !scopes.length || scopes.includes("all") || scopes.includes("vendors");
+      const permission = isOwner
+        ? "owner"
+        : vendorScope
+          ? (["owner", "editor"].includes(m.get("role")) ? "vendor_write" : "vendor_read")
+          : "member";
+      const key = `p_${env}`;
+      claims[key] = { ...(claims[key] ?? {}), [w.id]: permission };
     }
   }
 }
@@ -56,9 +74,12 @@ for (const [userId, fresh] of byUser) {
     const user = await auth.getUser(userId);
     //  שמירת claims קיימים שאינם שלנו.
     const merged = { ...(user.customClaims ?? {}), ...fresh };
+    for (const env of targets) {
+      for (const prefix of ["w", "vr", "vw", "wo"]) delete merged[`${prefix}_${env}`];
+    }
     await auth.setCustomUserClaims(userId, merged);
     updated++;
-    const summary = targets.map((e) => `${e}:${(fresh[`w_${e}`] ?? []).length}`).join(" ");
+    const summary = targets.map((e) => `${e}:${Object.keys(fresh[`p_${e}`] ?? {}).length}`).join(" ");
     console.log(`  ✓ ${(user.email ?? userId).padEnd(32)} ${summary}`);
   } catch (err) {
     failed++;

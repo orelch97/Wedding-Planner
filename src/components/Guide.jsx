@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronLeft, HelpCircle, Sparkles, X } from "lucide-react";
+import { ChevronLeft, Sparkles, X } from "lucide-react";
+import { useAccessibleModal } from "../hooks/useAccessibleModal";
 
 /* =========================================================================
  *  GUIDE – סיור מודרך (זרקור + בועת הסבר) והסבר קבוע לכל מסך
@@ -50,6 +51,7 @@ export function Tour({ steps, onClose }) {
   //  ממקום החניה שלה מחוץ למסך וחוצה את כל החלון באלכסון.
   const [animate, setAnimate] = useState(false);
   const cardRef = useRef(null);
+  const nextButtonRef = useRef(null);
 
   const step = steps[index];
   const isLast = index === steps.length - 1;
@@ -147,19 +149,31 @@ export function Tour({ steps, onClose }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [next, onClose]);
 
+  useAccessibleModal({
+    open: !!step,
+    containerRef: cardRef,
+    initialFocusRef: nextButtonRef,
+    onRequestClose: onClose,
+  });
+
   if (!step) return null;
 
   return createPortal(
     <>
-      {/*  חוסם קליקים על המסך שמתחת — בלי זה אפשר לשנות את המסך
-          באמצע ההסבר והזרקור מצביע על אלמנט שכבר לא שם.
-          לחיצה על הרקע סוגרת את הסיור: בלי זה משתמש שלא מזהה את הסיור
-          חווה מסך תקוע שלא מגיב לכלום.  */}
-      <div
-        className="fixed inset-0 z-[119]"
-        style={spot ? undefined : { background: "rgba(15,23,42,0.62)" }}
-        onClick={onClose}
-      />
+      {spot ? (
+        <>
+          <div aria-hidden="true" className="fixed left-0 right-0 top-0 z-[119] bg-slate-900/60" style={{ height: Math.max(0, spot.top) }} onClick={onClose} />
+          <div aria-hidden="true" className="fixed bottom-0 left-0 right-0 z-[119] bg-slate-900/60" style={{ top: Math.min(window.innerHeight, spot.top + spot.height) }} onClick={onClose} />
+          <div aria-hidden="true" className="fixed left-0 z-[119] bg-slate-900/60" style={{ top: Math.max(0, spot.top), width: Math.max(0, spot.left), height: Math.max(0, Math.min(window.innerHeight, spot.top + spot.height) - Math.max(0, spot.top)) }} onClick={onClose} />
+          <div aria-hidden="true" className="fixed right-0 z-[119] bg-slate-900/60" style={{ top: Math.max(0, spot.top), left: Math.min(window.innerWidth, spot.left + spot.width), height: Math.max(0, Math.min(window.innerHeight, spot.top + spot.height) - Math.max(0, spot.top)) }} onClick={onClose} />
+        </>
+      ) : (
+        <div
+          aria-hidden="true"
+          className="fixed inset-0 z-[119] bg-slate-900/60"
+          onClick={onClose}
+        />
+      )}
       {spot && (
         <div
           aria-hidden="true"
@@ -181,7 +195,8 @@ export function Tour({ steps, onClose }) {
         ref={cardRef}
         role="dialog"
         aria-modal="true"
-        aria-label="הדרכה מודרכת"
+        aria-labelledby="guided-tour-title"
+        aria-describedby="guided-tour-description"
         className="fixed z-[121] rounded-2xl bg-white p-4 text-right shadow-2xl ring-1 ring-slate-200"
         style={{
           top: card?.top ?? -9999,
@@ -196,10 +211,10 @@ export function Tour({ steps, onClose }) {
             <Sparkles size={16} />
           </div>
           <div className="min-w-0 flex-1">
-            <h3 className="font-[var(--font-display)] text-sm font-bold text-slate-800">
+            <h3 id="guided-tour-title" className="font-display text-sm font-bold text-slate-800">
               {step.title}
             </h3>
-            <p className="mt-1 text-xs leading-relaxed text-slate-600">{step.body}</p>
+            <p id="guided-tour-description" className="mt-1 text-xs leading-relaxed text-slate-600">{step.body}</p>
           </div>
           <button
             type="button"
@@ -234,8 +249,8 @@ export function Tour({ steps, onClose }) {
             <button
               type="button"
               onClick={next}
-              autoFocus
-              className="flex items-center gap-1 rounded-xl bg-gold-500 px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-gold-600"
+              ref={nextButtonRef}
+              className="flex items-center gap-1 rounded-xl bg-gold-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-sm transition hover:bg-gold-600"
             >
               {isLast ? "סיום" : "הבא"}
               {!isLast && <ChevronLeft size={14} />}
@@ -258,86 +273,3 @@ export function Tour({ steps, onClose }) {
   );
 }
 
-/* =========================================================================
- *  ScreenIntro – "מה עושים במסך הזה?"
- *  מוצג בראש כל מסך עד שהמשתמש סוגר אותו, וניתן להחזרה מכפתור העזרה.
- * ====================================================================== */
-
-export function ScreenIntro({ guide, onStartTour, onDismiss }) {
-  //  בטלפון הפירוט המלא תפס יותר מחצי מהמסך הראשון ודחף את הנתונים עצמם
-  //  מתחת לקיפול. במסך רחב אין בעיה כזו, ולכן שם הוא פתוח תמיד.
-  const [more, setMore] = useState(false);
-
-  if (!guide) return null;
-
-  return (
-    <div className="mb-4 rounded-2xl bg-gradient-to-l from-gold-50/80 to-sage-50/60 p-3.5 ring-1 ring-gold-200/70 sm:mb-6 sm:p-4">
-      <div className="flex items-start gap-2.5">
-        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-white text-gold-500 shadow-sm ring-1 ring-gold-200">
-          <HelpCircle size={17} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h3 className="text-xs font-bold text-slate-700 sm:text-sm">
-            מה עושים במסך הזה?
-          </h3>
-          <p className="mt-1 text-xs leading-relaxed text-slate-600">{guide.lead}</p>
-
-          <div className={more ? "block" : "hidden sm:block"}>
-            {guide.here?.length > 0 && (
-              <ul className="mt-2 space-y-1">
-                {guide.here.map((line) => (
-                  <li
-                    key={line}
-                    className="flex gap-1.5 text-[11px] leading-relaxed text-slate-500 sm:text-xs"
-                  >
-                    <span aria-hidden="true" className="text-gold-500">
-                      •
-                    </span>
-                    <span className="min-w-0">{line}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {guide.notHere && (
-              <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-                <span className="font-semibold text-slate-600">שימו לב: </span>
-                {guide.notHere}
-              </p>
-            )}
-          </div>
-
-          {/*  השלושה הם קישורי טקסט בגובה של שורה אחת — 17px בפועל, קטן מכדי
-              ללחיצה באצבע. min-h-11 מגדיל את אזור המגע בלבד, ורק במסך צר:
-              במסך רחב יש עכבר, ושורה של 44px היתה מנפחת את ההסבר בלי צורך.  */}
-          <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <button
-              type="button"
-              onClick={() => setMore((v) => !v)}
-              aria-expanded={more}
-              className="inline-flex min-h-11 items-center text-[11px] font-semibold text-slate-500 underline-offset-4 transition hover:text-slate-700 hover:underline sm:hidden"
-            >
-              {more ? "פחות" : "מה בדיוק מזינים כאן?"}
-            </button>
-            {onStartTour && (
-              <button
-                type="button"
-                onClick={onStartTour}
-                className="inline-flex min-h-11 items-center text-[11px] font-semibold text-gold-600 underline-offset-4 transition hover:underline sm:min-h-0 sm:text-xs"
-              >
-                סיור מודרך במערכת
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onDismiss}
-              className="inline-flex min-h-11 items-center text-[11px] font-medium text-slate-400 underline-offset-4 transition hover:text-slate-600 hover:underline sm:min-h-0 sm:text-xs"
-            >
-              הבנתי, אפשר להסתיר
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}

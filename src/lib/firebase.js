@@ -5,7 +5,7 @@
  *
  *      envs/{test|prod}/weddings/{weddingId}/guests|tables|vendors|
  *                                            budget|checklist|files|
- *                                            members|settings
+ *                                            members|settings/{finance|guests|owner}
  *      envs/{env}/users/{userId}
  *      envs/{env}/invites/{inviteId}
  *
@@ -18,9 +18,9 @@
  * ========================================================================== */
 
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore, collection, doc } from "firebase/firestore";
-import { getStorage } from "firebase/storage";
+import { connectAuthEmulator, getAuth } from "firebase/auth";
+import { connectFirestoreEmulator, getFirestore, collection, doc } from "firebase/firestore";
+import { connectStorageEmulator, getStorage } from "firebase/storage";
 import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
 
 const config = {
@@ -52,6 +52,19 @@ if (import.meta.env.PROD && rawEnv !== "prod" && rawEnv !== "test") {
 
 export const FIREBASE_ENV = rawEnv === "prod" ? "prod" : "test";
 
+const useFirebaseEmulators = import.meta.env.VITE_USE_FIREBASE_EMULATORS === "true";
+const E2E_DEMO_PROJECT_ID = "demo-wedding-planner-e2e";
+if (useFirebaseEmulators && (
+  !import.meta.env.DEV ||
+  config.projectId !== E2E_DEMO_PROJECT_ID ||
+  FIREBASE_ENV !== "test"
+)) {
+  throw new Error(
+    "Firebase emulators require Vite development mode, VITE_FIREBASE_ENV=test, " +
+      `and VITE_FIREBASE_PROJECT_ID=${E2E_DEMO_PROJECT_ID}. Refusing a non-isolated E2E target.`
+  );
+}
+
 export const firebaseConfigured = Boolean(config.apiKey && config.projectId);
 
 const app = firebaseConfigured ? initializeApp(config) : null;
@@ -61,7 +74,14 @@ export const db = app ? getFirestore(app) : null;
 export const storage = app ? getStorage(app) : null;
 //  האזור חייב להתאים לזה שב-functions/index.js, אחרת הקריאה מגיעה ל-404.
 export const functions = app ? getFunctions(app, "europe-west1") : null;
-if (functions && import.meta.env.DEV) {
+if (app && useFirebaseEmulators) {
+  const host = "127.0.0.1";
+  connectAuthEmulator(auth, `http://${host}:9099`, { disableWarnings: true });
+  connectFirestoreEmulator(db, host, 8080);
+  connectStorageEmulator(storage, host, 9199);
+  connectFunctionsEmulator(functions, host, 5001);
+} else if (functions && import.meta.env.DEV) {
+  // Preserve the existing local Functions-only emulator workflow.
   connectFunctionsEmulator(functions, "localhost", 5001);
 }
 
@@ -94,7 +114,7 @@ export const weddingCol = (weddingId, name) => collection(weddingRef(weddingId),
 export const weddingDoc = (weddingId, name, id) =>
   doc(weddingRef(weddingId), name, String(id));
 
-/** ההגדרות של החתונה יושבות במסמך יחיד קבוע. */
+/** Legacy combined settings document; new settings are split by permission scope. */
 export const settingsRef = (weddingId) => weddingDoc(weddingId, "settings", "main");
 
 /*  אותו מיפוי היקף→מסך שקיים ב-firestore.rules. שינוי כאן בלי שינוי שם

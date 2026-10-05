@@ -26,6 +26,7 @@ export const ENTITIES = {
       drinkers: Math.max(0, Number(g.drinkers) || 0),
       rsvp: g.rsvp ?? "pending",
       gift: Number(g.gift) || 0,
+      attendingCount: g.attendingCount == null ? null : Number(g.attendingCount),
     }),
     fromDoc: (r) => ({
       id: Number(r.id),
@@ -41,6 +42,7 @@ export const ENTITIES = {
       drinkers: Math.max(0, Number(r.drinkers) || 0),
       rsvp: r.rsvp ?? "pending",
       gift: Number(r.gift) || 0,
+      attendingCount: r.attendingCount == null ? null : Number(r.attendingCount),
     }),
   },
   tables: {
@@ -61,7 +63,8 @@ export const ENTITIES = {
   vendors: {
     col: "vendors",
     toDoc: (v) => ({
-      id: Number(v.id),
+      id: String(v.id ?? ""),
+      ...(v.legacyId == null ? {} : { legacyId: String(v.legacyId) }),
       name: String(v.name ?? ""),
       type: v.type ?? "",
       phone: v.phone ?? "",
@@ -72,7 +75,8 @@ export const ENTITIES = {
       tasks: Array.isArray(v.tasks) ? v.tasks : [],
     }),
     fromDoc: (r) => ({
-      id: Number(r.id),
+      id: String(r.id ?? ""),
+      ...(r.legacyId == null ? {} : { legacyId: String(r.legacyId) }),
       name: r.name ?? "",
       type: r.type ?? "",
       phone: r.phone ?? "",
@@ -92,7 +96,7 @@ export const ENTITIES = {
       actual: Number(b.actual) || 0,
       paid: Number(b.paid) || 0,
       //  Number(null) הוא 0, ולכן ריקנות נבדקת במפורש: סעיף ידני שומר null.
-      vendorId: b.vendorId == null ? null : Number(b.vendorId),
+      vendorId: b.vendorId == null ? null : String(b.vendorId),
     }),
     fromDoc: (r) => ({
       id: Number(r.id),
@@ -100,7 +104,7 @@ export const ENTITIES = {
       expected: Number(r.expected) || 0,
       actual: Number(r.actual) || 0,
       paid: Number(r.paid) || 0,
-      vendorId: r.vendorId == null ? null : Number(r.vendorId),
+      vendorId: r.vendorId == null ? null : String(r.vendorId),
     }),
   },
   checklist: {

@@ -4,12 +4,12 @@
  *  משתנה שכבר קיים בסביבה מנצח את מה שבקובץ, כדי שפריסה אמיתית (Render /
  *  Fly / Railway) תוכל להזריק סודות בלי לגעת בקבצים.
  * ========================================================================== */
-
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+//  הקובץ יושב ב-scripts/lib/, ולכן שורש הריפו הוא שתי רמות מעלה.
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 export function loadEnv(file = ".env") {
   const path = join(ROOT, file);

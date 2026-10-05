@@ -9,6 +9,7 @@
   --color-gold-400: #cca85e;
   --color-gold-500: #c9a86a;
   --color-gold-600: #b08d4a;
+  --color-gold-700: #8f7136;
   --color-sage-50: #f3f6ef;
   --color-sage-100: #e3ead9;
   --color-sage-200: #c9d6b6;
@@ -27,6 +28,10 @@
 
 html {
   scroll-behavior: smooth;
+  /* Global type scale: a 15px root keeps the UI compact and precise without
+     cramping touch targets (min-h-11 ≈ 41px). The mobile 16px input rule
+     below is px-based, so iOS zoom protection is unaffected. */
+  font-size: 15px;
 }
 
 body {
@@ -77,23 +82,13 @@ body {
   animation: fadeInUp 0.45s ease;
 }
 
-/* =========================================================================
- *  BOOT SCREEN
- * -------------------------------------------------------------------------
- *  These mirror the inline rules in index.html one for one. The static
- *  screen paints before the bundle downloads and React swaps in its own
- *  copy on mount, so any drift between the two files shows up as a visible
- *  jump at the exact moment the user is already waiting.
- * ====================================================================== */
-
+/* Static boot markup paints before React mounts and uses these animations. */
 @keyframes bootTurn {
   to {
     transform: rotate(360deg);
   }
 }
 
-/* The scale stays deliberately small. Large movement on a screen someone is
-   waiting in front of reads as impatience rather than calm. */
 @keyframes bootBeat {
   0%,
   100% {
@@ -109,9 +104,11 @@ body {
 .animate-boot-ring {
   animation: bootTurn 1.6s linear infinite;
 }
+
 .animate-boot-ring-reverse {
   animation: bootTurn 2.4s linear infinite reverse;
 }
+
 .animate-boot-beat {
   animation: bootBeat 1.8s ease-in-out infinite;
 }
@@ -159,6 +156,21 @@ select,
   touch-action: none;
 }
 
+/*  שדה מספר צר שיושב ליד סימן יחידה (ל׳ / יח׳ / ₪) או בין כפתורי +/−.
+    חיצי ה-spinner של הדפדפן גוזלים ~16px בדיוק מהמקום שהספרות צריכות,
+    ובשדה של 72px זה ההבדל בין “24” ל-“4” חתוך.  */
+.num-plain {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.num-plain::-webkit-outer-spin-button,
+.num-plain::-webkit-inner-spin-button {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 /*  מערכת הכפתורים.
     ------------------------------------------------------------------------
     @layer components ולא כללים חשופים: כלל לא-משוכב גובר על *כל* מחלקת
@@ -176,8 +188,8 @@ select,
            text-sm font-semibold transition focus-visible:outline-none
            focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2
            disabled:cursor-not-allowed disabled:opacity-60
-           bg-gradient-to-l from-gold-500 to-gold-400 text-white
-           shadow-lg shadow-gold-500/30 hover:brightness-105 active:brightness-95;
+           bg-gold-500 text-slate-950
+           shadow-lg shadow-gold-500/30 hover:bg-gold-600 active:bg-gold-700;
   }
 
   .btn-secondary {

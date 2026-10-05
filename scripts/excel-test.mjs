@@ -11,7 +11,7 @@
 import ExcelJS from "exceljs";
 import { buildSheets, buildWorkbookBuffer, workbookFileName } from "../src/lib/excelExport.js";
 import { SEED_GUESTS } from "../src/data/guestsData.js";
-import { SEED_TABLES, SEED_VENDORS, SEED_BUDGET } from "../src/data/seedData.js";
+import { SEED_TABLES, SEED_VENDORS, SEED_BUDGET, CHECKLIST_TEMPLATE } from "../src/data/seedData.js";
 
 let passed = 0;
 let failed = 0;
@@ -55,6 +55,11 @@ const data = {
   tables,
   vendors: SEED_VENDORS,
   budget: SEED_BUDGET,
+  checklist: CHECKLIST_TEMPLATE.slice(0, 2).map((item, index) => ({
+    ...item,
+    id: index + 1,
+    done: index === 1,
+  })),
   budgetGoal: 170000,
 };
 
@@ -89,6 +94,17 @@ check(
   })
 );
 check("קלט ריק לא מפיל את הבנייה", buildSheets({}).length === 5);
+check(
+  "משימות הצ׳קליסט נכללות בייצוא",
+  JSON.stringify(sheets[4].rows.map(({ id, title, category, assignee, done }) => ({ id, title, category, assignee, done }))) ===
+    JSON.stringify(data.checklist.map((item) => ({
+      id: item.id,
+      title: item.title,
+      category: item.category,
+      assignee: item.assignee === "bride" ? "כלה" : item.assignee === "groom" ? "חתן" : "שניהם",
+      done: item.done ? "כן" : "לא",
+    }))),
+);
 check(
   "שם הקובץ מנקה תווים אסורים",
   workbookFileName('א/ב:ג*ד?ה"ו<ז>ח|ט').startsWith("אבגדהוזחט - "),
@@ -184,10 +200,15 @@ const vendorHeaders = [
 ];
 check("כל 12 העמודות קיימות ובסדר הנכון", JSON.stringify(V.headers) === JSON.stringify(vendorHeaders), V.headers.join(" | "));
 check(`כל ${SEED_VENDORS.length} הספקים יורדו`, V.rows.length === SEED_VENDORS.length, `${V.rows.length}`);
+const uuidVendorId = "c3e45f2a-72dc-4b9e-872c-f5f672742135";
+check(
+  "מזהה UUID של ספק נשמר כטקסט באקסל",
+  buildSheets({ vendors: [{ id: uuidVendorId, name: "ספק UUID" }] })[1].rows[0].id === uuidVendorId
+);
 
 const vMismatch = [];
 for (const v of SEED_VENDORS) {
-  const r = V.rows.find((x) => Number(x["מס׳"]) === v.id);
+  const r = V.rows.find((x) => String(x["מס׳"]) === String(v.id));
   if (!r) { vMismatch.push(`${v.id}: חסר`); continue; }
   const expected = {
     "שם הספק": v.name,

@@ -125,7 +125,7 @@ export function buildSheets({
     rows: vendors.map((v) => {
       const tasks = Array.isArray(v.tasks) ? v.tasks : [];
       return {
-        id: num(v.id),
+        id: text(v.id),
         name: text(v.name),
         type: text(v.type),
         phone: text(v.phone),
@@ -473,5 +473,5 @@ export async function exportWeddingWorkbook(data, weddingName) {
   a.href = url;
   a.download = workbookFileName(weddingName);
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

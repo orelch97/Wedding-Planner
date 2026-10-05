@@ -13,6 +13,8 @@ import { httpsCallable } from "firebase/functions";
 import { auth, functions, FIREBASE_ENV } from "./firebase.js";
 
 const LAST_EMAIL_KEY = "wp:passkeyEmail";
+const LOGIN_OPTIONS_MAX_AGE_MS = 4 * 60_000;
+let preparedLoginOptions = null;
 
 function callable(name) {
   return async (payload) => {
@@ -29,6 +31,48 @@ const callLoginOptions = callable("passkeyLoginOptions");
 const callLoginVerify = callable("passkeyLoginVerify");
 const callList = callable("passkeyList");
 const callDelete = callable("passkeyDelete");
+
+function emailKey(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+/** Prepare the one-time request before a user taps the Passkey action. */
+export function preparePasskeyLogin(email) {
+  if (!passkeySupported()) return Promise.resolve(null);
+  const key = emailKey(email);
+  if (
+    preparedLoginOptions?.email === key &&
+    Date.now() - preparedLoginOptions.startedAt < LOGIN_OPTIONS_MAX_AGE_MS
+  ) {
+    return preparedLoginOptions.promise;
+  }
+
+  const entry = { email: key, startedAt: Date.now(), ready: false, promise: null };
+  entry.promise = callLoginOptions({ email: key || null })
+    .then((value) => {
+      entry.ready = true;
+      return value;
+    })
+    .catch((error) => {
+      if (preparedLoginOptions === entry) preparedLoginOptions = null;
+      throw error;
+    });
+  preparedLoginOptions = entry;
+  return entry.promise;
+}
+
+/**
+ * האם האתגר כבר בידינו. כשהתשובה שלילית הלחיצה תמתין לרשת, והמסך אמור
+ * לומר זאת במפורש במקום להציג ספינר כללי שנראה כמו תקיעה.
+ */
+export function passkeyLoginWarm(email) {
+  const key = emailKey(email);
+  return Boolean(
+    preparedLoginOptions?.email === key &&
+      preparedLoginOptions.ready &&
+      Date.now() - preparedLoginOptions.startedAt < LOGIN_OPTIONS_MAX_AGE_MS
+  );
+}
 
 /** האם הדפדפן תומך בכלל. ללא זה אין טעם להציג את הכפתור. */
 export function passkeySupported() {
@@ -115,7 +159,23 @@ export async function registerPasskey(label) {
 export async function signInWithPasskey(email) {
   if (!passkeySupported()) throw new Error("passkey_unsupported");
 
-  const { options, challengeKey } = await callLoginOptions({ email: email || null });
+  const key = emailKey(email);
+  const prepared = preparedLoginOptions;
+  preparedLoginOptions = null;
+  let loginOptions;
+  if (
+    prepared?.email === key &&
+    Date.now() - prepared.startedAt < LOGIN_OPTIONS_MAX_AGE_MS
+  ) {
+    try {
+      loginOptions = await prepared.promise;
+    } catch {
+      loginOptions = await callLoginOptions({ email: key || null });
+    }
+  } else {
+    loginOptions = await callLoginOptions({ email: key || null });
+  }
+  const { options, challengeKey } = loginOptions;
   const assertion = await navigator.credentials.get({
     publicKey: {
       ...options,

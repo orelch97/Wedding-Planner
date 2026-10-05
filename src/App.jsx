@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, memo, createContext, useContext } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState, memo, createContext, useContext } from "react";
+import { createPortal } from "react-dom";
 import {
   LayoutDashboard,
   Users,
@@ -38,6 +39,7 @@ import {
   MoreHorizontal,
   CheckCheck,
   Search,
+  Columns3,
   Star,
   HelpCircle,
   MapPin,
@@ -48,7 +50,6 @@ import {
   LogOut,
   Lock,
   Loader2,
-  Fingerprint,
   ChevronUp,
   ChevronDown,
   ChevronsUpDown,
@@ -68,19 +69,21 @@ import {
   FileSpreadsheet,
   Wine,
   Minus,
+  Droplets,
   ShoppingCart,
   ListChecks,
+  Fingerprint,
+  RotateCcw,
+  ShieldCheck,
 } from "lucide-react";
 import { SEED_GUESTS, GUEST_CATEGORIES } from "./data/guestsData";
 import { SEED_TABLES, SEED_VENDORS, SEED_BUDGET, CHECKLIST_TEMPLATE, CHECKLIST_CATEGORIES } from "./data/seedData";
 import {
-  screenGuide,
   authTourSteps,
   appTourSteps,
-  guideSeen,
   markGuideSeen,
 } from "./data/guide";
-import { Tour, ScreenIntro } from "./components/Guide";
+import { Tour } from "./components/Guide";
 import { firebaseConfigured as isCloudConfigured } from "./lib/firebase";
 import {
   loadSession,
@@ -90,7 +93,10 @@ import {
   signOut,
   authErrorMessage,
   requestPasswordReset,
+  verifyPasswordResetCode,
   resetPassword,
+  requestEmailVerification,
+  verifyEmailActionCode,
 } from "./lib/firebaseAuth";
 import {
   passkeySupported,
@@ -101,24 +107,23 @@ import {
   deletePasskey,
   rememberedPasskeyEmail,
   passkeyErrorMessage,
+  preparePasskeyLogin,
+  passkeyLoginWarm,
 } from "./lib/passkeys";
 import {
   cloudFetchAll,
+  waitForAuthContext,
   cloudIsEmpty,
   cloudSeed,
   cloudSyncDataset,
   listWeddings,
   createWedding,
-  deleteWedding,
   updateWedding,
   saveWeddingSettings,
-  uploadCountdownBackground,
-  getAdminStats,
   inviteMember,
   addPartner,
   acceptInvite,
   listMembers,
-  touchMembership,
   removeMember,
   updateMember,
   hasScope,
@@ -126,13 +131,22 @@ import {
   SCOPE_OPTIONS,
   ALL_SCOPES,
   listVendorFiles,
+  listDeletedVendorFiles,
   uploadVendorFile,
   deleteVendorFile,
   restoreVendorFile,
   vendorFileUrl,
+  uploadCountdownBackground,
+  getAdminStats,
+  deleteWedding,
+  ensureMyWedding,
+  migrateVendorIds,
   subscribeCollection,
+  touchMembership,
   MAX_FILE_BYTES,
 } from "./lib/firebaseStore";
+import AdminDashboard from "./components/AdminDashboard.jsx";
+import { isAdminEmail } from "./lib/adminConfig.js";
 import {
   encryptBackup,
   decryptBackup,
@@ -141,7 +155,10 @@ import {
   isCryptoAvailable,
 } from "./lib/backupCrypto";
 import { exportWeddingWorkbook, readWorkbookBackup } from "./lib/excelExport";
+import { ENTITIES } from "./lib/entityMap";
+import { summarizeDrinkPurchase } from "./lib/alcoholCalculator";
 import { readGuestRows, rowsToGuests, ImportError } from "./lib/guestImport";
+import { useAccessibleModal } from "./hooks/useAccessibleModal";
 import logoUrl from "./assets/logo.jpg";
 
 /* =========================================================================
@@ -265,7 +282,7 @@ function ToastHost() {
   useEffect(() => {
     const listener = (ev) => {
       if (ev.type === "add")
-        setToasts((p) => [...p.filter((t) => t.id !== ev.toast.id), ev.toast]);
+        setToasts((p) => [...p.filter((t) => t.id !== ev.toast.id), ev.toast].slice(-3));
       else setToasts((p) => p.filter((t) => t.id !== ev.id));
     };
     toastListeners.add(listener);
@@ -280,18 +297,18 @@ function ToastHost() {
   return (
     //  z גבוה מכל המודלים (105/110): הודעת שגיאה שנפתחת מתוך פופ-אפ נבלעה
     //  מאחוריו, והמשתמש לא ראה למה הפעולה נכשלה.
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[200] flex flex-col items-center gap-2 px-4">
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex flex-col items-center gap-2 px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
       {toasts.map((t) => {
         const Icon = toneIcon[t.tone] || CheckCircle2;
         return (
           <div
             key={t.id}
-            className={`animate-fade-in-up pointer-events-auto flex max-w-[92vw] items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium shadow-xl ring-1 ${
+            className={`animate-fade-in-up pointer-events-auto flex w-full max-w-[min(92vw,36rem)] min-w-0 items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium shadow-xl ring-1 ${
               toneCls[t.tone] || toneCls.info
             }`}
           >
             <Icon size={18} className="shrink-0" />
-            <span>{t.message}</span>
+            <span className="min-w-0 flex-1 whitespace-pre-line break-words">{t.message}</span>
             {t.action && (
               <button
                 onClick={() => {
@@ -330,26 +347,27 @@ function confirmDialog(opts) {
 
 function ConfirmHost() {
   const [req, setReq] = useState(null);
+  const dialogRef = useRef(null);
+  const cancelRef = useRef(null);
+  const confirmRef = useRef(null);
   useEffect(() => {
     const listener = (r) => setReq(r);
     confirmListeners.add(listener);
     return () => confirmListeners.delete(listener);
   }, []);
-  useEffect(() => {
-    if (!req) return;
-    const onKey = (e) => {
-      if (e.key === "Escape") close(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [req]);
-  if (!req) return null;
   const close = (val) => {
+    if (!req) return;
     req.resolve(val);
     setReq(null);
   };
-  const danger = req.tone === "danger";
+  const danger = req?.tone === "danger";
+  useAccessibleModal({
+    open: !!req,
+    containerRef: dialogRef,
+    initialFocusRef: danger ? cancelRef : confirmRef,
+    onRequestClose: () => close(false),
+  });
+  if (!req) return null;
   return (
     <div
       className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm"
@@ -358,6 +376,9 @@ function ConfirmHost() {
       <div
         role="alertdialog"
         aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        aria-describedby={req.message ? "confirm-dialog-message" : undefined}
+        ref={dialogRef}
         className="animate-fade-in-up w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -370,9 +391,9 @@ function ConfirmHost() {
             {danger ? <Trash2 size={20} /> : <AlertCircle size={20} />}
           </span>
           <div className="flex-1">
-            <h3 className="text-lg font-bold text-slate-800">{req.title}</h3>
+            <h3 id="confirm-dialog-title" className="font-display text-lg font-bold text-slate-800">{req.title}</h3>
             {req.message && (
-              <p className="mt-1 whitespace-pre-line text-sm text-slate-500">
+              <p id="confirm-dialog-message" className="mt-1 whitespace-pre-line text-sm text-slate-500">
                 {req.message}
               </p>
             )}
@@ -380,7 +401,7 @@ function ConfirmHost() {
         </div>
         <div className="mt-6 flex justify-start gap-2">
           <button
-            autoFocus
+            ref={confirmRef}
             onClick={() => close(true)}
             className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition focus-visible:ring-2 focus-visible:ring-offset-2 ${
               danger
@@ -391,6 +412,7 @@ function ConfirmHost() {
             {req.confirmLabel || "אישור"}
           </button>
           <button
+            ref={cancelRef}
             onClick={() => close(false)}
             className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-slate-300"
           >
@@ -420,6 +442,7 @@ function promptDialog(opts) {
 function PromptHost() {
   const [req, setReq] = useState(null);
   const [value, setValue] = useState("");
+  const dialogRef = useRef(null);
   useEffect(() => {
     const listener = (r) => {
       setReq(r);
@@ -428,12 +451,18 @@ function PromptHost() {
     promptListeners.add(listener);
     return () => promptListeners.delete(listener);
   }, []);
-  if (!req) return null;
   const close = (val) => {
+    if (!req) return;
     req.resolve(val);
     setReq(null);
     setValue("");
   };
+  useAccessibleModal({
+    open: !!req,
+    containerRef: dialogRef,
+    onRequestClose: () => close(null),
+  });
+  if (!req) return null;
   const submit = (e) => {
     e.preventDefault();
     const v = value.trim();
@@ -449,7 +478,9 @@ function PromptHost() {
         onSubmit={submit}
         role="dialog"
         aria-modal="true"
-        aria-label={req.title || "הזנת ערך"}
+        aria-labelledby="prompt-dialog-title"
+        aria-describedby={req.message ? "prompt-dialog-message" : undefined}
+        ref={dialogRef}
         className="animate-fade-in-up w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -464,9 +495,9 @@ function PromptHost() {
             )}
           </span>
           <div className="flex-1">
-            <h3 className="text-lg font-bold text-slate-800">{req.title}</h3>
+            <h3 id="prompt-dialog-title" className="font-display text-lg font-bold text-slate-800">{req.title}</h3>
             {req.message && (
-              <p className="mt-1 whitespace-pre-line text-sm text-slate-500">
+              <p id="prompt-dialog-message" className="mt-1 whitespace-pre-line text-sm text-slate-500">
                 {req.message}
               </p>
             )}
@@ -486,7 +517,7 @@ function PromptHost() {
         <div className="mt-6 flex justify-start gap-2">
           <button
             type="submit"
-            className="rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-gold-600"
+            className="rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-slate-950 shadow-sm transition hover:bg-gold-600"
           >
             {req.confirmLabel || "אישור"}
           </button>
@@ -552,16 +583,36 @@ function hashStr(s) {
   return h;
 }
 
-// Guaranteed-unique numeric id (one greater than the current max), so rapidly
-// added guests can never collide — a collision would make delete remove 2 rows.
-function nextGuestId(list) {
-  return list.reduce((m, g) => Math.max(m, Number(g.id) || 0), 0) + 1;
+const ROW_ID_HIGH_WATER_KEY = "wp:v1:row-id-high-water";
+let lastGeneratedRowId = 0;
+
+function nextNumericId(list) {
+  const maxActiveId = list.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0);
+  let persistedHighWater = 0;
+  try {
+    persistedHighWater = Number(localStorage.getItem(ROW_ID_HIGH_WATER_KEY)) || 0;
+  } catch {
+    // Private browsing or disabled storage: the in-memory and timestamp guards still apply.
+  }
+
+  const nextId = Math.max(Date.now(), maxActiveId + 1, persistedHighWater + 1, lastGeneratedRowId + 1);
+  lastGeneratedRowId = nextId;
+  try {
+    localStorage.setItem(ROW_ID_HIGH_WATER_KEY, String(nextId));
+  } catch {
+    // The row remains usable in memory if local storage is unavailable.
+  }
+  return nextId;
 }
 
-//  אותו שיקול לכל אוסף אחר שה-id שלו משמש למחיקה/עריכה: Date.now()
-//  חוזר על עצמו כשנוספות שתי שורות באותה מילישנייה, ואז מחיקה מוחקת שתיים.
+// Soft-deleted cloud records keep their document IDs, so never reuse an ID
+// merely because the highest active row was deleted.
+function nextGuestId(list) {
+  return nextNumericId(list);
+}
+
 function nextRowId(list) {
-  return list.reduce((m, x) => Math.max(m, Number(x.id) || 0), 0) + 1;
+  return nextNumericId(list);
 }
 
 /* ── קישור בין ספק לסעיף תקציב ─────────────────────────────────────────────
@@ -616,15 +667,15 @@ function withIds(rows, transform) {
   });
 }
 
-function SortHeader({ label, sortKey, sort, onSort, center = false }) {
+function SortHeader({ label, sortKey, sort, onSort, center = false, className = "" }) {
   const active = sort.key === sortKey;
   return (
-    <th className={`px-2 py-2 font-semibold ${center ? "text-center" : ""}`}>
+    <th className={`px-2 py-2 font-semibold ${center ? "text-center" : ""} ${className}`}>
       <button
         type="button"
         onClick={() => onSort(sortKey)}
         title="מיון לפי עמודה זו"
-        className={`inline-flex items-center gap-1 transition hover:text-slate-700 ${
+        className={`inline-flex min-h-11 items-center gap-1 transition hover:text-slate-700 ${
           active ? "text-gold-600" : ""
         }`}
       >
@@ -743,20 +794,81 @@ function BudgetSplitBar({ paid, remaining, max }) {
   );
 }
 
-/*  מקרא לסרגל: נקודת צבע + שם + סכום. בלי המקרא הצבעים בסרגל חסרי משמעות.  */
-function SplitLegendItem({ color, label, value }) {
+/*  סרגל התקציב במסך "ניהול תקציב". הוא עונה על שלוש השאלות של המסך במבט
+    אחד: כמה כבר יצא מהכיס, כמה עוד מחכה לתשלום, וכמה מרווח נשאר עד היעד.
+
+    העלות הכוללת שווה תמיד לשולם + נותר לשלם, ולכן הסרגל מתאר סכום אחד
+    שמתחלק לשניים — ולא שני קני מידה שונים כמו בגרסה הקודמת. כשהעלויות
+    עוברות את היעד הקנה מידה עובר אליהן והעודף נצבע באדום, אחרת החריגה
+    הייתה נחתכת בקצה בלי שרואים אותה.  */
+function BudgetGoalBar({ goal, cost, paid, remaining }) {
+  const free = Math.max(0, goal - cost);
+  const overflow = Math.max(0, cost - goal);
+  const scale = Math.max(goal, cost, 1);
+  const pct = (n) => Math.max(0, Math.min(100, (n / scale) * 100));
+  const over = goal > 0 && overflow > 0;
+
+  const segments = [
+    { key: "paid", value: paid, bar: "bg-sage-500", dot: "bg-sage-500", label: "שולם" },
+    { key: "remaining", value: remaining, bar: "bg-gold-400", dot: "bg-gold-400", label: "נותר לשלם" },
+    goal > 0 &&
+      (over
+        ? { key: "over", value: overflow, bar: "bg-rose-400", dot: "bg-rose-400", label: "חריגה מהיעד" }
+        : { key: "free", value: free, bar: "bg-transparent", dot: "bg-slate-300", label: "מרווח עד היעד" }),
+  ].filter(Boolean);
+
   return (
-    <span className="flex items-center gap-1.5 text-xs text-slate-500">
-      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${color}`} />
-      {label}: <b className="tabular-nums text-slate-700">{value}</b>
-    </span>
+    <div className="space-y-2.5">
+      <div
+        role="img"
+        aria-label={segments.map((s) => `${s.label}: ${fmt(s.value)}`).join(", ")}
+        className="flex h-4 w-full overflow-hidden rounded-full bg-slate-100 ring-1 ring-inset ring-slate-200 sm:h-5"
+      >
+        {segments.map((s) => (
+          <div
+            key={s.key}
+            style={{ width: `${pct(s.value)}%` }}
+            className={`h-full transition-all duration-500 ${s.bar}`}
+          />
+        ))}
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {segments.map((s) => (
+          <div key={s.key} className="min-w-0">
+            <p className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 sm:text-xs">
+              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.dot}`} />
+              <span className="truncate">{s.label}</span>
+            </p>
+            <p className="mt-0.5 ps-4 text-sm font-bold tabular-nums text-slate-800">
+              {fmt(s.value)}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
-function Card({ children, className = "", style }) {
+/*  מספר מרכזי בכרטיס הסיכום. שלושת אלה הם כל מה שצריך לדעת
+    על התקציב לפני שצוללים לסעיפים עצמם.  */
+function BudgetFigure({ label, value, tone = "slate" }) {
+  const tones = {
+    slate: "bg-white/70 ring-slate-200 text-slate-800",
+    sage: "bg-sage-50 ring-sage-200 text-sage-800",
+    gold: "bg-gold-50 ring-gold-200 text-gold-800",
+  };
+  return (
+    <div className={`min-w-0 rounded-2xl px-2.5 py-2.5 ring-1 ring-inset sm:px-4 sm:py-3 ${tones[tone]}`}>
+      <p className="truncate text-[11px] font-medium opacity-80 sm:text-xs">{label}</p>
+      <p className="mt-0.5 truncate text-base font-bold tabular-nums sm:text-xl">{value}</p>
+    </div>
+  );
+}
+
+function Card({ children, className = "", tourId }) {
   return (
     <div
-      style={style}
+      data-tour={tourId}
       /*  רווח פנימי קטן יותר בנייד: ב-390px כל כרטיס ביזבז 40px מהרוחב
           ו-40px מהגובה רק על ריפוד, ויש עשרות כרטיסים במסך.  */
       className={`glass rounded-2xl p-3.5 shadow-[0_10px_40px_-15px_rgba(51,65,85,0.25)] sm:rounded-3xl sm:p-5 ${className}`}
@@ -776,7 +888,7 @@ function SectionTitle({ icon: Icon, title, subtitle, action }) {
           <Icon size={20} />
         </div>
         <div className="min-w-0">
-          <h2 className="font-[var(--font-display)] text-lg font-bold text-slate-800 sm:text-2xl">
+          <h2 className="font-display text-lg font-bold text-slate-800 sm:text-2xl">
             {title}
           </h2>
           {subtitle && <p className="text-xs text-slate-500 sm:text-sm">{subtitle}</p>}
@@ -805,7 +917,7 @@ const NAV = [
   //  שזוג שואל כשהוא נכנס — “מה עוד נשאר לנו?”
   { key: "checklist", label: "צ׳קליסט", icon: ListChecks, scope: "checklist" },
   { key: "guests", label: "מוזמנים", icon: Users, scope: "guests" },
-  { key: "alcohol", label: "חישוב אלכוהול", icon: Wine, scope: "guests" },
+  { key: "alcohol", label: "מחשבון אלכוהול", icon: Wine, scope: "guests" },
   //  ההושבה יושבת על אותו היקף הרשאות כמו המוזמנים (אותה טבלה בפועל),
   //  אבל היא מסך נפרד: היא נפתחת בשלב אחר של התכנון ודורשת מסך מלא.
   { key: "seating", label: "סידור הושבה", icon: Armchair, scope: "guests" },
@@ -885,6 +997,7 @@ function Sidebar({
   onChange,
   open,
   setOpen,
+  modalSuspended = false,
   collapsed,
   setCollapsed,
   navItems = VISIBLE_NAV,
@@ -897,29 +1010,69 @@ function Sidebar({
   onOpenMembers,
   onOpenSettings,
 }) {
+  const drawerRef = useRef(null);
+  const drawerCloseRef = useRef(null);
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches
+  );
+  const mobileOpen = isMobileViewport && open && !modalSuspended;
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 1023px)");
+    const update = () => setIsMobileViewport(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useAccessibleModal({
+    open: mobileOpen,
+    containerRef: drawerRef,
+    initialFocusRef: drawerCloseRef,
+    onRequestClose: () => setOpen(false),
+  });
+
   return (
     <>
-      {open && (
+      {mobileOpen && (
         <div
           className="fixed inset-0 z-30 bg-slate-900/30 backdrop-blur-sm lg:hidden"
           onClick={() => setOpen(false)}
+          aria-hidden="true"
         />
       )}
       <aside
-        className={`fixed inset-y-0 right-0 z-40 flex w-72 flex-col gap-2 border-l border-white/40 bg-white/70 p-5 backdrop-blur-xl transition-transform duration-300 lg:static lg:translate-x-0 ${
-          open ? "translate-x-0" : "translate-x-full"
+        ref={drawerRef}
+        role={mobileOpen ? "dialog" : undefined}
+        aria-modal={mobileOpen ? "true" : undefined}
+        aria-label={mobileOpen ? "תפריט הניווט" : undefined}
+        aria-hidden={isMobileViewport && !open ? "true" : undefined}
+        inert={isMobileViewport && !open}
+        className={`fixed inset-y-0 right-0 z-40 flex w-72 flex-col gap-2 overflow-y-auto border-l border-white/40 bg-white/70 p-5 backdrop-blur-xl transition-transform duration-300 lg:static ${
+          open
+            ? "pointer-events-auto translate-x-0"
+            : "pointer-events-none translate-x-full lg:pointer-events-auto lg:translate-x-0"
         } ${collapsed ? "lg:hidden" : ""}`}
       >
         <div className="mb-6 flex items-center gap-3 px-2">
           <Logo className="h-12 w-12" />
           <div className="min-w-0">
-            <h1 className="font-[var(--font-display)] text-xl font-bold leading-tight text-slate-800">
+            <h1 className="font-display text-xl font-bold leading-tight text-slate-800">
               תכנון החתונה שלי
             </h1>
             <p className="truncate text-xs text-slate-500">
               {coupleTitle || activeWedding?.name || "החתונה שלנו"}
             </p>
           </div>
+          <button
+            ref={drawerCloseRef}
+            onClick={() => setOpen(false)}
+            aria-label="סגירת תפריט הניווט"
+            title="סגירת התפריט"
+            className="mr-auto grid h-11 w-11 shrink-0 place-items-center rounded-xl text-slate-500 transition hover:bg-white hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 lg:hidden"
+          >
+            <X size={19} />
+          </button>
           <button
             onClick={() => setCollapsed(true)}
             title="הסתרת התפריט לתצוגה ברוחב מלא"
@@ -954,7 +1107,7 @@ function Sidebar({
                 }}
                 className={`group flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition-all ${
                   isActive
-                    ? "bg-gradient-to-l from-gold-500 to-gold-400 text-white shadow-lg shadow-gold-500/30"
+                    ? "bg-gold-500 text-slate-950 shadow-lg shadow-gold-500/30"
                     : "text-slate-600 hover:bg-white hover:text-slate-900"
                 }`}
               >
@@ -982,8 +1135,74 @@ function Sidebar({
               : "טרם נקבע"}
           </p>
         </div>
+        <ShareAppPanel />
       </aside>
     </>
+  );
+}
+
+function ShareAppPanel() {
+  const [installPrompt, setInstallPrompt] = useState(null);
+
+  useEffect(() => {
+    const capturePrompt = (event) => {
+      event.preventDefault();
+      setInstallPrompt(event);
+    };
+    window.addEventListener("beforeinstallprompt", capturePrompt);
+    return () => window.removeEventListener("beforeinstallprompt", capturePrompt);
+  }, []);
+
+  async function shareApp() {
+    const data = {
+      title: "תכנון החתונה שלי",
+      text: "מערכת נעימה ופשוטה לתכנון חתונה יחד",
+      url: window.location.origin,
+    };
+    try {
+      if (navigator.share) {
+        await navigator.share(data);
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(data.url);
+        notify("הקישור הועתק — אפשר לשלוח אותו למי שתרצו", { tone: "success" });
+      } else {
+        const field = document.createElement("textarea");
+        field.value = data.url;
+        field.setAttribute("readonly", "");
+        field.style.position = "fixed";
+        field.style.opacity = "0";
+        document.body.appendChild(field);
+        field.select();
+        document.execCommand("copy");
+        field.remove();
+        notify("הקישור הועתק", { tone: "success" });
+      }
+    } catch (err) {
+      if (err?.name !== "AbortError") notify("שיתוף הקישור נכשל", { tone: "error" });
+    }
+  }
+
+  async function installApp() {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    await installPrompt.userChoice;
+    setInstallPrompt(null);
+  }
+
+  return (
+    <div className="rounded-2xl bg-gold-50/70 p-3 ring-1 ring-gold-200">
+      <p className="mb-2 text-xs font-semibold text-slate-600">שיתוף והתקנה</p>
+      <div className="flex gap-2">
+        <button type="button" onClick={shareApp} className="flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-white px-2 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-gold-50">
+          <Share2 size={14} /> שיתוף האפליקציה
+        </button>
+        {installPrompt && (
+          <button type="button" onClick={installApp} className="flex min-h-11 items-center justify-center gap-1.5 rounded-xl bg-gold-500 px-2.5 text-xs font-semibold text-slate-950 transition hover:bg-gold-600">
+            <Smartphone size={14} /> התקנה
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1030,34 +1249,19 @@ function StatCard({ icon: Icon, label, value, sub, tone = "gold", children }) {
 }
 
 const DEFAULT_FINANCE_LABELS = {
-  goalTitle: "יעד התקציב הכולל",
-  goalSubtitle: "קבעו את התקרה הכוללת לחתונה",
-  statPlanned: "תכנון נוכחי",
-  statActual: "נדרש לשלם",
+  goalTitle: "יעד התקציב",
+  goalSubtitle: "כמה הקצבנו לחתונה",
+  statCost: "סה״כ עלויות",
   statPaid: "שולם",
   statRemaining: "נותר לשלם",
   statIncome: "הכנסות (מתנות)",
-  statBalance: "מאזן סופי",
-  sectionTitle: "מעקב תקציב מפורט",
-  sectionSubtitle: "כמה זה אמור לעלות, כמה סוכם, וכמה כבר שולם — לכל סעיף",
+  sectionTitle: "סעיפי התקציב",
+  sectionSubtitle: "לכל סעיף: כמה הוא עולה, כמה שולם וכמה נותר לשלם",
   colCategory: "סעיף",
-  colExpected: "הוצאה צפויה",
-  colActual: "הוצאה בפועל",
-  colPaid: "סה״כ שולם",
+  colCost: "עלות",
+  colPaid: "שולם",
   colRemaining: "נותר לשלם",
-  colDiff: "פער",
 };
-
-/*  העמודות שניתן להסתיר במעקב התקציב. “סעיף” אינו ברשימה — טבלה
-    בלי שמות אינה אומרת כלום. הבחירה נשמרת בהגדרות החתונה כמחרוזת
-    מופרדת בפסיקים, ולכן היא עוברת באותו ערוץ של שאר התוויות.  */
-const BUDGET_COLUMNS = [
-  { key: "expected", label: "colExpected" },
-  { key: "actual", label: "colActual" },
-  { key: "paid", label: "colPaid" },
-  { key: "remaining", label: "colRemaining" },
-  { key: "diff", label: "colDiff" },
-];
 
 // Inline click-to-edit label. Renders as text with a subtle pencil affordance;
 // clicking turns it into an input that commits on blur / Enter (Esc cancels).
@@ -1066,6 +1270,7 @@ function EditableText({
   onCommit,
   className = "",
   inputClassName = "",
+  inputAriaLabel,
   placeholder = "",
   title = "לחצו לעריכת הכותרת",
 }) {
@@ -1098,6 +1303,7 @@ function EditableText({
             setEditing(false);
           }
         }}
+        aria-label={inputAriaLabel || `עריכת ${value || placeholder}`}
         className={`min-w-0 max-w-full rounded-md border border-gold-300 bg-white px-1.5 py-0.5 text-inherit outline-none focus:border-gold-500 ${inputClassName}`}
       />
     );
@@ -1148,7 +1354,7 @@ function CoupleNames({ couple }) {
   //  גריד ולא flex: שתי עמודות שוות ברוחבן משני צדי עמודת ה-"&" מבטיחות
   //  שהסימן יישב בדיוק במרכז הכותרת. ב-flex רוחב השמות שונה, והוא "זז".
   return (
-    <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 font-[var(--font-display)] text-2xl font-bold sm:text-3xl">
+    <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 font-display text-2xl font-bold sm:text-3xl">
       <span className="justify-self-end">{name("partnerA", "בן/בת זוג א׳")}</span>
       <span className="text-gold-300">&amp;</span>
       <span className="justify-self-start">{name("partnerB", "בן/בת זוג ב׳")}</span>
@@ -1156,7 +1362,16 @@ function CoupleNames({ couple }) {
   );
 }
 
-function Countdown({ date, couple = null, canEditSettings = false, onOpenSettings, onBackgroundChange }) {
+function Countdown({
+  date,
+  couple = null,
+  canEditSettings = false,
+  onOpenSettings,
+  backgroundUrl = "",
+  onBackgroundChange,
+}) {
+  const backgroundInputRef = useRef(null);
+  const [backgroundBusy, setBackgroundBusy] = useState(false);
   const { days, hours, minutes, seconds } = useCountdown(date ?? WEDDING_DATE);
   const countItems = [
     { label: "ימים", value: days },
@@ -1170,8 +1385,8 @@ function Countdown({ date, couple = null, canEditSettings = false, onOpenSetting
   return (
     <Card
       className="relative overflow-hidden bg-gradient-to-br from-slate-800 via-slate-700 to-slate-800 text-white"
-      style={couple?.countdownBackgroundUrl ? {
-        backgroundImage: `linear-gradient(rgba(15, 23, 42, 0.68), rgba(15, 23, 42, 0.78)), url(${couple.countdownBackgroundUrl})`,
+      style={backgroundUrl ? {
+        backgroundImage: `linear-gradient(rgba(15, 23, 42, 0.68), rgba(15, 23, 42, 0.78)), url(${backgroundUrl})`,
         backgroundSize: "cover",
         backgroundPosition: "center",
       } : undefined}
@@ -1217,20 +1432,34 @@ function Countdown({ date, couple = null, canEditSettings = false, onOpenSetting
           </button>
         )}
         {canEditSettings && onBackgroundChange && (
-          <label className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 text-xs font-medium text-white/70 underline decoration-white/30 underline-offset-4 transition hover:text-white sm:min-h-0">
-            <Upload size={13} />
-            {couple?.countdownBackgroundUrl ? "החלפת תמונת רקע" : "הוספת תמונת רקע"}
+          <>
             <input
+              ref={backgroundInputRef}
               type="file"
               accept="image/*"
-              className="sr-only"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                e.target.value = "";
-                if (file) onBackgroundChange(file);
+              className="hidden"
+              onChange={async (event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (!file) return;
+                setBackgroundBusy(true);
+                try {
+                  await onBackgroundChange(file);
+                } finally {
+                  setBackgroundBusy(false);
+                }
               }}
             />
-          </label>
+            <button
+              type="button"
+              onClick={() => backgroundInputRef.current?.click()}
+              disabled={backgroundBusy}
+              className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs font-semibold text-white ring-1 ring-white/20 transition hover:bg-white/20 disabled:opacity-60"
+            >
+              {backgroundBusy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+              {backgroundUrl ? "החלפת תמונת רקע" : "הוספת תמונת רקע"}
+            </button>
+          </>
         )}
       </div>
     </Card>
@@ -1247,8 +1476,12 @@ function Overview({
   canEditSettings,
   onOpenSettings,
   onOpenVendor,
-  onBackgroundChange,
+  canAddVendor = false,
+  dataLoading = false,
+  dataUnavailable = false,
   adminStats,
+  backgroundUrl,
+  onBackgroundChange,
 }) {
   const stats = useMemo(() => {
     const totalExpected = budget.reduce((s, b) => s + b.expected, 0);
@@ -1299,28 +1532,21 @@ function Overview({
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      {adminStats && (
-        <Card className="border-gold-200 bg-gold-50/50">
-          <SectionTitle icon={Crown} title="נתוני מערכת" subtitle="תצוגת בעלים בלבד" />
-          <div className="grid grid-cols-2 gap-3">
-            <StatCard icon={Heart} label="חתונות במערכת" value={adminStats.weddings} tone="gold" />
-            <StatCard icon={UserCheck} label="משתמשים פעילים" value={adminStats.activeUsers} tone="sage" />
-          </div>
-        </Card>
-      )}
       {/* Countdown hero */}
-      <Countdown
-        date={weddingDate}
-        couple={couple}
-        canEditSettings={canEditSettings}
-        onOpenSettings={onOpenSettings}
-        onBackgroundChange={onBackgroundChange}
-        onBackgroundChange={onBackgroundChange}
-      />
+      <div data-tour="overview-countdown">
+        <Countdown
+          date={weddingDate}
+          couple={couple}
+          canEditSettings={canEditSettings}
+          onOpenSettings={onOpenSettings}
+          backgroundUrl={backgroundUrl}
+          onBackgroundChange={onBackgroundChange}
+        />
+      </div>
 
       {/* Summary cards */}
       {/*  שתי עמודות גם בנייד: כרטיס נתון בשורה שלמה מבזבז את מחצית הרוחב.  */}
-      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-3">
+      <div data-tour="overview-summary" className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-3">
         <StatCard
           icon={Wallet}
           label="כמה כבר שולם"
@@ -1380,8 +1606,28 @@ function Overview({
         </StatCard>
       </div>
 
+      {adminStats && (
+        <Card className="border border-gold-200 bg-gold-50/70">
+          <SectionTitle
+            icon={Settings2}
+            title="נתוני מערכת"
+            subtitle="תצוגת מנהל מערכת"
+          />
+          <div className="grid grid-cols-2 gap-3 text-center sm:max-w-md">
+            <div className="rounded-xl bg-white/80 p-3 ring-1 ring-gold-100">
+              <p className="text-xs text-slate-500">חתונות פעילות</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-slate-800">{adminStats.weddings}</p>
+            </div>
+            <div className="rounded-xl bg-white/80 p-3 ring-1 ring-gold-100">
+              <p className="text-xs text-slate-500">משתמשים פעילים</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-slate-800">{adminStats.activeUsers}</p>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Vendors quick glance */}
-      <Card>
+      <Card tourId="overview-vendors">
         <SectionTitle
           icon={Briefcase}
           title="הספקים שלנו במבט מהיר"
@@ -1391,7 +1637,28 @@ function Overview({
               : "סטטוס משימות ויתרת תשלום"
           }
         />
-        <div className="grid gap-3 sm:grid-cols-2">
+        {vendors.length === 0 && dataLoading ? (
+          <div role="status" className="space-y-3" aria-label="טוען ספקים">
+            <div className="h-14 animate-pulse rounded-2xl bg-slate-100" />
+            <div className="h-14 animate-pulse rounded-2xl bg-slate-100" />
+          </div>
+        ) : vendors.length === 0 && dataUnavailable ? (
+          <p className="rounded-2xl bg-amber-50 px-4 py-5 text-center text-sm text-amber-800 ring-1 ring-amber-200">
+            פרטי הספקים אינם זמינים כרגע. הנתונים לא נמחקו; בדקו את החיבור ונסו שוב.
+          </p>
+        ) : vendors.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 px-4 py-6 text-center">
+            <Briefcase size={22} className="mx-auto mb-2 text-slate-300" />
+            <p className="text-sm font-semibold text-slate-700">עדיין לא נוספו ספקים</p>
+            <p className="mt-1 text-xs text-slate-500">הוסיפו ספק כדי לעקוב אחר משימות, תשלומים וקבצים.</p>
+            {canAddVendor && onOpenVendor && (
+              <button type="button" onClick={() => onOpenVendor(null)} className="btn-primary mt-3">
+                <Plus size={15} /> מעבר להוספת ספק
+              </button>
+            )}
+          </div>
+        ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {vendors.map((v) => {
             const done = v.tasks.filter((t) => t.status === "done").length;
             const balance = v.contractCost - v.deposit;
@@ -1436,6 +1703,7 @@ function Overview({
             );
           })}
         </div>
+        )}
       </Card>
     </div>
   );
@@ -1460,7 +1728,7 @@ function DrinkersControl({ guest, canEdit, onChange, compact = false }) {
     return (
       <label
         title="האם המוזמן שותה אלכוהול"
-        className="inline-flex cursor-pointer items-center justify-center"
+        className="inline-flex h-11 w-11 cursor-pointer items-center justify-center"
       >
         <input
           type="checkbox"
@@ -1476,15 +1744,17 @@ function DrinkersControl({ guest, canEdit, onChange, compact = false }) {
 
   return (
     <span className="inline-flex items-center justify-center gap-1">
-      <input
-        type="checkbox"
-        checked={on}
-        disabled={!canEdit}
-        onChange={() => onChange(on ? 0 : seats)}
-        aria-label={`${guest.name || "מוזמן"} — שותים אלכוהול`}
-        title="סימון ראשוני מציב את כל הכיסאות ברשומה"
-        className="h-5 w-5 accent-gold-500"
-      />
+      <label className="grid h-11 w-11 cursor-pointer place-items-center">
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={!canEdit}
+          onChange={() => onChange(on ? 0 : seats)}
+          aria-label={`${guest.name || "מוזמן"} — שותים אלכוהול`}
+          title="סימון ראשוני מציב את כל הכיסאות ברשומה"
+          className="h-5 w-5 accent-gold-500"
+        />
+      </label>
       {on && (
         <span
           className={`inline-flex items-center rounded-lg bg-white ring-1 ring-slate-200 ${
@@ -1496,7 +1766,7 @@ function DrinkersControl({ guest, canEdit, onChange, compact = false }) {
             disabled={!canEdit || value <= 1}
             onClick={() => onChange(value - 1)}
             aria-label="פחות שותים"
-            className="grid h-7 w-6 place-items-center text-slate-400 transition hover:text-gold-600 disabled:opacity-30"
+            className="grid h-11 w-11 place-items-center text-slate-400 transition hover:text-gold-600 disabled:opacity-30"
           >
             <Minus size={13} />
           </button>
@@ -1508,7 +1778,7 @@ function DrinkersControl({ guest, canEdit, onChange, compact = false }) {
             disabled={!canEdit || value >= seats}
             onClick={() => onChange(value + 1)}
             aria-label="עוד שותים"
-            className="grid h-7 w-6 place-items-center text-slate-400 transition hover:text-gold-600 disabled:opacity-30"
+            className="grid h-11 w-11 place-items-center text-slate-400 transition hover:text-gold-600 disabled:opacity-30"
           >
             <Plus size={13} />
           </button>
@@ -1518,9 +1788,53 @@ function DrinkersControl({ guest, canEdit, onChange, compact = false }) {
   );
 }
 
+const GUEST_TABLE_COLUMNS = [
+  { key: "category", label: "קטגוריה" },
+  { key: "mention", label: "אזכור / הערות" },
+  { key: "seats", label: "כיסאות" },
+  { key: "source", label: "מקור" },
+  { key: "glatt", label: "גלאט" },
+  { key: "drinkers", label: "שותים" },
+  { key: "probablyComing", label: "כנראה יבוא" },
+  { key: "considering", label: "לשקול" },
+  { key: "rsvp", label: "אישור הגעה" },
+  { key: "gift", label: "מתנה" },
+];
+
+const DEFAULT_GUEST_TABLE_COLUMNS = {
+  category: true,
+  mention: false,
+  seats: true,
+  source: false,
+  glatt: true,
+  drinkers: true,
+  probablyComing: false,
+  considering: false,
+  rsvp: true,
+  gift: true,
+};
+
+function guestColumnsPopoverPosition(anchor, viewportWidth, viewportHeight) {
+  const width = 256;
+  const margin = 12;
+  const maxHeight = Math.min(320, Math.max(160, viewportHeight - margin * 2));
+  const spaceBelow = viewportHeight - anchor.bottom - 8;
+  const spaceAbove = anchor.top - 8;
+  const openAbove = spaceBelow < maxHeight && spaceAbove > spaceBelow;
+  const top = openAbove
+    ? Math.max(margin, anchor.top - maxHeight - 8)
+    : Math.min(anchor.bottom + 8, viewportHeight - maxHeight - margin);
+  const left = Math.max(
+    margin,
+    Math.min(anchor.right - width, viewportWidth - width - margin)
+  );
+  return { top, left, maxHeight };
+}
+
 const GuestRow = memo(function GuestRow({
   g,
   tableLabel,
+  visibleColumns,
   selected,
   onToggleSelect,
   updateName,
@@ -1557,13 +1871,15 @@ const GuestRow = memo(function GuestRow({
     <tr className={`border-b border-slate-100 transition ${selected ? "bg-gold-50/60" : "hover:bg-white/60"}`}>
       <td className="px-2 py-3">
         {canEdit && (
-          <input
-            type="checkbox"
-            checked={!!selected}
-            onChange={() => onToggleSelect(g.id)}
-            aria-label={`בחירת ${g.name || "מוזמן"}`}
-            className="h-4 w-4 cursor-pointer accent-gold-500"
-          />
+          <label className="grid h-11 w-11 cursor-pointer place-items-center">
+            <input
+              type="checkbox"
+              checked={!!selected}
+              onChange={() => onToggleSelect(g.id)}
+              aria-label={`בחירת ${g.name || "מוזמן"}`}
+              className="h-5 w-5 accent-gold-500"
+            />
+          </label>
         )}
       </td>
       <td className="px-2 py-3">
@@ -1573,7 +1889,7 @@ const GuestRow = memo(function GuestRow({
           onChange={(e) => setName(e.target.value)}
           onBlur={() => name !== (g.name || "") && updateName(g.id, name)}
           placeholder="שם"
-          className="w-36 rounded-lg border border-slate-200 bg-white px-2 py-1 text-right text-sm font-semibold text-slate-800 outline-none focus:border-gold-400"
+          className="min-h-11 w-36 rounded-lg border border-slate-200 bg-white px-2 py-1 text-right text-sm font-semibold text-slate-800 outline-none focus:border-gold-400"
         />
       </td>
       <td className="px-2 py-3">
@@ -1585,16 +1901,16 @@ const GuestRow = memo(function GuestRow({
           placeholder="נייד"
           type="tel"
           dir="ltr"
-          className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-start text-sm tabular-nums outline-none focus:border-gold-400"
+          className="min-h-11 w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-start text-sm tabular-nums outline-none focus:border-gold-400"
         />
       </td>
-      <td className="px-2 py-3">
+      {visibleColumns.category && <td className="px-2 py-3">
         <select
           value={g.category}
           disabled={!canEdit}
           onChange={(e) => updateCategory(g.id, e.target.value)}
           title="שינוי קטגוריה"
-          className={`max-w-[180px] cursor-pointer rounded-full px-2 py-1 text-xs font-semibold ring-inset outline-none transition focus:ring-2 ${
+          className={`min-h-11 max-w-[180px] cursor-pointer rounded-full px-2 py-1 text-xs font-semibold ring-inset outline-none transition focus:ring-2 ${
             g.category?.startsWith("צד כלה") ? "ring-2" : "ring-1"
           } ${categoryStyle(g.category)}`}
         >
@@ -1617,18 +1933,18 @@ const GuestRow = memo(function GuestRow({
             </option>
           ))}
         </select>
-      </td>
-      <td className="px-2 py-3">
+      </td>}
+      {visibleColumns.mention && <td className="px-2 py-3">
         <input
           value={mention}
           readOnly={!canEdit}
           onChange={(e) => setMention(e.target.value)}
           onBlur={() => mention !== (g.mention || "") && updateMention(g.id, mention)}
           placeholder="אזכור"
-          className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-right text-sm outline-none focus:border-gold-400"
+          className="min-h-11 w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-right text-sm outline-none focus:border-gold-400"
         />
-      </td>
-      <td className="px-2 py-3">
+      </td>}
+      {visibleColumns.seats && <td className="px-2 py-3">
         <input
           value={seats}
           readOnly={!canEdit}
@@ -1641,13 +1957,16 @@ const GuestRow = memo(function GuestRow({
           type="number"
           min="1"
           title="מספר הכיסאות לרשומה זו"
-          className="w-14 rounded-lg border border-slate-200 bg-white px-2 py-1 text-center text-sm font-semibold tabular-nums text-slate-700 outline-none focus:border-gold-400"
+          className="min-h-11 w-14 rounded-lg border border-slate-200 bg-white px-2 py-1 text-center text-sm font-semibold tabular-nums text-slate-700 outline-none focus:border-gold-400"
         />
-      </td>
-      <td className="px-2 py-3 text-center">
+      </td>}
+      {visibleColumns.source && <td className="max-w-36 truncate px-2 py-3 text-sm text-slate-600" title={g.source || ""}>
+        {g.source || <span className="text-slate-300">—</span>}
+      </td>}
+      {visibleColumns.glatt && <td className="px-2 py-3 text-center">
         <label
           title="נדרש להזמין מנת בד״צ / גלאט"
-          className="inline-flex cursor-pointer items-center justify-center"
+          className="inline-flex h-11 w-11 cursor-pointer items-center justify-center"
         >
           <input
             type="checkbox"
@@ -1657,14 +1976,14 @@ const GuestRow = memo(function GuestRow({
             className="h-5 w-5 accent-gold-500"
           />
         </label>
-      </td>
-      <td className="px-2 py-3 text-center">
+      </td>}
+      {visibleColumns.drinkers && <td className="px-2 py-3 text-center">
         <DrinkersControl
           guest={g}
           canEdit={canEdit}
           onChange={(n) => updateDrinkers(g.id, n)}
         />
-      </td>
+      </td>}
       <td className="px-2 py-3">
         {tableLabel ? (
           <Badge color="sage">
@@ -1674,14 +1993,14 @@ const GuestRow = memo(function GuestRow({
           <span className="text-xs text-slate-400">לא משובץ</span>
         )}
       </td>
-      <td className="px-2 py-3 text-center">
+      {visibleColumns.probablyComing && <td className="px-2 py-3 text-center">
         <button
           onClick={() => toggleFlag(g.id, "probablyComing")}
           disabled={!canEdit}
           aria-label={g.probablyComing ? "מסומן ככנראה יבוא" : "סימון ככנראה יבוא"}
           aria-pressed={!!g.probablyComing}
           title="כנראה יבוא"
-          className={`grid h-8 w-8 place-items-center rounded-lg transition focus-visible:ring-2 focus-visible:ring-sage-400 focus-visible:outline-none ${
+          className={`grid h-11 w-11 place-items-center rounded-lg transition focus-visible:ring-2 focus-visible:ring-sage-400 focus-visible:outline-none ${
             g.probablyComing
               ? "bg-sage-100 text-sage-600 ring-1 ring-sage-300"
               : "text-slate-400 hover:bg-slate-100"
@@ -1689,15 +2008,15 @@ const GuestRow = memo(function GuestRow({
         >
           {g.probablyComing ? <CheckCircle2 size={18} /> : <Circle size={18} />}
         </button>
-      </td>
-      <td className="px-2 py-3 text-center">
+      </td>}
+      {visibleColumns.considering && <td className="px-2 py-3 text-center">
         <button
           onClick={() => toggleFlag(g.id, "considering")}
           disabled={!canEdit}
           aria-label={g.considering ? "מסומן לשקילה" : "סימון לשקילה"}
           aria-pressed={!!g.considering}
           title="לשקול אם להזמין"
-          className={`grid h-8 w-8 place-items-center rounded-lg transition focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none ${
+          className={`grid h-11 w-11 place-items-center rounded-lg transition focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none ${
             g.considering
               ? "bg-rose-100 text-rose-600 ring-1 ring-rose-300"
               : "text-slate-400 hover:bg-slate-100"
@@ -1705,8 +2024,8 @@ const GuestRow = memo(function GuestRow({
         >
           <HelpCircle size={18} className={g.considering ? "fill-rose-200" : ""} />
         </button>
-      </td>
-      <td className="px-2 py-3">
+      </td>}
+      {visibleColumns.rsvp && <td className="px-2 py-3">
         <div className="flex flex-col gap-1">
           <select
             value={RSVP[g.rsvp] ? g.rsvp : "pending"}
@@ -1714,7 +2033,7 @@ const GuestRow = memo(function GuestRow({
             onChange={(e) => updateRsvp(g.id, e.target.value)}
             aria-label="אישור הגעה"
             title="שינוי סטטוס אישור הגעה"
-            className={`cursor-pointer rounded-full px-2 py-1 text-xs font-semibold ring-1 ring-inset outline-none transition focus:ring-2 ${
+            className={`min-h-11 cursor-pointer rounded-full px-2 py-1 text-xs font-semibold ring-1 ring-inset outline-none transition focus:ring-2 ${
               colorMap[RSVP[g.rsvp]?.color ?? "slate"]
             }`}
           >
@@ -1738,30 +2057,30 @@ const GuestRow = memo(function GuestRow({
                 }}
                 aria-label={`כמה אישרו הגעה מתוך ${g.seats || 1}`}
                 title="כמה אנשים אישרו הגעה מתוך הרשומה"
-                className="w-12 rounded-lg border border-sage-200 bg-sage-50 px-1.5 py-0.5 text-center text-xs font-bold tabular-nums text-sage-700 outline-none focus:border-sage-400"
+                className="min-h-11 w-12 rounded-lg border border-sage-200 bg-sage-50 px-1.5 py-0.5 text-center text-xs font-bold tabular-nums text-sage-700 outline-none focus:border-sage-400"
               />
               <span className="text-[11px] text-slate-400">/ {g.seats || 1}</span>
             </div>
           )}
         </div>
-      </td>
-      <td className="px-2 py-3">
+      </td>}
+      {visibleColumns.gift && <td className="px-2 py-3">
         <input
           type="number"
           value={gift}
           readOnly={!canEdit}
           onChange={(e) => setGift(e.target.value)}
           onBlur={() => Number(gift) !== (g.gift || 0) && updateGift(g.id, gift)}
-          className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
+          className="min-h-11 w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
         />
-      </td>
+      </td>}
       <td className="px-2 py-3 text-left">
         {canEdit && (
           <button
             onClick={() => removeGuest(g.id)}
             aria-label={`מחיקת ${g.name || "מוזמן"}`}
             title="מחיקת מוזמן"
-            className="rounded-lg p-2 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
+            className="grid h-11 w-11 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
           >
             <Trash2 size={16} />
           </button>
@@ -2047,9 +2366,29 @@ const GuestCard = memo(function GuestCard({
   );
 });
 
-function Guests({ guests, setGuests, tables, setTables, categories, setCategories, setBudget }) {
+function Guests({ guests, setGuests, tables, setTables, categories, setCategories, dataLoading = false, dataUnavailable = false }) {
   const canEdit = useCanEdit();
   const fileRef = useRef(null);
+  const addGuestFormRef = useRef(null);
+  const columnsButtonRef = useRef(null);
+  const columnsPopoverRef = useRef(null);
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const [columnsPosition, setColumnsPosition] = useState(null);
+  const [storedGuestColumns, setStoredGuestColumns] = usePersistentState(
+    "guestTableColumns",
+    DEFAULT_GUEST_TABLE_COLUMNS
+  );
+  const visibleColumns = useMemo(
+    () => Object.fromEntries(
+      GUEST_TABLE_COLUMNS.map(({ key }) => [
+        key,
+        storedGuestColumns?.[key] ?? DEFAULT_GUEST_TABLE_COLUMNS[key],
+      ])
+    ),
+    [storedGuestColumns]
+  );
+  const visibleColumnCount = GUEST_TABLE_COLUMNS.filter(({ key }) => visibleColumns[key]).length;
+  const tableColumnCount = 5 + visibleColumnCount;
   const [catManagerOpen, setCatManagerOpen] = useState(false);
   //  קריאת קובץ Excel גדול לוקחת זמן מורגש בנייד. בלי חיווי המשתמש
   //  לוחץ שוב ושוב על "ייבוא" וחושב שהכפתור לא עובד.
@@ -2075,6 +2414,75 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   });
 
   const [sort, setSort] = useState({ key: null, dir: "asc" });
+
+  useEffect(() => {
+    if (!columnsOpen) return;
+    const closeOnOutsidePointer = (event) => {
+      if (
+        !columnsPopoverRef.current?.contains(event.target) &&
+        !columnsButtonRef.current?.contains(event.target)
+      ) {
+        setColumnsOpen(false);
+      }
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") {
+        setColumnsOpen(false);
+        columnsButtonRef.current?.focus();
+      }
+    };
+    const closeOnFocusOutside = (event) => {
+      if (
+        !columnsPopoverRef.current?.contains(event.target) &&
+        !columnsButtonRef.current?.contains(event.target)
+      ) {
+        setColumnsOpen(false);
+      }
+    };
+    const updatePosition = () => {
+      const rect = columnsButtonRef.current?.getBoundingClientRect();
+      if (rect) {
+        setColumnsPosition(
+          guestColumnsPopoverPosition(rect, window.innerWidth, window.innerHeight)
+        );
+      }
+    };
+    updatePosition();
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("focusin", closeOnFocusOutside);
+    document.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("focusin", closeOnFocusOutside);
+      document.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [columnsOpen]);
+
+  const toggleColumnsPopover = () => {
+    if (columnsOpen) {
+      setColumnsOpen(false);
+      return;
+    }
+    const rect = columnsButtonRef.current?.getBoundingClientRect();
+    if (rect) {
+      setColumnsPosition(
+        guestColumnsPopoverPosition(rect, window.innerWidth, window.innerHeight)
+      );
+    }
+    setColumnsOpen(true);
+  };
+
+  const toggleGuestColumn = (key) => {
+    setStoredGuestColumns((previous) => ({
+      ...DEFAULT_GUEST_TABLE_COLUMNS,
+      ...previous,
+      [key]: !(previous?.[key] ?? DEFAULT_GUEST_TABLE_COLUMNS[key]),
+    }));
+  };
 
   const toggleSort = useCallback((key) => {
     setSort((prev) =>
@@ -2102,16 +2510,12 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   // Live refs so stable callbacks (memoized rows) can read current data.
   const guestsRef = useRef(guests);
   const tablesRef = useRef(tables);
-  const categoriesRef = useRef(categories);
   useEffect(() => {
     guestsRef.current = guests;
   }, [guests]);
   useEffect(() => {
     tablesRef.current = tables;
   }, [tables]);
-  useEffect(() => {
-    categoriesRef.current = categories;
-  }, [categories]);
 
   const totals = useMemo(() => {
     const notDeclined = guests.filter((g) => g.rsvp !== "declined");
@@ -2196,6 +2600,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         case "phone": return g.phone || "";
         case "category": return g.category || "";
         case "mention": return g.mention || "";
+        case "source": return g.source || "";
         case "seats": return g.seats || 0;
         case "glatt": return g.glatt ? 1 : 0;
         case "drinkers": return Number(g.drinkers) || 0;
@@ -2214,6 +2619,81 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       return String(va).localeCompare(String(vb), "he") * dir;
     });
   }, [filtered, sort, guestTableMap]);
+
+  const hasActiveFilters = Boolean(
+    filters.search.trim() ||
+    filters.category !== "all" ||
+    filters.rsvp !== "all" ||
+    filters.onlyProbably ||
+    filters.onlyConsidering ||
+    filters.onlyGlatt ||
+    filters.onlyDrinkers ||
+    filters.onlyUnassigned
+  );
+
+  const guestEmptyState = dataLoading ? (
+    <div role="status" aria-label="טוען מוזמנים" className="space-y-3 rounded-2xl bg-white/70 p-5 ring-1 ring-slate-200">
+      <div className="mx-auto h-5 w-40 animate-pulse rounded bg-slate-100" />
+      <div className="mx-auto h-4 w-64 max-w-full animate-pulse rounded bg-slate-100" />
+    </div>
+  ) : dataUnavailable ? (
+    <div role="alert" className="rounded-2xl bg-amber-50 px-4 py-6 text-center ring-1 ring-amber-200">
+      <p className="text-sm font-semibold text-amber-900">רשימת המוזמנים אינה זמינה כרגע</p>
+      <p className="mt-1 text-xs text-amber-800">הנתונים לא נמחקו. בדקו את החיבור ונסו שוב.</p>
+    </div>
+  ) : guests.length === 0 ? (
+    <div className="mx-auto flex max-w-xl flex-col items-center gap-3 rounded-3xl border border-dashed border-gold-300 bg-gradient-to-b from-gold-50/70 to-white px-5 py-8 text-center sm:px-8 sm:py-10">
+      <span className="grid h-14 w-14 place-items-center rounded-2xl bg-white text-gold-500 shadow-sm ring-1 ring-gold-100">
+        <Users size={26} />
+      </span>
+      <div>
+        <h3 className="text-base font-bold text-slate-800">רשימת המוזמנים עדיין ריקה</h3>
+        <p className="mt-1 text-sm leading-6 text-slate-500">
+          הוסיפו את המוזמן הראשון או ייבאו רשימה מקובץ Excel או CSV.
+        </p>
+      </div>
+      {canEdit && (
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          <button
+            type="button"
+            onClick={() => {
+              addGuestFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+              addGuestFormRef.current?.querySelector("input")?.focus({ preventScroll: true });
+            }}
+            className="btn-primary w-full sm:w-auto"
+          >
+            <Plus size={17} /> הוספת מוזמן
+          </button>
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={importing}
+            className="btn-secondary w-full sm:w-auto"
+          >
+            <Upload size={17} /> ייבוא Excel / CSV
+          </button>
+        </div>
+      )}
+    </div>
+  ) : (
+    <div className="rounded-2xl border border-slate-200 bg-white/70 px-4 py-8 text-center">
+      <Search size={22} className="mx-auto mb-2 text-slate-300" />
+      <p className="text-sm font-semibold text-slate-700">לא נמצאו רשומות התואמות לסינון</p>
+      <p className="mt-1 text-xs text-slate-500">נסו לשנות את החיפוש או לנקות את הסינונים.</p>
+      {hasActiveFilters && (
+        <button
+          type="button"
+          onClick={() => setFilters({
+            search: "", category: "all", rsvp: "all", onlyProbably: false,
+            onlyConsidering: false, onlyGlatt: false, onlyDrinkers: false, onlyUnassigned: false,
+          })}
+          className="btn-secondary mt-3"
+        >
+          <X size={15} /> ניקוי סינונים
+        </button>
+      )}
+    </div>
+  );
 
   // --- Row virtualization: render only the visible slice of the guests table ---
   const ROW_H = 65;
@@ -2317,35 +2797,10 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   }, [setCategories, setGuests]);
 
   const deleteCategory = useCallback((name, fallback) => {
-    const prevCategories = categoriesRef.current;
-    const idx = prevCategories.indexOf(name);
-    //  אילו רשומות באמת שויכו מחדש — רק הן יחזרו לקטגוריה המקורית בביטול.
-    const moved = guestsRef.current.filter((g) => g.category === name).map((g) => g.id);
     setCategories((prev) => prev.filter((c) => c !== name));
     setGuests((prev) =>
       prev.map((g) => (g.category === name ? { ...g, category: fallback } : g))
     );
-    notify(`הקטגוריה “${name}” נמחקה`, {
-      tone: "success",
-      duration: 8000,
-      action: {
-        label: "בטל מחיקה",
-        onClick: () => {
-          setCategories((prev) => {
-            if (prev.includes(name)) return prev;
-            const arr = [...prev];
-            arr.splice(Math.min(idx < 0 ? arr.length : idx, arr.length), 0, name);
-            return arr;
-          });
-          if (moved.length) {
-            const back = new Set(moved);
-            setGuests((prev) =>
-              prev.map((g) => (back.has(g.id) ? { ...g, category: name } : g))
-            );
-          }
-        },
-      },
-    });
   }, [setCategories, setGuests]);
 
   const updateName = useCallback((id, name) => {
@@ -2471,43 +2926,12 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       tone: "danger",
     });
     if (!ok) return;
-    //  צילום מצב לפני המחיקה: השחזור חייב להחזיר גם את השיבוץ לשולחנות,
-    //  אחרת "בטל מחיקה" מחזיר רשומות שאיבדו את המקום שלהן.
-    const removed = guestsRef.current.filter((g) => ids.has(g.id));
-    const seating = tablesRef.current.map((t) => ({
-      id: t.id,
-      guestIds: t.guestIds.filter((gid) => ids.has(gid)),
-    }));
     setGuests((prev) => prev.filter((g) => !ids.has(g.id)));
     setTables((prev) =>
       prev.map((t) => ({ ...t, guestIds: t.guestIds.filter((gid) => !ids.has(gid)) }))
     );
     setSelectedIds(new Set());
-    notify(`${ids.size} רשומות נמחקו`, {
-      tone: "success",
-      duration: 8000,
-      action: {
-        label: "בטל מחיקה",
-        onClick: () => {
-          setGuests((prev) => {
-            const have = new Set(prev.map((g) => g.id));
-            const back = removed.filter((g) => !have.has(g.id));
-            return back.length ? [...prev, ...back] : prev;
-          });
-          setTables((prev) =>
-            prev.map((t) => {
-              const restore = seating.find((s) => s.id === t.id);
-              if (!restore || !restore.guestIds.length) return t;
-              const have = new Set(t.guestIds);
-              return {
-                ...t,
-                guestIds: [...t.guestIds, ...restore.guestIds.filter((g) => !have.has(g))],
-              };
-            })
-          );
-        },
-      },
-    });
+    notify(`${ids.size} רשומות נמחקו`, { tone: "success" });
   }, [selectedIds, setGuests, setTables]);
 
   const bulkRsvp = useCallback(
@@ -2650,7 +3074,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     a.href = url;
     a.download = "תבנית-מוזמנים.csv";
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function exportGuests() {
@@ -2698,7 +3122,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     a.href = url;
     a.download = `מוזמנים-${new Date().toLocaleDateString("he-IL")}.csv`;
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     notify(`יוצאו ${sorted.length} רשומות לקובץ CSV`, { tone: "success" });
   }
 
@@ -2706,7 +3130,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-5">
+      <div data-tour="guests-summary" className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-5">
         <StatCard icon={Users} label="סה״כ רשומות" value={totals.count} tone="gold" />
         <StatCard
           icon={UserCheck}
@@ -2738,7 +3162,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       </div>
 
       {/* RSVP summary */}
-      <Card>
+      <Card tourId="guests-rsvp">
         {/*  \u05d1\u05e0\u05d9\u05d9\u05d3 \u05d4\u05db\u05d5\u05ea\u05e8\u05ea \u05d9\u05d5\u05e9\u05d1\u05ea \u05de\u05e2\u05dc \u05d4\u05e6\u05d9\u05e4\u05e1 \u05d5\u05dc\u05d0 \u05dc\u05e6\u05d9\u05d3\u05dd. \u05db\u05e9\u05d4\u05db\u05dc \u05d4\u05d9\u05d4 \u05d1\u05e9\u05d5\u05e8\u05d4
             \u05d0\u05d7\u05ea \u05d4\u05db\u05d5\u05ea\u05e8\u05ea \u05d1\u05dc\u05e2\u05d4 \u05db-140px \u05d5\u05d4\u05e9\u05dc\u05d5\u05e9\u05d4 \u05e0\u05d3\u05d7\u05e7\u05d5 \u05dc\u05e2\u05de\u05d5\u05d3\u05d4 \u05e6\u05e8\u05d4 \u05d1\u05e6\u05d3 \u05d4\u05e9\u05e0\u05d9.  */}
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
@@ -2760,7 +3184,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   }
                   aria-pressed={active}
                   title={`סינון לפי ${s.label}`}
-                  className={`flex min-w-0 flex-col items-center gap-1 rounded-2xl border px-2 py-2 text-sm transition sm:min-w-[150px] sm:flex-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-4 sm:py-2.5 ${
+                  className={`flex min-h-11 min-w-0 flex-col items-center gap-1 rounded-2xl border px-2 py-2 text-sm transition sm:min-w-[150px] sm:flex-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-4 sm:py-2.5 ${
                     active
                       ? "border-slate-400 bg-slate-50 ring-2 ring-slate-200"
                       : "border-slate-200 bg-white hover:bg-slate-50"
@@ -2782,7 +3206,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       </Card>
 
       {/* Add + import */}
-      <Card>
+      <Card tourId="guests-management">
+        <div data-tour="guests-import-tools">
         <SectionTitle
           icon={Users}
           title="ניהול רשימת המוזמנים"
@@ -2800,16 +3225,16 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 <button
                   onClick={() => setCatManagerOpen(true)}
                   title="הוספה, עריכה ומחיקה של קטגוריות מוזמנים"
-                  className="flex items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                  className="flex min-h-11 items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
                 >
-                  <Tag size={17} /> עריכת קטגוריות
+                  <Tag size={17} /> קטגוריות
                 </button>
               )}
               {canEdit && (
                 <button
                   onClick={downloadTemplate}
                   title="הורדת קובץ תבנית לייבוא"
-                  className="flex items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                  className="flex min-h-11 items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
                 >
                   <FileText size={17} /> תבנית
                 </button>
@@ -2817,7 +3242,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               <button
                 onClick={exportGuests}
                 title="ייצוא הרשומות המסוננות לקובץ CSV"
-                className="flex items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                className="flex min-h-11 items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
               >
                 <Download size={17} /> ייצוא
               </button>
@@ -2826,7 +3251,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   onClick={() => fileRef.current?.click()}
                   disabled={importing}
                   title="ייבוא מוזמנים מקובץ Excel (.xlsx) או CSV"
-                  className="flex items-center gap-2 rounded-2xl bg-sage-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sage-500/30 transition hover:bg-sage-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="btn-primary disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {importing ? (
                     <>
@@ -2842,10 +3267,13 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             </div>
           }
         />
+        </div>
 
         {canEdit && (
         <form
+          ref={addGuestFormRef}
           onSubmit={addGuest}
+          data-tour="guests-add"
           className="mb-4 rounded-2xl border border-gold-200 bg-gradient-to-l from-gold-50/70 to-white p-3 shadow-sm sm:mb-5 sm:p-4"
         >
           <div className="mb-3 flex items-center gap-2.5">
@@ -2938,7 +3366,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           </label>
           <button
             type="submit"
-            className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:bg-gold-600 lg:col-span-1"
+            className="btn-primary col-span-2 lg:col-span-1"
           >
             <Plus size={18} /> הוסף לרשימה
           </button>
@@ -2947,7 +3375,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         )}
 
         {/* Search & Filters */}
-        <div className="mb-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3 sm:mb-4 sm:p-4">
+        <div data-tour="guests-filters" className="mb-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3 sm:mb-4 sm:p-4">
           <div className="mb-2.5 flex items-center gap-2.5 sm:mb-3">
             <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-slate-600 text-white shadow-md shadow-slate-500/20 sm:h-9 sm:w-9">
               <Search size={16} />
@@ -2971,14 +3399,14 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 value={filters.search}
                 onChange={(e) => setFilters({ ...filters, search: e.target.value })}
                 placeholder="חיפוש לפי שם מוזמן..."
-                className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pr-10 pl-3 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                className="min-h-11 w-full rounded-xl border border-slate-200 bg-white py-2.5 pr-10 pl-3 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
               />
             </div>
             <select
               value={filters.category}
               onChange={(e) => setFilters({ ...filters, category: e.target.value })}
               title="סינון לפי קטגוריה"
-              className="min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
+              className="min-h-11 min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
             >
               <option value="all">כל הקטגוריות</option>
               {categories.map((c) => (
@@ -2991,7 +3419,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               value={filters.rsvp}
               onChange={(e) => setFilters({ ...filters, rsvp: e.target.value })}
               title="סינון לפי אישור הגעה"
-              className="min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
+              className="min-h-11 min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
             >
               <option value="all">כל הסטטוסים</option>
               <option value="confirmed">אישרו הגעה</option>
@@ -3002,7 +3430,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               onClick={() =>
                 setFilters({ ...filters, onlyProbably: !filters.onlyProbably })
               }
-              className={`flex items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
+              className={`flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
                 filters.onlyProbably
                   ? "bg-sage-500 text-white"
                   : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-sage-50"
@@ -3014,7 +3442,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               onClick={() =>
                 setFilters({ ...filters, onlyConsidering: !filters.onlyConsidering })
               }
-              className={`flex items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
+              className={`flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
                 filters.onlyConsidering
                   ? "bg-rose-500 text-white"
                   : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-rose-50"
@@ -3026,9 +3454,9 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               onClick={() =>
                 setFilters({ ...filters, onlyGlatt: !filters.onlyGlatt })
               }
-              className={`flex items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
+              className={`flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
                 filters.onlyGlatt
-                  ? "bg-gold-500 text-white"
+                  ? "bg-gold-500 text-slate-950"
                   : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-gold-50"
               }`}
             >
@@ -3038,9 +3466,9 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               onClick={() =>
                 setFilters({ ...filters, onlyDrinkers: !filters.onlyDrinkers })
               }
-              className={`flex items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
+              className={`flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
                 filters.onlyDrinkers
-                  ? "bg-gold-600 text-white"
+                  ? "bg-gold-600 text-slate-950"
                   : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-gold-50"
               }`}
             >
@@ -3050,7 +3478,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               onClick={() =>
                 setFilters({ ...filters, onlyUnassigned: !filters.onlyUnassigned })
               }
-              className={`flex items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
+              className={`flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
                 filters.onlyUnassigned
                   ? "bg-slate-700 text-white"
                   : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100"
@@ -3080,15 +3508,34 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   })
                 }
                 title="ניקוי כל הסינונים"
-                className="flex items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-500 ring-1 ring-slate-200 transition hover:bg-white"
+                className="flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-500 ring-1 ring-slate-200 transition hover:bg-white"
               >
                 <X size={15} /> נקה
               </button>
             )}
+            <div
+              className="relative col-span-2 hidden justify-end sm:col-span-1 sm:ml-auto xl:flex"
+            >
+              <button
+                ref={columnsButtonRef}
+                type="button"
+                onClick={toggleColumnsPopover}
+                aria-expanded={columnsOpen}
+                aria-controls="guest-columns-popover"
+                aria-haspopup="true"
+                className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-gold-300 hover:bg-gold-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
+              >
+                <Columns3 size={17} />
+                עמודות
+                <span className="text-xs font-medium text-slate-500">
+                  {visibleColumnCount}/{GUEST_TABLE_COLUMNS.length}
+                </span>
+              </button>
+            </div>
           </div>
         </div>
 
-        <p className="mb-3 text-xs text-slate-400">
+        <p data-tour="guests-list" className="mb-3 text-xs text-slate-400">
           מציג {filtered.length} מתוך {guests.length} רשומות · עמודות שהמערכת
           מזהה בקובץ Excel או CSV (בכל סדר): שם, נייד, קטגוריה, אזכור, כיסאות,
           מקור, גלאט, שותים, "כנראה יבוא", "לשקול", "אישור הגעה", "כמה אישרו", מתנה
@@ -3155,45 +3602,48 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         <div
           ref={scrollRef}
           onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-          className="hidden max-h-[560px] overflow-auto rounded-2xl ring-1 ring-slate-200/70 lg:block"
+          className="hidden max-h-[560px] overflow-auto rounded-2xl ring-1 ring-slate-200/70 xl:block"
         >
-          <table className="w-full min-w-[760px] text-right text-sm">
+          <table className="w-full text-right text-sm">
             <thead className="sticky top-0 z-10 bg-white/95 backdrop-blur">
               <tr className="border-b border-slate-200 text-xs uppercase text-slate-400">
                 <th className="px-2 py-2">
                   {canEdit && (
-                    <input
-                      type="checkbox"
-                      aria-label="בחירת כל הרשומות המסוננות"
-                      checked={sorted.length > 0 && sorted.every((g) => selectedIds.has(g.id))}
-                      onChange={(e) =>
-                        setSelectedIds(
-                          e.target.checked ? new Set(sorted.map((g) => g.id)) : new Set()
-                        )
-                      }
-                      className="h-4 w-4 cursor-pointer accent-gold-500"
-                    />
+                    <label className="grid h-11 w-11 cursor-pointer place-items-center">
+                      <input
+                        type="checkbox"
+                        aria-label="בחירת כל הרשומות המסוננות"
+                        checked={sorted.length > 0 && sorted.every((g) => selectedIds.has(g.id))}
+                        onChange={(e) =>
+                          setSelectedIds(
+                            e.target.checked ? new Set(sorted.map((g) => g.id)) : new Set()
+                          )
+                        }
+                        className="h-5 w-5 accent-gold-500"
+                      />
+                    </label>
                   )}
                 </th>
                 <SortHeader label="שם" sortKey="name" sort={sort} onSort={toggleSort} />
                 <SortHeader label="נייד" sortKey="phone" sort={sort} onSort={toggleSort} />
-                <SortHeader label="קטגוריה" sortKey="category" sort={sort} onSort={toggleSort} />
-                <SortHeader label="אזכור" sortKey="mention" sort={sort} onSort={toggleSort} />
-                <SortHeader label="כיסאות" sortKey="seats" sort={sort} onSort={toggleSort} />
-                <SortHeader label="גלאט" sortKey="glatt" sort={sort} onSort={toggleSort} center />
-                <SortHeader label="שותים" sortKey="drinkers" sort={sort} onSort={toggleSort} center />
+                {visibleColumns.category && <SortHeader label="קטגוריה" sortKey="category" sort={sort} onSort={toggleSort} />}
+                {visibleColumns.mention && <SortHeader label="אזכור / הערות" sortKey="mention" sort={sort} onSort={toggleSort} />}
+                {visibleColumns.seats && <SortHeader label="כיסאות" sortKey="seats" sort={sort} onSort={toggleSort} />}
+                {visibleColumns.source && <SortHeader label="מקור" sortKey="source" sort={sort} onSort={toggleSort} />}
+                {visibleColumns.glatt && <SortHeader label="גלאט" sortKey="glatt" sort={sort} onSort={toggleSort} center />}
+                {visibleColumns.drinkers && <SortHeader label="שותים" sortKey="drinkers" sort={sort} onSort={toggleSort} center />}
                 <SortHeader label="שיבוץ" sortKey="table" sort={sort} onSort={toggleSort} />
-                <SortHeader label="כנראה יבוא" sortKey="probablyComing" sort={sort} onSort={toggleSort} center />
-                <SortHeader label="לשקול" sortKey="considering" sort={sort} onSort={toggleSort} center />
-                <SortHeader label="אישור הגעה" sortKey="rsvp" sort={sort} onSort={toggleSort} />
-                <SortHeader label="מתנה (₪)" sortKey="gift" sort={sort} onSort={toggleSort} />
+                {visibleColumns.probablyComing && <SortHeader label="כנראה יבוא" sortKey="probablyComing" sort={sort} onSort={toggleSort} center />}
+                {visibleColumns.considering && <SortHeader label="לשקול" sortKey="considering" sort={sort} onSort={toggleSort} center />}
+                {visibleColumns.rsvp && <SortHeader label="אישור הגעה" sortKey="rsvp" sort={sort} onSort={toggleSort} />}
+                {visibleColumns.gift && <SortHeader label="מתנה (₪)" sortKey="gift" sort={sort} onSort={toggleSort} />}
                 <th className="px-2 py-2"></th>
               </tr>
             </thead>
             <tbody>
               {padTop > 0 && (
                 <tr aria-hidden="true">
-                  <td colSpan={14} className="p-0" style={{ height: padTop }} />
+                  <td colSpan={tableColumnCount} className="p-0" style={{ height: padTop }} />
                 </tr>
               )}
               {visibleRows.map((g) => (
@@ -3201,6 +3651,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   key={g.id}
                   g={g}
                   tableLabel={guestTableMap[g.id]}
+                  visibleColumns={visibleColumns}
                   selected={selectedIds.has(g.id)}
                   onToggleSelect={toggleSelect}
                   updateName={updateName}
@@ -3219,13 +3670,13 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               ))}
               {padBottom > 0 && (
                 <tr aria-hidden="true">
-                  <td colSpan={14} className="p-0" style={{ height: padBottom }} />
+                  <td colSpan={tableColumnCount} className="p-0" style={{ height: padBottom }} />
                 </tr>
               )}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={14} className="px-3 py-10 text-center text-slate-400">
-                    לא נמצאו רשומות התואמות לסינון
+                  <td colSpan={tableColumnCount} className="px-3 py-6">
+                    {guestEmptyState}
                   </td>
                 </tr>
               )}
@@ -3234,7 +3685,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         </div>
 
         {/* Cards (mobile) */}
-        <div className="space-y-3 lg:hidden">
+        <div className="space-y-3 xl:hidden">
           {sorted.slice(0, mobileLimit).map((g) => (
             <GuestCard
               key={g.id}
@@ -3257,9 +3708,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             />
           ))}
           {sorted.length === 0 && (
-            <div className="rounded-2xl border border-slate-200 bg-white/60 px-4 py-10 text-center text-sm text-slate-400">
-              לא נמצאו רשומות התואמות לסינון
-            </div>
+            guestEmptyState
           )}
           {sorted.length > mobileLimit && (
             <button
@@ -3271,6 +3720,46 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           )}
         </div>
       </Card>
+
+      {columnsOpen && columnsPosition && createPortal(
+        <div
+          id="guest-columns-popover"
+          ref={columnsPopoverRef}
+          role="group"
+          aria-label="בחירת עמודות בטבלת המוזמנים"
+          className="fixed z-[130] w-64 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl"
+          style={{
+            top: columnsPosition.top,
+            left: columnsPosition.left,
+            maxHeight: columnsPosition.maxHeight,
+          }}
+        >
+          {GUEST_TABLE_COLUMNS.map(({ key, label }) => (
+            <label
+              key={key}
+              className="flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-sm text-slate-700 transition hover:bg-slate-50"
+            >
+              <input
+                type="checkbox"
+                checked={visibleColumns[key]}
+                onChange={() => toggleGuestColumn(key)}
+                className="h-5 w-5 accent-gold-500"
+              />
+              {label}
+            </label>
+          ))}
+          <div className="mt-1 border-t border-slate-100 pt-1">
+            <button
+              type="button"
+              onClick={() => setStoredGuestColumns(DEFAULT_GUEST_TABLE_COLUMNS)}
+              className="flex min-h-11 w-full items-center gap-2 rounded-xl px-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+            >
+              <RotateCcw size={15} /> ברירת מחדל
+            </button>
+          </div>
+        </div>,
+        document.body
+      )}
 
       <CategoryManager
         open={catManagerOpen}
@@ -3288,13 +3777,25 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
 /* ---- Category management modal ---- */
 function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, onDelete }) {
   const [draft, setDraft] = useState("");
+  const dialogRef = useRef(null);
+  const inputRef = useRef(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  async function requestClose() {
+    if (draft.trim()) {
+      const discard = await confirmDialog({
+        title: "לסגור בלי להוסיף קטגוריה?",
+        message: "שם הקטגוריה שהקלדתם עדיין לא נוסף ויימחק בסגירה.",
+        confirmLabel: "סגירה בלי לשמור",
+        cancelLabel: "המשך עריכה",
+        tone: "danger",
+      });
+      if (!discard) return;
+    }
+    setDraft("");
+    onClose();
+  }
+
+  useAccessibleModal({ open, containerRef: dialogRef, initialFocusRef: inputRef, onRequestClose: requestClose });
 
   if (!open) return null;
 
@@ -3352,11 +3853,13 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={requestClose}
     >
       <div
         role="dialog"
         aria-modal="true"
+        aria-labelledby="category-manager-title"
+        ref={dialogRef}
         className="animate-fade-in-up flex max-h-[85vh] w-full max-w-lg flex-col rounded-3xl bg-white p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -3366,7 +3869,7 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
               <Tag size={20} />
             </span>
             <div>
-              <h3 className="text-lg font-bold text-slate-800">
+              <h3 id="category-manager-title" className="font-display text-lg font-bold text-slate-800">
                 ניהול קטגוריות מוזמנים
               </h3>
               <p className="text-xs text-slate-500">
@@ -3375,7 +3878,8 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
             </div>
           </div>
           <button
-            onClick={onClose}
+            type="button"
+            onClick={requestClose}
             aria-label="סגירה"
             className="rounded-xl p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
           >
@@ -3384,16 +3888,19 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
         </div>
 
         <form onSubmit={submitAdd} className="mb-4 flex gap-2">
+          {/*  min-w-0: בלי זה flex-1 לא מתכווץ מתחת לרוחב הטבעי של input,
+              וכפתור ההוספה נדחף אל מחוץ לדיאלוג ב-320px.  */}
           <input
+            ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="שם קטגוריה חדשה"
             aria-label="שם קטגוריה חדשה"
-            className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-200"
+            className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-200"
           />
           <button
             type="submit"
-            className="flex items-center gap-1.5 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-gold-600"
+            className="btn-primary shrink-0"
           >
             <Plus size={18} /> הוסף
           </button>
@@ -3404,23 +3911,27 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
             {categories.map((c) => (
               <li
                 key={c}
-                className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2"
+                className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5"
               >
-                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                  <CategoryBadge category={c} />
-                  <span className="shrink-0 text-[11px] text-slate-400">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                  <EditableText
+                    value={c}
+                    onCommit={(v) => handleRename(c, v)}
+                    title={`עריכת הקטגוריה ${c}`}
+                    inputAriaLabel={`שם הקטגוריה ${c}`}
+                    className={`min-h-10 max-w-full rounded-full px-3 text-xs font-semibold ring-1 ring-inset ${categoryStyle(c)}`}
+                    inputClassName="w-full max-w-full rounded-xl border border-gold-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-800 outline-none focus:border-gold-500 focus:ring-2 focus:ring-gold-100"
+                  />
+                  <span className="shrink-0 text-[11px] text-slate-500">
                     {counts[c] || 0} מוזמנים
                   </span>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  <EditableText
-                    value={c}
-                    onCommit={(v) => handleRename(c, v)}
-                    className="text-xs font-medium text-slate-500"
-                  />
                   <button
+                    type="button"
                     onClick={() => handleDelete(c)}
                     title="מחיקת קטגוריה"
+                    aria-label={`מחיקת הקטגוריה ${c}`}
                     className="rounded-lg p-1.5 text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
                   >
                     <Trash2 size={16} />
@@ -3438,7 +3949,8 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
 
         <div className="mt-5 flex justify-start">
           <button
-            onClick={onClose}
+            type="button"
+            onClick={requestClose}
             className="rounded-xl bg-slate-800 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700"
           >
             סיום
@@ -3452,150 +3964,182 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
 /* =============================================================================
  *  מחשבון אלכוהול
  * -----------------------------------------------------------------------------
- *  הכלל שמנחה את המסך הזה: מדברים בבקבוקים בלבד. זוג שמתכנן חתונה חושב
- *  “כמה בקבוקים לקנות”, לא “כמה מנות” או “כמה כוסות”. לכן גם השאלה על
- *  עוצמת השתייה מנוסחת בבקבוקים: בקבוק אחד לכל כמה אנשים.
+ *  המסך עונה על שאלה אחת: מה לקנות, כמה, ובכמה זה יוצא.
  *
- *  מאחורי הקלעים עדיין צריך מכנה משותף אחד כדי לחלק בין הסוגים (בקבוק
- *  וודקה מול ארגז בירה אינם אותו דבר), ולכן קיים BOTTLE_SHOTS. הוא לעולם
- *  לא מוצג למשתמש — הוא רק מתרגם “בקבוק לכל 6 אנשים” לכמויות של כל סוג.
+ *  אין כאן מכנה משותף נסתר ואין אחוזי תמהיל. שתי השאלות הראשונות מייצרות
+ *  יעד אחד בליטרים (“בקבוק ליטר לכל 6 שותים”), והרשימה נמדדת מולו. זוג
+ *  לא יודע לומר שרבע מהשתייה תהיה ערק — הוא כן יודע לומר “נקנה 6 בקבוקי
+ *  ערק”. לכן הכמות היא קלט ישיר, והיעד הוא רק מד.
  *
- *  ההמלצות (8 / 6 / 4 אנשים לבקבוק) כבר כוללות עודף קטן, ולכן אין שדה
- *  “מרווח ביטחון” ואין מכפיל נסתר — מה שרואים הוא מה שמחושב.
+ *  הרשימה מתחילה ריקה במכוון: אין „ברירת מחדל” שצריך לכבות. יש הצעות
+ *  להוספה מהירה, אבל כל שורה נכנסת רק כי מישהו ביקש אותה — ולכן גם כל
+ *  שורה ניתנת למחיקה.
  *
  *  ה-state מקומי במכוון — אלו פרמטרים של חישוב ולא נתון של החתונה.
  *  מה שצריך לשרוד (סכום ההוצאה) עובר לסעיף תקציב אמיתי.
  * ========================================================================== */
 
-//  עוגן ההמרה הפנימי: בקבוק ליטר של משקה חריף נותן כ-25 שוטים של 40 מ״ל.
-//  המספר לא מוצג ולא ניתן לעריכה — הוא רק המכנה המשותף שמאפשר לחלק את
-//  הכמות בין הסוגים. זוג שמתכנן חתונה לא צריך להתעסק במספר הזה.
 //  בעברית “1 אנשים” נראה כמו תקלה, ולכן יש טיפול בצורת היחיד.
 const peopleLabel = (n) => (n === 1 ? "אדם אחד" : `${n} אנשים`);
 
-//  עוצמת השתייה, מנוסחת בשפה של בקבוקים.
+//  עוצמת השתייה, מנוסחת בשפה של בקבוקים. היעד הוא בקבוק ליטר לכל N שותים.
 const DRINK_LEVELS = [
   { key: "light", label: "שותים מעט", perBottle: 8, hint: "קהל משפחתי או אירוע קצר" },
   { key: "normal", label: "רגיל", perBottle: 6, hint: "רוב החתונות" },
   { key: "heavy", label: "שותים הרבה", perBottle: 4, hint: "קהל צעיר, רחבה עד הסוף" },
 ];
 
-/*  portions = כמה מנות שתייה יוצאות מיחידת קנייה אחת. זה נתון פנימי
-    בלבד שלא מוצג ולא ניתן לעריכה — זוג שמתכנן חתונה לא יודע ולא
-    צריך לדעת כמה שוטים יש בבקבוק. sizeLabel מתאר את אריזת הקנייה
-    כטקסט קבוע, כדי שיהיה ברור מה סופרים. רק המחיר ניתן לעריכה,
-    כי הוא באמת משתנה בין ספקים והזוג יודע מה הוא שילם.  */
-const DEFAULT_DRINK_TYPES = [
-  { key: "vodka", label: "וודקה", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", liters: 1, price: 90 },
-  { key: "whiskey", label: "וויסקי", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", liters: 1, price: 150 },
-  { key: "arak", label: "ערק", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק ליטר", liters: 1, price: 50 },
-  { key: "beer", label: "בירה", unitOne: "ארגז", unitMany: "ארגזים", sizeLabel: "ארגז של 24", liters: 7.92, price: 120 },
-  { key: "wine", label: "יין", unitOne: "בקבוק", unitMany: "בקבוקים", sizeLabel: "בקבוק 750 מ״ל", liters: 0.75, price: 45 },
-  { key: "excel", label: "אקסלים", unitOne: "מגש", unitMany: "מגשים", sizeLabel: "מגש", liters: 1, price: 280 },
+//  איך קוראים לאריזה שקונים.
+const PACK_KINDS = [
+  { key: "bottle", one: "בקבוק", many: "בקבוקים" },
+  { key: "case", one: "ארגז", many: "ארגזים" },
+  { key: "tray", one: "מגש", many: "מגשים" },
+  { key: "unit", one: "יחידה", many: "יחידות" },
 ];
 
+const PACK_KIND = Object.fromEntries(PACK_KINDS.map((p) => [p.key, p]));
+
+/*  בטופס ההוספה, בקבוק נפתח עם שדה נפח וארגז/מגש עם “כמה יש באריזה”.
+    זו רק ברירת מחדל נוחה: אחרי שהשורה נוספה, השדה שנפתח תלוי בהחלטה
+    של המשתמש אם היא נספרת ביעד הליטרים — ולא בסוג האריזה.  */
+const hasLiters = (packKind) => packKind === "bottle";
+const hasPackUnits = (packKind) => packKind === "case" || packKind === "tray";
+
+/*  הצעות להוספה מהירה — ולא רשימת ברירת מחדל. שום דבר מכאן לא נכנס
+    לרשימה עד שלוחצים עליו, וכל פריט שנוסף הוא רגיל לחלוטין: אפשר
+    לערוך ולמחוק אותו כמו כל שורה אחרת. אין כאן מחירים: הם משתנים בין
+    ספק לספק ובין מותג למותג, ומספר מומצא גרוע משדה ריק.  */
+const DRINK_SUGGESTIONS = [
+  { label: "ערק", packKind: "bottle", unitLiters: 1 },
+  { label: "וודקה-גריגוס", packKind: "bottle", unitLiters: 1 },
+  { label: "וודקה-בלוגה", packKind: "bottle", unitLiters: 1 },
+  { label: "וויסקי-בלאק לייבל", packKind: "bottle", unitLiters: 1 },
+  { label: "ואן גוך-טעמים", packKind: "bottle", unitLiters: 1 },
+  { label: "ואן גוך-אסאי", packKind: "bottle", unitLiters: 1 },
+  { label: "אקסל", packKind: "tray", packUnits: 24 },
+  { label: "חמוציות", packKind: "bottle", unitLiters: 1.5, countsInLiters: false },
+  { label: "ראשן", packKind: "bottle", unitLiters: 1.5, countsInLiters: false },
+];
+
+const toNum = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+//  ליטרים בספרה אחת אחרי הנקודה: “34.2 ליטר” ולא “34.17 ליטר”.
+const litersLabel = (value) => String(Number(toNum(value).toFixed(1)));
 
 const ALCOHOL_BUDGET_CATEGORY = "אלכוהול";
+
+function getAlcoholStats(guests) {
+  const activeGuests = guests.filter((guest) => guest.rsvp !== "declined");
+  const drinkers = activeGuests.reduce(
+    (sum, guest) => sum + Math.min(guest.seats || 1, Math.max(0, Number(guest.drinkers) || 0)),
+    0
+  );
+  const seatsTotal = activeGuests.reduce((sum, guest) => sum + (guest.seats || 0), 0);
+  const probablySeats = activeGuests
+    .filter((guest) => guest.probablyComing)
+    .reduce((sum, guest) => sum + (guest.seats || 1), 0);
+  const confirmedPeople = guests.reduce((sum, guest) => {
+    if (guest.rsvp !== "confirmed") return sum;
+    const seats = guest.seats || 1;
+    return sum + (guest.attendingCount != null ? Math.min(guest.attendingCount, seats) : seats);
+  }, 0);
+  return { drinkers, expectedSeats: confirmedPeople || probablySeats || seatsTotal };
+}
 
 function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
   const canEdit = useCanEdit();
   //  כל עוד אף אחד לא סומן ברשימה אין טעם להציג 0 — עוברים אוטומטית
   //  להערכה לפי אחוז מהאורחים, שהיא הדרך שבה רוב הזוגות מתחילים.
-  const [source, setSource] = usePersistentState("alcoholSource", drinkers > 0 ? "marked" : "percent");
-  const [percent, setPercent] = usePersistentState("alcoholPercent", 80);
-  const [peoplePerBottle, setPeoplePerBottle] = usePersistentState("alcoholPeoplePerBottle", 6);
-  const [drinkTypes, setDrinkTypes] = usePersistentState("alcoholDrinkTypes", DEFAULT_DRINK_TYPES);
-  const [enabled, setEnabled] = usePersistentState(
-    "alcoholEnabled",
-    Object.fromEntries(DEFAULT_DRINK_TYPES.map((t) => [t.key, true]))
-  );
-  const [prices, setPrices] = usePersistentState(
-    "alcoholPrices",
-    Object.fromEntries(DEFAULT_DRINK_TYPES.map((t) => [t.key, t.price]))
-  );
-  const [quantities, setQuantities] = usePersistentState(
-    "alcoholQuantities",
-    Object.fromEntries(DEFAULT_DRINK_TYPES.map((t) => [t.key, 0]))
-  );
-  const [newDrink, setNewDrink] = useState({
-    label: "",
-    price: "0",
-  });
+  const [source, setSource] = usePersistentState("alcoholCalculatorSource", "percent");
+  const [percent, setPercent] = usePersistentState("alcoholCalculatorPercent", 80);
+  const [peoplePerBottle, setPeoplePerBottle] = usePersistentState("alcoholCalculatorPeoplePerBottle", 6);
+  //  רשימה אחת במקום שבע מפות מקבילות. כל שורה היא אובייקט שלם, ולכן
+  //  הוספה ומחיקה הן פעולה אחת ולא שש.
+  const [drinks, setDrinks] = usePersistentState("alcoholDrinks", []);
+  const drinkId = useRef(1 + Math.max(0, ...drinks.map((drink) => toNum(drink.id))));
+  const [newDrink, setNewDrink] = useState({ label: "", packKind: "bottle", packUnits: "24", unitLiters: "1" });
 
   const base = expectedSeats || 0;
-  const estimated = Math.round(
-    (base * Math.min(100, Math.max(0, Number(percent) || 0))) / 100
-  );
+  const percentValue = Math.min(100, Math.max(0, toNum(percent)));
+  const estimated = Math.round((base * percentValue) / 100);
   //  clamp על כל קלט: שדה ריק או ערך שלילי לא יפיל את החישוב.
   const drinkerCount = Math.max(0, source === "marked" ? drinkers : estimated);
 
-  const perBottle = Math.max(1, Number(peoplePerBottle) || 1);
+  const perBottle = Math.max(1, toNum(peoplePerBottle) || 1);
+  //  היעד כולו: “בקבוק ליטר לכל N שותים”. זה כל החישוב — אין מכנה נסתר.
   const targetLiters = drinkerCount / perBottle;
 
-  const lines = drinkTypes.map((t) => {
-    const on = !!enabled[t.key];
-    const units = Math.max(0, Math.round(Number(quantities[t.key]) || 0));
-    const liters = Math.max(0, Number(t.liters) || 1);
-    const cost = units * Math.max(0, Number(prices[t.key]) || 0);
-    return { ...t, on, units, liters, cartLiters: on ? units * liters : 0, cost: on ? cost : 0 };
+  const lines = drinks.map((drink) => {
+    const packKind = PACK_KIND[drink.packKind] ? drink.packKind : "bottle";
+    //  “נספר ביעד” הוא דגל מפורש של המשתמש ולא נגזרת של סוג האריזה —
+    //  גם מגש אקסל יכול להיכנס ליעד אם כך החליטו.
+    const packUnits = hasPackUnits(packKind) ? Math.max(1, Math.round(toNum(drink.packUnits, 1))) : 1;
+    const unitLiters = Math.max(0, toNum(drink.unitLiters));
+    const units = Math.max(0, Math.round(toNum(drink.units)));
+    const price = Math.max(0, toNum(drink.price));
+    const countsInLiters = drink.countsInLiters === true;
+    return { ...drink, packKind, packUnits, unitLiters, volumeLiters: unitLiters, units, price, countsInLiters, cost: units * price };
   });
 
   const totalCost = lines.reduce((s, l) => s + l.cost, 0);
-  const cartLiters = lines.reduce((sum, line) => sum + line.cartLiters, 0);
-  const activeCount = lines.filter((l) => l.on).length;
+  const { alcoholicLiters: cartLiters, mixerUnits: unitsOutsideLiters } = summarizeDrinkPurchase(lines);
+  const targetMet = targetLiters > 0 && cartLiters >= targetLiters;
+  const targetProgress = targetLiters > 0 ? Math.min(100, (cartLiters / targetLiters) * 100) : 0;
+  //  הצעה שכבר ברשימה היא רעש — מציגים רק את מה שאפשר להוסיף.
+  const taken = new Set(drinks.map((drink) => drink.label.trim().toLowerCase()));
+  const quickAdd = DRINK_SUGGESTIONS.filter((s) => !taken.has(s.label.toLowerCase()));
 
-  function addDrinkType(e) {
-    e.preventDefault();
-    const label = newDrink.label.trim();
-    if (!label) {
-      notify("מלאו שם משקה", { tone: "error" });
-      return;
-    }
-    const key = `custom-${crypto.randomUUID()}`;
-    const type = {
-      key,
-      label,
-      unitOne: "בקבוק",
-      unitMany: "בקבוקים",
-      sizeLabel: "בקבוק ליטר",
-      liters: 1,
-      price: Math.max(0, Number(newDrink.price) || 0),
-    };
-    setDrinkTypes((types) => [...types, type]);
-    setEnabled((values) => ({ ...values, [key]: true }));
-    setPrices((values) => ({ ...values, [key]: type.price }));
-    setQuantities((values) => ({ ...values, [key]: 0 }));
-    setNewDrink({ label: "", price: "0" });
-    notify(`“${label}” נוסף לרשימת הקנייה`, { tone: "success" });
+  function patchDrink(id, patch) {
+    setDrinks((previous) => previous.map((drink) => (drink.id === id ? { ...drink, ...patch } : drink)));
   }
 
-  async function removeDrinkType(key) {
-    const type = drinkTypes.find((drink) => drink.key === key);
-    if (!type) return;
-    const ok = await confirmDialog({
-      title: `למחוק את “${type.label}”?`,
-      message: "המשקה יוסר מרשימת הקנייה.",
-      confirmLabel: "מחיקה",
-      tone: "danger",
+  //  החלפת סוג אריזה נוגעת רק בשדה שלה. ההחלטה אם השורה נספרת ביעד
+  //  היא של המשתמש ולא של סוג האריזה, ולכן היא שורדת את ההחלפה.
+  function changePackKind(line, packKind) {
+    patchDrink(line.id, {
+      packKind,
+      packUnits: hasPackUnits(packKind) ? Math.max(1, line.packUnits) : 1,
     });
-    if (!ok) return;
-    setDrinkTypes((types) => types.filter((drink) => drink.key !== key));
-    setEnabled((values) => {
-      const next = { ...values };
-      delete next[key];
-      return next;
-    });
-    setPrices((values) => {
-      const next = { ...values };
-      delete next[key];
-      return next;
-    });
-    setQuantities((values) => {
-      const next = { ...values };
-      delete next[key];
-      return next;
-    });
-    notify(`“${type.label}” נמחק מרשימת הקנייה`, { tone: "success" });
+  }
+
+  function removeDrink(id) {
+    setDrinks((previous) => previous.filter((drink) => drink.id !== id));
+  }
+
+  //  נקודת הכניסה היחידה לרשימה — גם הטופס וגם ההצעות המהירות עוברות בה.
+  function createDrink({ label, packKind, packUnits, unitLiters, countsInLiters }) {
+    const name = String(label || "").trim();
+    if (!name) return false;
+    if (drinks.some((drink) => drink.label.trim().toLowerCase() === name.toLowerCase())) {
+      notify("משקה בשם הזה כבר נמצא ברשימה", { tone: "error" });
+      return false;
+    }
+    const kind = PACK_KIND[packKind] ? packKind : "bottle";
+    const liters = hasLiters(kind) ? Math.max(0, toNum(unitLiters)) : 0;
+    setDrinks((previous) => [
+      ...previous,
+      {
+        id: drinkId.current++,
+        label: name,
+        packKind: kind,
+        packUnits: hasPackUnits(kind) ? Math.max(1, Math.round(toNum(packUnits, 1))) : 1,
+        unitLiters: liters,
+        price: 0,
+        units: 1,
+        countsInLiters: countsInLiters ?? liters > 0,
+      },
+    ]);
+    return true;
+  }
+
+  function submitNewDrink(e) {
+    e.preventDefault();
+    if (createDrink(newDrink)) {
+      setNewDrink({ label: "", packKind: "bottle", packUnits: "24", unitLiters: "1" });
+    }
   }
 
   function pushToBudget() {
@@ -3626,305 +4170,501 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
 
   const field =
     "min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200";
-  //  וריאציה צרה לשדות שיושבים בתוך משפט. אי אפשר להוסיף עליה w-20
-  //  ל-field, כי שתי מחלקות רוחב מתנגשות ו-w-full גובר בגיליון.
-  const fieldNarrow =
-    "min-h-11 w-20 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200";
   const fieldLabel = "mb-1 block text-xs font-medium text-slate-500";
+  //  שדה עם סימן יחידה צמוד (% או ₪). הסימן בתוך המסגרת ולא לידה, כדי
+  //  שלא יישאר ספק מה המספר אומר.
+  const suffixBox =
+    "flex min-h-11 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 transition";
+  const suffixInput =
+    "num-plain w-full min-w-0 bg-transparent py-2 text-center text-sm font-semibold tabular-nums text-slate-700 outline-none";
+  const pill =
+    "inline-flex min-h-9 items-center gap-1.5 rounded-full px-3 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:opacity-50";
 
   return (
     <div className="space-y-4">
+      {/* ===================== שלב א׳ — כמה צריך ===================== */}
       <Card>
         <SectionTitle
           icon={Wine}
           title="כמה אלכוהול צריך להזמין"
-          subtitle="עונים על שתי שאלות פשוטות, והמערכת מתרגמת אותן למספר בקבוקים ולעלות משוערת"
+          subtitle="שתי שאלות, ומכאן הכמויות והעלות מחושבות לבד"
         />
 
-        {/* שאלה 1 — כמה אנשים שותים */}
-        <div className="rounded-2xl border border-slate-200/80 bg-white/60 p-3.5">
-          <p className="mb-1 text-sm font-semibold text-slate-700">
-            1. כמה מהאורחים שותים אלכוהול?
-          </p>
-          <div className="grid grid-cols-2 rounded-xl bg-slate-100 p-1">
-            <button type="button" onClick={() => setSource("marked")} className={`min-h-11 rounded-lg px-3 text-xs font-semibold transition ${source === "marked" ? "bg-white text-gold-700 shadow-sm" : "text-slate-500"}`}>
-              מרשימת המוזמנים
-              <span className="block text-[10px] font-normal">אוטומטי: {peopleLabel(drinkers)}</span>
-            </button>
-            <button type="button" onClick={() => setSource("percent")} className={`min-h-11 rounded-lg px-3 text-xs font-semibold transition ${source === "percent" ? "bg-white text-gold-700 shadow-sm" : "text-slate-500"}`}>
-              הערכה ידנית
-              <span className="block text-[10px] font-normal">לפי אחוז</span>
-            </button>
-          </div>
-          {source === "percent" && (
-            <label className="mt-3 flex items-center gap-2 text-sm text-slate-600">
-              אחוז שותים
-              <span className="relative"><input type="number" min="0" max="100" value={percent} onChange={(e) => setPercent(e.target.value)} className={`${fieldNarrow} pe-7`} aria-label="אחוז האורחים ששותים אלכוהול" /><span className="pointer-events-none absolute end-2 top-2.5 font-semibold text-gold-600">%</span></span>
-              <span className="text-xs text-slate-400">{peopleLabel(estimated)}</span>
-            </label>
-          )}
-        </div>
+        {/*  היעד הוא מספר אחד ולכן מקבל עמודה צרה; שתי השאלות, שיש בהן
+            פקדים, מקבלות את הרוחב שנשאר.  */}
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,.58fr)]">
+          {/* שאלה 1 — מי שותה */}
+          <div data-tour="alcohol-drinker-estimate" className="rounded-2xl border border-slate-200/80 bg-white/70 p-3.5">
+            <p className="flex items-center gap-2 text-sm font-bold text-slate-800">
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-gold-100 text-xs font-bold text-gold-700">1</span>
+              כמה מהאורחים שותים?
+            </p>
 
-        {/* שאלה 2 — עוצמת השתייה, בשפה של בקבוקים */}
-        <div className="mt-3 rounded-2xl border border-slate-200/80 bg-white/60 p-3.5">
-          <p className="mb-1 text-sm font-semibold text-slate-700">
-            2. כמה שותים אצלכם?
-          </p>
-          <p className="mb-2.5 text-xs text-slate-500">
-            בוחרים את התיאור הקרוב ביותר. לכל אחד מהם יש חישוב פשוט: לכמה
-            אנשים מספיק בקבוק אחד.
-          </p>
-          <div className="grid grid-cols-3 gap-1.5">
-            {DRINK_LEVELS.map((p) => (
-              <button
-                key={p.key}
-                onClick={() => setPeoplePerBottle(p.perBottle)}
-                title={p.hint}
-                aria-label={`${p.label} — בקבוק לכל ${p.perBottle} אנשים. ${p.hint}`}
-                className={`min-h-11 rounded-xl px-2 py-2 text-sm font-semibold transition ${
-                  Number(peoplePerBottle) === p.perBottle
-                    ? "bg-gradient-to-br from-gold-500 to-gold-600 text-white shadow-md shadow-gold-500/25"
-                    : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
-                }`}
-              >
-                {p.label}
-                <span className="block text-[11px] font-normal opacity-80">
-                  בקבוק לכל {p.perBottle}
-                </span>
-              </button>
-            ))}
-          </div>
-          <label className="mt-3 flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium text-slate-500">
-              או בעצמכם: בקבוק אחד לכל
-            </span>
-            <input
-              type="number"
-              min="1"
-              value={peoplePerBottle}
-              onChange={(e) => setPeoplePerBottle(e.target.value)}
-              className={fieldNarrow}
-              aria-label="כמה אנשים לבקבוק אחד"
-            />
-            <span className="text-xs text-slate-500">אנשים</span>
-          </label>
-          <p className="mt-2 text-xs text-slate-400">
-            ההמלצות כבר כוללות עודף קטן, כדי שהאלכוהול לא ייגמר באמצע הערב.
-          </p>
-        </div>
-
-        <div className="mt-4 rounded-2xl bg-gradient-to-l from-gold-500 to-sage-500 p-5 text-white shadow-lg shadow-gold-500/20">
-          <p className="text-xs font-semibold opacity-85">יעד מומלץ</p>
-          <p className="mt-1 text-3xl font-extrabold tabular-nums">{targetLiters.toFixed(1)} ליטר</p>
-          <p className="mt-1 text-xs opacity-90">לפי {peopleLabel(drinkerCount)} ובקבוק לכל {perBottle} אנשים</p>
-        </div>
-      </Card>
-
-      <Card>
-        <SectionTitle
-          icon={ShoppingCart}
-          title="רשימת הקנייה"
-          subtitle="מכבים כל סוג שאתם לא קונים — למשל אם האולם מביא בירה ויין על חשבונו"        />
-
-        {canEdit && (
-          <details className="mb-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-            <summary className="cursor-pointer text-sm font-semibold text-slate-700">הוספת סוג משקה</summary>
-            <form onSubmit={addDrinkType} className="mt-3 flex flex-wrap gap-2">
-              <input value={newDrink.label} onChange={(e) => setNewDrink((v) => ({ ...v, label: e.target.value }))} placeholder="שם המשקה" aria-label="שם סוג המשקה" className="min-h-11 min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-200" />
-              <input type="number" min="0" value={newDrink.price} onChange={(e) => setNewDrink((v) => ({ ...v, price: e.target.value }))} placeholder="מחיר לבקבוק" aria-label="מחיר ליחידת משקה" className="min-h-11 w-32 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-200" />
-              <button type="submit" className="flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-sage-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sage-600"><Plus size={16} /> הוספה לרשימה</button>
-            </form>
-          </details>
-        )}
-
-        {/*  במסך רחב טבלה אמיתית: השורה נקראת משמאל לימין כמו רשימת קנייה —
-            מה קונים, כמה מזמינים, כמה זה עולה. בנייד אותה שורה נפרסת
-            לכרטיס, כי טבלה של שש עמודות לא נכנסת ל-390 פיקסלים.  */}
-        <div className="hidden overflow-x-auto lg:block">
-          <table className="w-full min-w-[720px] text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
-                <th className="px-2 py-2.5 text-right">קונים?</th>
-                <th className="px-2 py-2.5 text-right">סוג השתייה</th>
-                <th className="px-2 py-2.5 text-center">כמה להזמין</th>
-                <th className="px-2 py-2.5 text-center">מחיר ליחידה</th>
-                <th className="px-2 py-2.5 text-center">סה״כ</th>
-                <th className="px-2 py-2.5 text-center"><span className="sr-only">מחיקה</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((l) => (
-                <tr
-                  key={l.key}
-                  className={`border-b border-slate-100 last:border-0 ${
-                    l.on ? "" : "bg-slate-50/60"
+            {/*  שתי דרכים, ולא רשימת רדיו: הבחירה היא בין שני מצבים שלמים,
+                ולכן כל מצב מקבל לשונית משלו ומתחתיה רק הפקדים שלו.  */}
+            <div className="mt-3 grid grid-cols-2 gap-1.5 rounded-2xl bg-slate-100/80 p-1">
+              {[
+                { key: "percent", label: "הערכה באחוזים", hint: `${percentValue}% מהאורחים` },
+                { key: "marked", label: "לפי רשימת המוזמנים", hint: drinkers > 0 ? `${drinkers} סומנו כשותים` : "אף אחד לא סומן" },
+              ].map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => setSource(option.key)}
+                  aria-pressed={source === option.key}
+                  className={`min-h-12 rounded-xl px-2 py-1.5 text-center transition ${
+                    source === option.key
+                      ? "bg-white text-slate-800 shadow-sm ring-1 ring-slate-200"
+                      : "text-slate-500 hover:bg-white/60"
                   }`}
                 >
-                  <td className="px-2 py-3">
-                    <input
-                      type="checkbox"
-                      checked={l.on}
-                      onChange={(e) =>
-                        setEnabled((p) => ({ ...p, [l.key]: e.target.checked }))
-                      }
-                      className="h-5 w-5 cursor-pointer accent-gold-500"
-                      aria-label={`קונים ${l.label}`}
-                    />
-                  </td>
-                  <td className="px-2 py-3">
-                    <p
-                      className={`font-semibold ${
-                        l.on ? "text-slate-700" : "text-slate-400"
-                      }`}
-                    >
-                      {l.label}
-                    </p>
-                    {/*  אריזת הקנייה מוצגת כטקסט בלבד. במפורש אין כאן
-                        שדה “כמה שוטים בבקבוק” — זוג שמתכנן חתונה לא יודע
-                        את המספר הזה ולא צריך לדעת אותו.  */}
-                    <p className="mt-0.5 text-xs text-slate-500">{l.sizeLabel}</p>
-                  </td>
-                  <td className="px-2 py-3 text-center">
-                    <div className="inline-flex items-center rounded-lg ring-1 ring-slate-200">
-                      <button type="button" disabled={!l.on || l.units === 0} onClick={() => setQuantities((p) => ({ ...p, [l.key]: Math.max(0, l.units - 1) }))} className="grid h-9 w-9 place-items-center text-slate-500 hover:bg-slate-100 disabled:opacity-30" aria-label={`הפחתת ${l.label}`}><Minus size={14} /></button>
-                      <input type="number" min="0" value={l.units} onChange={(e) => setQuantities((p) => ({ ...p, [l.key]: e.target.value }))} disabled={!l.on} className="h-9 w-12 border-x border-slate-200 bg-white text-center tabular-nums outline-none disabled:bg-slate-100" aria-label={`כמות ${l.label}`} />
-                      <button type="button" disabled={!l.on} onClick={() => setQuantities((p) => ({ ...p, [l.key]: l.units + 1 }))} className="grid h-9 w-9 place-items-center text-slate-500 hover:bg-slate-100 disabled:opacity-30" aria-label={`הוספת ${l.label}`}><Plus size={14} /></button>
-                    </div>
-                  </td>
-                  <td className="px-2 py-3 text-center">
+                  <span className="block text-sm font-semibold leading-tight">{option.label}</span>
+                  <span className="mt-0.5 block text-[11px] font-normal leading-tight opacity-75">{option.hint}</span>
+                </button>
+              ))}
+            </div>
+
+            {source === "percent" ? (
+              <div className="mt-3 rounded-2xl bg-gold-50/80 p-3 ring-1 ring-gold-200/80">
+                <div className="flex items-center gap-3">
+                  {/*  סימן ה-% יושב בתוך השדה ולא לידו, כדי שלא יהיה אפשר
+                      לקרוא את “80” כמספר אנשים. מתחתיו מחוון, שמחזק את זה.  */}
+                  <div className="flex h-14 w-28 shrink-0 items-center gap-1 rounded-xl border border-gold-200 bg-white px-3 transition focus-within:border-gold-400 focus-within:ring-2 focus-within:ring-gold-200">
                     <input
                       type="number"
                       min="0"
-                      value={prices[l.key]}
-                      onChange={(e) =>
-                        setPrices((p) => ({ ...p, [l.key]: e.target.value }))
-                      }
-                      disabled={!l.on}
-                      className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center tabular-nums outline-none focus:border-gold-400 disabled:bg-slate-100 disabled:text-slate-400"
-                      aria-label={`מחיר ל${l.unitOne} של ${l.label}`}
+                      max="100"
+                      value={percent}
+                      onChange={(e) => setPercent(e.target.value)}
+                      onFocus={() => setSource("percent")}
+                      aria-label="אחוז האורחים ששותים אלכוהול"
+                      className="w-full min-w-0 bg-transparent text-2xl font-bold tabular-nums text-slate-800 outline-none"
                     />
-                  </td>
-                  <td className="px-2 py-3 text-center font-semibold tabular-nums text-slate-700">
-                    {l.on ? fmt(l.cost) : "—"}
-                  </td>
-                  <td className="px-2 py-3 text-center">
-                    {canEdit && (
-                      <button type="button" onClick={() => removeDrinkType(l.key)} aria-label={`מחיקת ${l.label}`} title={`מחיקת ${l.label}`} className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500">
-                        <Trash2 size={16} />
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 border-slate-200">
-                <td colSpan={5} className="px-2 py-3 text-left font-semibold text-slate-600">
-                  סה״כ להזמנה
-                </td>
-                <td className="px-2 py-3 text-center text-lg font-bold tabular-nums text-slate-800">
-                  {fmt(totalCost)}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+                    <span className="shrink-0 text-lg font-bold text-gold-600">%</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-slate-500">מהאורחים שותים אלכוהול</p>
+                    <p className="mt-0.5 truncate text-base font-bold text-slate-800">
+                      {base > 0 ? `≈ ${peopleLabel(estimated)}` : "ממתין לנתוני הגעה"}
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      {base > 0 ? `מתוך ${base} צפויים להגיע` : "אין עדיין אישורי הגעה ברשימה"}
+                    </p>
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value={percentValue}
+                  onChange={(e) => setPercent(e.target.value)}
+                  onFocus={() => setSource("percent")}
+                  aria-label="מחוון אחוז השותים"
+                  className="mt-3 w-full cursor-pointer accent-gold-600"
+                />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  80% הוא המספר שרוב הזוגות מתחילים ממנו. קהל מבוגר או דתי — פחות, קהל צעיר — יותר.
+                </p>
+              </div>
+            ) : (
+              <div className="mt-3 rounded-2xl bg-sage-50/80 p-3 ring-1 ring-sage-200/80">
+                <p className="text-2xl font-bold tabular-nums text-slate-800">
+                  {drinkers}
+                  <span className="ms-1 text-sm font-semibold text-slate-600">אנשים</span>
+                </p>
+                <p className="mt-0.5 text-xs text-slate-600">
+                  {drinkers > 0
+                    ? "סכום העמודה „שותים” בכל הרשומות שלא סירבו להגיע"
+                    : "עדיין לא סומן אף אחד כשותה"}
+                </p>
+                <p className="mt-2 text-[11px] text-slate-500">
+                  הסימון נעשה במסך המוזמנים — מסמנים שורות ולוחצים „סמן כשותים”.
+                </p>
+              </div>
+            )}
+          </div>
 
-        {/* כרטיסים בנייד */}
-        <div className="space-y-3 lg:hidden">
-          {lines.map((l) => (
-            <div
-              key={l.key}
-              className={`rounded-2xl border p-3.5 transition ${
-                l.on
-                  ? "border-slate-200/80 bg-white/60"
-                  : "border-slate-200/60 bg-slate-50/60"
+          {/* שאלה 2 — עוצמת השתייה, בשפה של בקבוקים */}
+          <div data-tour="alcohol-intensity" className="rounded-2xl border border-slate-200/80 bg-white/70 p-3.5 sm:p-4">
+            <p className="flex items-center gap-2 text-sm font-bold text-slate-800">
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-gold-100 text-xs font-bold text-gold-700">2</span>
+              כמה שותים אצלכם?
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              לכמה אנשים מספיק בקבוק אחד. בוחרים את התיאור הקרוב ביותר.
+            </p>
+            <div className="mt-3 grid grid-cols-3 gap-1.5">
+              {DRINK_LEVELS.map((p) => (
+                <button
+                  key={p.key}
+                  onClick={() => setPeoplePerBottle(p.perBottle)}
+                  title={p.hint}
+                  aria-pressed={Number(peoplePerBottle) === p.perBottle}
+                  aria-label={`${p.label} — בקבוק לכל ${p.perBottle} אנשים. ${p.hint}`}
+                  className={`min-h-16 rounded-xl px-2 py-2 transition ${
+                    Number(peoplePerBottle) === p.perBottle
+                      ? "bg-gold-500 text-slate-950 shadow-md shadow-gold-500/30"
+                      : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+                  }`}
+                >
+                  <span className="block text-sm font-bold leading-tight">{p.label}</span>
+                  <span className="mt-1 block text-[11px] font-medium leading-tight opacity-80">
+                    בקבוק לכל {p.perBottle}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <label className="mt-3 flex flex-wrap items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
+              <span className="text-xs font-medium text-slate-500">או בעצמכם: בקבוק אחד לכל</span>
+              <input
+                type="number"
+                min="1"
+                value={peoplePerBottle}
+                onChange={(e) => setPeoplePerBottle(e.target.value)}
+                className="min-h-10 w-16 rounded-lg border border-slate-200 bg-white px-2 py-1 text-center text-sm font-semibold tabular-nums text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200"
+                aria-label="כמה אנשים לבקבוק אחד"
+              />
+              <span className="text-xs text-slate-500">אנשים</span>
+            </label>
+            <p className="mt-2 text-[11px] text-slate-400">
+              ההמלצות כבר כוללות עודף קטן, כדי שהאלכוהול לא ייגמר באמצע הערב.
+            </p>
+          </div>
+
+          {/*  היעד יושב כעמודה שלישית ולא כפס רוחב מלא: אותו מידע, בלי
+              עוד 120 פיקסלים של גלילה.  */}
+          <div
+            data-tour="alcohol-result"
+            className="flex items-center gap-3 rounded-2xl bg-gradient-to-l from-gold-500 to-sage-500 p-3.5 text-white shadow-lg shadow-gold-500/20 lg:flex-col lg:items-stretch lg:justify-center"
+          >
+            <div className="min-w-0 flex-1 lg:flex-none">
+              <p className="text-xs font-medium text-white/80">היעד שלכם</p>
+              <p className="text-3xl font-bold leading-tight">
+                {litersLabel(targetLiters)} <span className="text-lg">ליטר</span>
+              </p>
+            </div>
+            <p className="shrink-0 text-xs leading-5 text-white/85 lg:mt-1 lg:shrink">
+              {peopleLabel(drinkerCount)} ששותים, בקבוק ליטר לכל {perBottle}.
+            </p>
+          </div>
+        </div>
+      </Card>
+
+      <Card tourId="alcohol-shopping-list">
+        <SectionTitle
+          icon={ShoppingCart}
+          title="רשימת הקנייה"
+          subtitle="מוסיפים את מה שקונים, קובעים כמות ומחיר — והסכום מתעדכן"
+        />
+
+        {/*  מד אחד שמחבר את היעד לרשימה. זה כל מה שצריך כדי לדעת אם
+            קנינו מספיק — בלי אחוזים ובלי מספרים פנימיים.  */}
+        <div data-tour="alcohol-totals" className="mb-3 rounded-2xl border border-slate-200/80 bg-white/70 p-3.5">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <p className="text-sm font-bold text-slate-800">
+              <span className="text-xl tabular-nums">{litersLabel(cartLiters)}</span>
+              <span className="text-slate-500"> מתוך {litersLabel(targetLiters)} ליטר</span>
+            </p>
+            <span
+              className={`rounded-full px-2.5 py-1 text-xs font-bold ${
+                targetMet ? "bg-sage-100 text-sage-600" : "bg-amber-100 text-amber-700"
               }`}
             >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <label className="flex min-h-11 cursor-pointer items-center gap-2.5">
-                  <input
-                    type="checkbox"
-                    checked={l.on}
-                    onChange={(e) =>
-                      setEnabled((p) => ({ ...p, [l.key]: e.target.checked }))
-                    }
-                    className="h-5 w-5 cursor-pointer accent-gold-500"
-                    aria-label={`קונים ${l.label}`}
-                  />
-                  <span
-                    className={`text-base font-semibold ${
-                      l.on ? "text-slate-700" : "text-slate-400"
-                    }`}
-                  >
-                    {l.label}
-                  </span>
-                  {l.key.startsWith("custom-") && canEdit && (
-                    <button type="button" onClick={() => removeDrinkType(l.key)} aria-label={`מחיקת ${l.label}`} title={`מחיקת ${l.label}`} className="grid h-9 w-9 place-items-center rounded-lg text-rose-500 hover:bg-rose-50">
-                      <Trash2 size={15} />
-                    </button>
-                  )}
-                </label>
-                {l.on ? (
-                  <div className="text-left">
-                    <p className="text-2xl font-bold tabular-nums text-slate-800">
-                      {fmt(l.cost)}
-                    </p>
-                    <p className="text-xs text-slate-500">{l.cartLiters.toFixed(1)} ליטר</p>
-                  </div>
-                ) : (
-                  <span className="text-xs font-medium text-slate-400">לא קונים</span>
-                )}
-              </div>
+              {targetLiters <= 0 ? "אין עדיין יעד" : targetMet ? "היעד הושג" : `חסרים ${litersLabel(targetLiters - cartLiters)} ליטר`}
+            </span>
+          </div>
+          <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+            <div
+              style={{ width: `${targetProgress}%` }}
+              className={`h-full rounded-full transition-[width] duration-300 ${targetMet ? "bg-sage-500" : "bg-gold-500"}`}
+            />
+          </div>
+          {unitsOutsideLiters > 0 && (
+            <p className="mt-2 text-[11px] text-slate-500">
+              בנוסף {unitsOutsideLiters === 1 ? "יחידה אחת" : `${unitsOutsideLiters} יחידות`} שסימנתם „לא מחושב באלכוהול” — נספרות בעלות בלבד.
+            </p>
+          )}
+        </div>
 
-              {l.on && (
-                <div className="mt-3 space-y-2">
-                  <p className="text-xs text-slate-500">{l.sizeLabel}</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block">
-                      <span className={fieldLabel}>כמות</span>
-                      <div className="flex overflow-hidden rounded-xl border border-slate-200 bg-white">
-                        <button type="button" title={`הפחתת ${l.label}`} aria-label={`הפחתת ${l.label}`} onClick={() => setQuantities((p) => ({ ...p, [l.key]: Math.max(0, l.units - 1) }))} className="grid h-11 w-11 place-items-center border-l border-slate-200 text-slate-500"><Minus size={16} /></button>
-                        <input type="number" min="0" value={l.units} onChange={(e) => setQuantities((p) => ({ ...p, [l.key]: e.target.value }))} className="min-w-0 flex-1 text-center tabular-nums outline-none" aria-label={`כמות ${l.label}`} />
-                        <button type="button" title={`הוספת ${l.label}`} aria-label={`הוספת ${l.label}`} onClick={() => setQuantities((p) => ({ ...p, [l.key]: l.units + 1 }))} className="grid h-11 w-11 place-items-center border-r border-slate-200 text-slate-500"><Plus size={16} /></button>
-                      </div>
-                    </label>
-                    <label className="block">
-                      <span className={fieldLabel}>מחיר ל{l.unitOne} (₪)</span>
+        {quickAdd.length > 0 && (
+          //  הצעות, לא ברירת מחדל: הרשימה נשארת ריקה עד שלוחצים.
+          <div className="mb-3 flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-medium text-slate-500">הוספה מהירה:</span>
+            {quickAdd.map((suggestion) => (
+              <button
+                key={suggestion.label}
+                type="button"
+                onClick={() => createDrink(suggestion)}
+                disabled={!canEdit}
+                className={`${pill} bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-gold-50 hover:text-gold-700 hover:ring-gold-200`}
+              >
+                <Plus size={12} /> {suggestion.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {drinks.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 px-4 py-8 text-center">
+            <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white text-gold-600 shadow-sm">
+              <ShoppingCart size={22} />
+            </div>
+            <p className="mt-3 text-sm font-bold text-slate-800">הרשימה עדיין ריקה</p>
+            <p className="mx-auto mt-1 max-w-sm text-xs leading-5 text-slate-500">
+              הוסיפו רק את המשקאות שאתם באמת מתכננים לקנות. לכל אחד תקבעו כמות ומחיר,
+              והמד למעלה יראה כמה אתם רחוקים מהיעד.
+            </p>
+          </div>
+        ) : (
+          /*  כל מה שיש לדעת על שורה נמצא בשורה עצמה — אין חץ ואין מגירה.
+              בדסקטופ זו שורה אחת; בנייד היא נשברת לשלוש קבוצות הגיוניות:
+              שם, מה קונים, וכמה. סימני היחידה בתוך השדות משמשים כתוויות.  */
+          <ul className="space-y-2">
+            {lines.map((l) => {
+              const kind = PACK_KIND[l.packKind] || PACK_KIND.unit;
+              return (
+                <li
+                  key={l.id}
+                  className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/80 p-2.5 shadow-sm lg:flex-row lg:items-center"
+                >
+                  {/*  השם הוא שדה ולא טקסט — גבול עדין הוא הרמז היחיד שצריך
+                      כדי שיהיה ברור שאפשר פשוט להקליד ולתקן.  */}
+                  <input
+                    value={l.label}
+                    onChange={(e) => patchDrink(l.id, { label: e.target.value })}
+                    disabled={!canEdit}
+                    maxLength={40}
+                    aria-label={`שם המשקה ${l.label}`}
+                    className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200/80 bg-white/60 px-2.5 text-sm font-bold text-slate-800 outline-none transition hover:border-slate-300 focus:border-gold-400 focus:bg-white focus:ring-2 focus:ring-gold-200 lg:flex-1"
+                  />
+
+                  {/* מה קונים */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <select
+                      value={l.packKind}
+                      onChange={(e) => changePackKind(l, e.target.value)}
+                      disabled={!canEdit}
+                      aria-label={`סוג האריזה של ${l.label}`}
+                      className="min-h-11 w-20 shrink-0 rounded-xl border border-slate-200 bg-white px-2 text-sm text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200"
+                    >
+                      {PACK_KINDS.map((p) => (
+                        <option key={p.key} value={p.key}>{p.one}</option>
+                      ))}
+                    </select>
+
+                    {hasPackUnits(l.packKind) && (
+                      <span className={`${suffixBox} w-18 shrink-0 px-2 focus-within:border-gold-400 focus-within:ring-2 focus-within:ring-gold-200`}>
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={l.packUnits}
+                          onChange={(e) => patchDrink(l.id, { packUnits: e.target.value })}
+                          disabled={!canEdit}
+                          aria-label={`יחידות ב${kind.one} של ${l.label}`}
+                          className={suffixInput}
+                        />
+                        <span className="shrink-0 text-xs font-bold text-slate-400">יח׳</span>
+                      </span>
+                    )}
+
+                    {/*  הנפח מופיע בדיוק כשהוא משנה משהו — כלומר כששורה
+                        סומנה כנספרת ביעד. מגש אקסל שסומן ביעד יקבל אותו גם הוא.  */}
+                    {l.countsInLiters && (
+                      <span className={`${suffixBox} w-18 shrink-0 px-2 focus-within:border-gold-400 focus-within:ring-2 focus-within:ring-gold-200`}>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={l.unitLiters}
+                          onChange={(e) => patchDrink(l.id, { unitLiters: e.target.value })}
+                          disabled={!canEdit}
+                          aria-label={`ליטר ל${kind.one} של ${l.label}`}
+                          className={suffixInput}
+                        />
+                        <span className="shrink-0 text-xs font-bold text-slate-400">ל׳</span>
+                      </span>
+                    )}
+
+                    <span className={`${suffixBox} w-20 shrink-0 px-2 focus-within:border-gold-400 focus-within:ring-2 focus-within:ring-gold-200`}>
                       <input
                         type="number"
                         min="0"
-                        value={prices[l.key]}
-                        onChange={(e) =>
-                          setPrices((p) => ({ ...p, [l.key]: e.target.value }))
-                        }
-                        className={field}
+                        value={l.price}
+                        onChange={(e) => patchDrink(l.id, { price: e.target.value })}
+                        disabled={!canEdit}
+                        aria-label={`מחיר ל${kind.one} של ${l.label}`}
+                        className={suffixInput}
                       />
-                    </label>
+                      <span className="shrink-0 text-xs font-bold text-slate-400">₪</span>
+                    </span>
                   </div>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
 
-        <div className="mt-4 rounded-xl border border-sage-200 bg-sage-50 p-4">
-          <div className="flex items-end justify-between gap-3">
-            <div><p className="text-xs font-semibold text-sage-700">ליטרים בעגלה</p><p className="mt-1 text-2xl font-extrabold tabular-nums text-slate-800">{cartLiters.toFixed(1)} <span className="text-sm font-medium text-slate-500">מתוך {targetLiters.toFixed(1)} ליטר</span></p></div>
-            <p className="text-xs font-semibold text-sage-700">{cartLiters >= targetLiters ? "היעד הושג" : `חסרים ${(targetLiters - cartLiters).toFixed(1)} ליטר`}</p>
-          </div>
-          <div className="mt-3 h-2 overflow-hidden rounded-full bg-sage-100"><div className="h-full rounded-full bg-sage-500 transition-all" style={{ width: `${Math.min(100, targetLiters ? (cartLiters / targetLiters) * 100 : 0)}%` }} /></div>
-        </div>
+                  {/* כמה */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <div className="flex min-h-11 shrink-0 items-stretch overflow-hidden rounded-xl border border-slate-200 bg-white focus-within:border-gold-400 focus-within:ring-2 focus-within:ring-gold-200">
+                      <button
+                        type="button"
+                        onClick={() => patchDrink(l.id, { units: l.units - 1 })}
+                        disabled={!canEdit || l.units <= 0}
+                        aria-label={`הפחתת כמות ${l.label}`}
+                        className="grid w-9 shrink-0 place-items-center text-slate-500 transition hover:bg-slate-50 disabled:opacity-30"
+                      >
+                        <Minus size={15} />
+                      </button>
+                      <input
+                        type="number"
+                        min="0"
+                        value={l.units}
+                        onChange={(e) => patchDrink(l.id, { units: Math.max(0, Math.round(toNum(e.target.value))) })}
+                        disabled={!canEdit}
+                        aria-label={`כמות ${l.label}`}
+                        className="num-plain w-10 min-w-0 border-x border-slate-200 bg-transparent text-center text-base font-bold tabular-nums text-slate-800 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => patchDrink(l.id, { units: l.units + 1 })}
+                        disabled={!canEdit}
+                        aria-label={`הוספת כמות ${l.label}`}
+                        className="grid w-9 shrink-0 place-items-center text-slate-500 transition hover:bg-slate-50 disabled:opacity-30"
+                      >
+                        <Plus size={15} />
+                      </button>
+                    </div>
 
-        {activeCount === 0 && (
-          <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-200">
-            כל הסוגים כבויים — סמנו לפחות סוג אחד כדי לקבל רשימת קנייה.
-          </p>
+                    <span className="min-w-0 flex-1 text-end text-sm font-bold tabular-nums text-slate-800 lg:w-20 lg:flex-none">
+                      {fmt(l.cost)}
+                    </span>
+
+                    {/*  המתג והמחיקה נשארים יחד: בנייד, כשהתווית הארוכה לא
+                        נכנסת לשורה, עדיף ששניהם ירדו יחד מאשר שהפח יישאר לבד.  */}
+                    <div className="flex items-center gap-1.5">
+                      {/*  האם השורה מחושבת באלכוהול היא החלטה של המשתמש בכל
+                          סוג אריזה — גם מגש אקסל. מצב פעיל = מילוי זהב מלא,
+                          כבוי = אפור שקוף, כדי שההבדל ייקרא במבט אחד.  */}
+                      <button
+                        type="button"
+                        onClick={() => patchDrink(l.id, {
+                          countsInLiters: !l.countsInLiters,
+                          ...(!l.countsInLiters && l.unitLiters <= 0 ? { unitLiters: 1 } : {}),
+                        })}
+                        disabled={!canEdit}
+                        aria-pressed={l.countsInLiters}
+                        aria-label={`${l.label} ${l.countsInLiters ? "מחושב באלכוהול" : "לא מחושב באלכוהול"}`}
+                        title={l.countsInLiters ? "מחושב באלכוהול — לחצו כדי להוציא מהחישוב" : "לא מחושב באלכוהול — לחצו כדי לכלול בחישוב"}
+                        className={`inline-flex min-h-11 shrink-0 items-center gap-1 rounded-xl px-2 text-[11px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:opacity-50 ${
+                          l.countsInLiters
+                            ? "bg-gold-500 text-slate-950 shadow-sm shadow-gold-500/30 hover:bg-gold-600"
+                            : "bg-slate-100 text-slate-500 ring-1 ring-slate-200 hover:bg-slate-200"
+                        }`}
+                      >
+                        <Droplets size={13} className="shrink-0" />
+                        {l.countsInLiters ? "מחושב באלכוהול" : "לא מחושב באלכוהול"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => removeDrink(l.id)}
+                        disabled={!canEdit}
+                        aria-label={`מחיקת ${l.label} מהרשימה`}
+                        title={`מחיקת ${l.label}`}
+                        className="grid h-11 w-9 shrink-0 place-items-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         )}
 
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
-          <div>
-            <p className="text-xs font-medium text-slate-500">עלות משוערת לכל האלכוהול</p>
+        <form data-tour="alcohol-add-drink" onSubmit={submitNewDrink} className="mt-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50/70 p-3 sm:p-3.5">
+          <p className="mb-2.5 flex items-center gap-2 text-sm font-bold text-slate-800">
+            <Plus size={15} className="text-gold-600" /> הוספת משקה לרשימה
+          </p>
+
+          <div className="grid min-w-0 grid-cols-2 items-end gap-2.5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,.8fr)_minmax(0,.8fr)_auto]">
+            <label className="col-span-2 flex min-w-0 flex-col gap-1 lg:col-span-1">
+              <span className={fieldLabel}>שם המשקה</span>
+              <input
+                value={newDrink.label}
+                onChange={(event) => setNewDrink((p) => ({ ...p, label: event.target.value }))}
+                maxLength={40}
+                placeholder="למשל: ואן גוך"
+                className={`${field} min-w-0`}
+                aria-label="שם המשקה"
+                disabled={!canEdit}
+              />
+            </label>
+            <label className="flex min-w-0 flex-col gap-1">
+              <span className={fieldLabel}>סוג האריזה</span>
+              <select
+                value={newDrink.packKind}
+                onChange={(event) => setNewDrink((p) => ({ ...p, packKind: event.target.value }))}
+                className={`${field} min-w-0`}
+                aria-label="סוג האריזה"
+                disabled={!canEdit}
+              >
+                {PACK_KINDS.map((p) => (
+                  <option key={p.key} value={p.key}>{p.one}</option>
+                ))}
+              </select>
+            </label>
+
+            {/*  רק השדה שרלוונטי לאריזה שנבחרה. לבקבוק יש נפח, לארגז ולמגש
+                יש כמה יש בפנים, וליחידה בודדת אין אף אחד מהם.  */}
+            {hasLiters(newDrink.packKind) && (
+              <label className="flex min-w-0 flex-col gap-1">
+                <span className={fieldLabel}>ליטר לבקבוק</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={newDrink.unitLiters}
+                  onChange={(event) => setNewDrink((p) => ({ ...p, unitLiters: event.target.value }))}
+                  className={`${field} min-w-0 text-center tabular-nums`}
+                  aria-label="ליטר לבקבוק"
+                  disabled={!canEdit}
+                />
+              </label>
+            )}
+            {hasPackUnits(newDrink.packKind) && (
+              <label className="flex min-w-0 flex-col gap-1">
+                <span className={fieldLabel}>יחידות באריזה</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={newDrink.packUnits}
+                  onChange={(event) => setNewDrink((p) => ({ ...p, packUnits: event.target.value }))}
+                  className={`${field} min-w-0 text-center tabular-nums`}
+                  aria-label="יחידות באריזה"
+                  disabled={!canEdit}
+                />
+              </label>
+            )}
+
+            <button type="submit" disabled={!canEdit || !newDrink.label.trim()} className="btn-primary col-span-2 w-full lg:col-span-1 lg:w-auto">
+              <Plus size={16} /> הוספה
+            </button>
+          </div>
+
+          <p className="mt-2.5 text-[11px] leading-5 text-slate-500">
+            בקבוק נפתח עם שדה נפח — למשל בקבוק ואן גוך של 1 ליטר. ארגז או מגש נפתחים עם
+            „יחידות באריזה”: כמה פריטים יש באריזה שאתם קונים (מגש אקסל של 24 → 24).
+            המחיר והכמות נקבעים בשורה עצמה, ושם גם קובעים בכפתור „מחושב באלכוהול”
+            אילו שורות נכנסות ליעד הליטרים — זו החלטה שלכם בכל סוג אריזה.
+          </p>
+        </form>
+
+        {/*  הסיכום יושב בתחתית אותו כרטיס ולא בכרטיס נפרד: הוא התוצאה של
+            הרשימה שמעליו, ולא נושא בפני עצמו.  */}
+        <div data-tour="alcohol-budget-transfer" className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-slate-500">עלות משוערת לכל הרשימה</p>
             <p className="text-2xl font-bold tabular-nums text-slate-800">
               {fmt(totalCost)}
             </p>
@@ -3933,23 +4673,17 @@ function AlcoholCalculator({ drinkers, expectedSeats, setBudget }) {
             <button
               onClick={pushToBudget}
               disabled={totalCost <= 0}
-              className="flex min-h-11 items-center gap-2 rounded-xl bg-gradient-to-br from-gold-500 to-gold-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-gold-500/25 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
+              className="btn-primary disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Wallet size={16} /> העבר לסעיף תקציב
             </button>
           )}
         </div>
 
-        <div className="mt-2 space-y-1 text-xs text-slate-400">
-          <p>
-            הכמות בעגלה היא הכמות שאתם מתכננים לקנות בפועל. המחיר והליטרים
-            מתעדכנים מיד לפי הכמות שבחרתם.
-          </p>
-          <p>
-            העברה לתקציב יוצרת (או מעדכנת) סעיף בשם „{ALCOHOL_BUDGET_CATEGORY}” בשדה
-            „הוצאה צפויה” בלבד — מה שכבר שילמתם בפועל לא נדרס.
-          </p>
-        </div>
+        <p className="mt-2 text-[11px] leading-5 text-slate-400">
+          העברה לתקציב יוצרת (או מעדכנת) סעיף בשם „{ALCOHOL_BUDGET_CATEGORY}” בשדה
+          „תקציב מתוכנן” בלבד — מה שכבר שילמתם בפועל לא נדרס.
+        </p>
       </Card>
     </div>
   );
@@ -3963,6 +4697,8 @@ function Seating({ guests, tables, setTables }) {
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState("all");
   const [pickerTableId, setPickerTableId] = useState(null);
+  const pickerDialogRef = useRef(null);
+  const pickerSearchRef = useRef(null);
 
   const guestById = useMemo(
     () => Object.fromEntries(guests.map((g) => [g.id, g])),
@@ -4038,23 +4774,7 @@ function Seating({ guests, tables, setTables }) {
       confirmLabel: "מחק שולחן",
       tone: "danger",
     }).then((ok) => {
-      if (!ok) return;
-      const idx = tables.findIndex((x) => x.id === tableId);
-      setTables((prev) => prev.filter((x) => x.id !== tableId));
-      notify(`השולחן “${t?.name || ""}” נמחק`, {
-        tone: "success",
-        duration: 8000,
-        action: {
-          label: "בטל מחיקה",
-          onClick: () =>
-            setTables((prev) => {
-              if (prev.some((x) => x.id === tableId)) return prev;
-              const arr = [...prev];
-              arr.splice(Math.min(idx, arr.length), 0, t);
-              return arr;
-            }),
-        },
-      });
+      if (ok) setTables((prev) => prev.filter((t) => t.id !== tableId));
     });
   }
 
@@ -4067,17 +4787,13 @@ function Seating({ guests, tables, setTables }) {
     setPickerTableId(null);
   }
 
-  //  חלון השיבוץ נשאר פתוח בכוונה אחרי כל שיבוץ (כדי לשבץ כמה מוזמנים ברצף),
-  //  ולכן חשוב שתהיה דרך מהירה לסגור אותו – גם ב-Escape וגם מהמקלדת בנייד.
   const pickerOpen = pickerTableId !== null;
-  useEffect(() => {
-    if (!pickerOpen) return;
-    const onKey = (e) => {
-      if (e.key === "Escape") setPickerTableId(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [pickerOpen]);
+  useAccessibleModal({
+    open: pickerOpen,
+    containerRef: pickerDialogRef,
+    initialFocusRef: pickerSearchRef,
+    onRequestClose: closePicker,
+  });
 
   const pickerTable = tables.find((t) => t.id === pickerTableId) || null;
   const pickerLeft = pickerTable
@@ -4091,7 +4807,7 @@ function Seating({ guests, tables, setTables }) {
     : [];
 
   return (
-    <Card>
+    <Card tourId="seating-tables">
       <SectionTitle
         icon={Armchair}
         title="סידור הושבה"
@@ -4099,6 +4815,7 @@ function Seating({ guests, tables, setTables }) {
         action={
           canEdit ? (
           <form
+            data-tour="seating-add-table"
             onSubmit={addTable}
             className="flex w-full flex-wrap items-center gap-2 sm:w-auto"
           >
@@ -4120,7 +4837,7 @@ function Seating({ guests, tables, setTables }) {
             </select>
             <button
               type="submit"
-              className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl bg-gold-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gold-600 sm:min-h-0 sm:px-3"
+              className="btn-primary min-h-11 shrink-0 sm:min-h-0 sm:px-3"
             >
               <Plus size={16} /> שולחן
             </button>
@@ -4130,7 +4847,7 @@ function Seating({ guests, tables, setTables }) {
       />
 
       {unassigned.length > 0 && (
-        <div className="mb-5 rounded-2xl bg-amber-50/70 p-3 text-sm ring-1 ring-amber-200/70">
+        <div data-tour="seating-unassigned" className="mb-5 rounded-2xl bg-amber-50/70 p-3 text-sm ring-1 ring-amber-200/70">
           <span className="font-semibold text-amber-700">
             <AlertCircle size={14} className="ml-1 inline" />
             {unassigned.length} מוזמנים ללא שיבוץ:
@@ -4147,7 +4864,7 @@ function Seating({ guests, tables, setTables }) {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div data-tour="seating-table-cards" className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {tables.map((t) => {
           const cap = tableCapacity(t.type);
           const used = seatsUsed(t);
@@ -4275,16 +4992,16 @@ function Seating({ guests, tables, setTables }) {
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
-          aria-label={`שיבוץ ל${pickerTable.name}`}
+          aria-labelledby="seating-picker-title"
         >
           <div
             className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
             onClick={closePicker}
           />
-          <div className="glass relative z-10 flex max-h-[80vh] w-full max-w-lg flex-col rounded-3xl p-5 shadow-2xl">
+          <div ref={pickerDialogRef} className="glass relative z-10 flex max-h-[min(80dvh,48rem)] w-full max-w-lg flex-col rounded-3xl p-5 shadow-2xl">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
-                <h3 className="font-[var(--font-display)] text-xl font-bold text-slate-800">
+                <h3 id="seating-picker-title" className="font-display text-xl font-bold text-slate-800">
                   שיבוץ ל{pickerTable.name}
                 </h3>
                 <p className="text-xs text-slate-500">
@@ -4308,7 +5025,7 @@ function Seating({ guests, tables, setTables }) {
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
                 />
                 <input
-                  autoFocus
+                  ref={pickerSearchRef}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="חיפוש לפי שם..."
@@ -4448,7 +5165,7 @@ function ChecklistRow({ item, canEdit, onToggle, onRename, onAssign, onDelete })
                 setEditing(false);
               }
             }}
-            className="min-h-9 w-full rounded-lg border border-gold-300 bg-white px-2 py-1 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-gold-200"
+            className="min-h-11 w-full rounded-lg border border-gold-300 bg-white px-2 py-2 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-gold-200"
             aria-label="שם המשימה"
           />
         ) : (
@@ -4468,7 +5185,7 @@ function ChecklistRow({ item, canEdit, onToggle, onRename, onAssign, onDelete })
           <select
             value={item.assignee}
             onChange={(e) => onAssign(item.id, e.target.value)}
-            className="min-h-9 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 outline-none focus:border-gold-400"
+            className="min-h-11 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs text-slate-600 outline-none focus:border-gold-400"
             aria-label={`מי אחראי על "${item.title}"`}
           >
             {ASSIGNEES.map((a) => (
@@ -4486,7 +5203,7 @@ function ChecklistRow({ item, canEdit, onToggle, onRename, onAssign, onDelete })
               onClick={() => setEditing(true)}
               title="שינוי שם המשימה"
               aria-label={`שינוי שם המשימה "${item.title}"`}
-              className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-white hover:text-slate-600"
+              className="grid h-11 w-11 place-items-center rounded-lg text-slate-400 transition hover:bg-white hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
             >
               <Pencil size={14} />
             </button>
@@ -4494,7 +5211,7 @@ function ChecklistRow({ item, canEdit, onToggle, onRename, onAssign, onDelete })
               onClick={() => onDelete(item.id)}
               title="מחיקת המשימה"
               aria-label={`מחיקת המשימה "${item.title}"`}
-              className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500"
+              className="grid h-11 w-11 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
             >
               <Trash2 size={14} />
             </button>
@@ -4510,11 +5227,11 @@ function Checklist({ items, setItems }) {
   const [query, setQuery] = useState("");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [hideDone, setHideDone] = useState(false);
-  const [form, setForm] = useState({ title: "", category: CHECKLIST_CATEGORIES[0], assignee: "both" });
+  const [form, setForm] = useState({ title: "", category: CHECKLIST_CATEGORIES[0] || "כללי", assignee: "both" });
 
   const categories = useMemo(
-    () => orderCategories([...new Set(items.map((i) => i.category || "כללי"))]),
-    [items]
+    () => orderCategories([...new Set([...items.map((i) => i.category || "כללי"), form.category || "כללי"])]),
+    [items, form.category]
   );
 
   const stats = useMemo(() => {
@@ -4571,29 +5288,13 @@ function Checklist({ items, setItems }) {
 
   async function remove(id) {
     const item = items.find((i) => i.id === id);
-    const idx = items.findIndex((i) => i.id === id);
     const ok = await confirmDialog({
       title: "מחיקת משימה",
       message: `למחוק את "${item?.title ?? ""}" מהצ׳קליסט?`,
       confirmLabel: "מחיקה",
       tone: "danger",
     });
-    if (!ok) return;
-    setItems((prev) => prev.filter((i) => i.id !== id));
-    notify(`“${item?.title ?? ""}” נמחקה`, {
-      tone: "success",
-      duration: 8000,
-      action: {
-        label: "בטל מחיקה",
-        onClick: () =>
-          setItems((prev) => {
-            if (prev.some((i) => i.id === id)) return prev;
-            const arr = [...prev];
-            arr.splice(Math.min(idx, arr.length), 0, item);
-            return arr;
-          }),
-      },
-    });
+    if (ok) setItems((prev) => prev.filter((i) => i.id !== id));
   }
 
   function addItem(e) {
@@ -4649,15 +5350,15 @@ function Checklist({ items, setItems }) {
 
   const pct = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
   const chip = (on) =>
-    `min-h-9 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+    `min-h-11 rounded-xl px-3 py-2 text-xs font-semibold transition ${
       on
-        ? "bg-gradient-to-br from-gold-500 to-gold-600 text-white shadow-sm shadow-gold-500/25"
+        ? "bg-gold-500 text-slate-950 shadow-sm shadow-gold-500/25"
         : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
     }`;
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      <Card>
+      <Card tourId="checklist-progress">
         <SectionTitle
           icon={ListChecks}
           title="הצ׳קליסט של החתונה"
@@ -4676,7 +5377,7 @@ function Checklist({ items, setItems }) {
         />
 
         {items.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-300 bg-white/50 p-6 text-center">
+          <div data-tour="checklist-items" className="rounded-2xl border border-dashed border-slate-300 bg-white/50 p-6 text-center">
             <ListChecks className="mx-auto mb-2 text-gold-400" size={28} />
             <p className="text-sm font-semibold text-slate-700">הצ׳קליסט עדיין ריק</p>
             {/*  לצופה אין כפתור טעינה, ולכן גם אין טעם להבטיח לו "אפשר
@@ -4687,10 +5388,7 @@ function Checklist({ items, setItems }) {
                 : "בעלי החתונה עדיין לא הוסיפו משימות לצ׳קליסט."}
             </p>
             {canEdit && (
-              <button
-                onClick={loadTemplate}
-                className="mx-auto mt-4 flex min-h-11 items-center gap-2 rounded-xl bg-gradient-to-br from-gold-500 to-gold-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/25 transition hover:from-gold-600 hover:to-gold-700"
-              >
+              <button onClick={loadTemplate} className="btn-primary mx-auto mt-4">
                 <Sparkles size={16} />
                 טעינת הרשימה המומלצת
               </button>
@@ -4730,9 +5428,10 @@ function Checklist({ items, setItems }) {
         )}
       </Card>
 
-      <Card>
+      {(items.length > 0 || canEdit) && (
+        <Card tourId="checklist-workspace">
           {canEdit && (
-            <form onSubmit={addItem} className="mb-4 grid gap-2 sm:grid-cols-[1fr_auto_auto_auto]">
+            <form data-tour="checklist-add" onSubmit={addItem} className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto_auto]">
               <input
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
@@ -4766,7 +5465,7 @@ function Checklist({ items, setItems }) {
               </select>
               <button
                 type="submit"
-                className="flex min-h-11 items-center justify-center gap-1.5 rounded-xl bg-gradient-to-br from-gold-500 to-gold-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-gold-500/25 transition hover:from-gold-600 hover:to-gold-700"
+                className="btn-primary"
               >
                 <Plus size={16} />
                 הוספה
@@ -4774,8 +5473,8 @@ function Checklist({ items, setItems }) {
             </form>
           )}
 
-          <div className="mb-4 space-y-2">
-            <div className="relative w-full sm:max-w-xs">
+          <div data-tour="checklist-filters" className="mb-4 flex flex-wrap items-center gap-2">
+            <div className="relative min-w-0 flex-1 sm:max-w-xs">
               <Search size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 value={query}
@@ -4785,24 +5484,22 @@ function Checklist({ items, setItems }) {
                 aria-label="חיפוש משימה"
               />
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button onClick={() => setAssigneeFilter("all")} className={chip(assigneeFilter === "all")}>
-                הכול
+            <button onClick={() => setAssigneeFilter("all")} className={chip(assigneeFilter === "all")}>
+              הכול
+            </button>
+            {ASSIGNEES.map((a) => (
+              <button
+                key={a.key}
+                onClick={() => setAssigneeFilter(a.key)}
+                className={chip(assigneeFilter === a.key)}
+              >
+                {a.label}
               </button>
-              {ASSIGNEES.map((a) => (
-                <button
-                  key={a.key}
-                  onClick={() => setAssigneeFilter(a.key)}
-                  className={chip(assigneeFilter === a.key)}
-                >
-                  {a.label}
-                </button>
-              ))}
-              <button onClick={() => setHideDone((v) => !v)} className={chip(hideDone)}>
-                <CheckCheck size={13} className="ml-1 inline" />
-                הסתרת שהושלמו
-              </button>
-            </div>
+            ))}
+            <button onClick={() => setHideDone((v) => !v)} className={chip(hideDone)}>
+              <CheckCheck size={13} className="ml-1 inline" />
+              הסתרת שהושלמו
+            </button>
           </div>
 
           {grouped.length === 0 ? (
@@ -4810,7 +5507,7 @@ function Checklist({ items, setItems }) {
               אין משימות שמתאימות לסינון הנוכחי.
             </p>
           ) : (
-            <div className="space-y-5">
+            <div data-tour="checklist-items" className="space-y-5">
               {grouped.map(({ category, rows }) => {
                 const total = items.filter((i) => (i.category || "כללי") === category);
                 const done = total.filter((i) => i.done).length;
@@ -4847,7 +5544,8 @@ function Checklist({ items, setItems }) {
               })}
             </div>
           )}
-      </Card>
+        </Card>
+      )}
     </div>
   );
 }
@@ -4859,6 +5557,7 @@ function Checklist({ items, setItems }) {
 function Vendors({
   vendors,
   setVendors,
+  budget = [],
   setBudget = null,
   weddingId = null,
   canEdit = true,
@@ -4877,13 +5576,24 @@ function Vendors({
 
   //  כל הקבצים של החתונה נטענים פעם אחת (מטא-דאטה בלבד) ומסוננים לפי ספק.
   const [files, setFiles] = useState([]);
+  const [filesStatus, setFilesStatus] = useState("loading");
+  const [deletedFiles, setDeletedFiles] = useState([]);
+  const [showDeletedFiles, setShowDeletedFiles] = useState(false);
 
   const reloadFiles = useCallback(async () => {
     if (!weddingId) return;
+    setFilesStatus((status) => (status === "ready" ? "refreshing" : "loading"));
     try {
-      setFiles(await listVendorFiles(weddingId));
+      const [activeFiles, deleted] = await Promise.all([
+        listVendorFiles(weddingId),
+        listDeletedVendorFiles(weddingId),
+      ]);
+      setFiles(activeFiles);
+      setDeletedFiles(deleted);
+      setFilesStatus("ready");
     } catch (err) {
       console.error("Failed to load vendor files:", err);
+      setFilesStatus("error");
     }
   }, [weddingId]);
 
@@ -4988,16 +5698,21 @@ function Vendors({
 
   function removeVendor(id) {
     const vendor = vendors.find((v) => v.id === id);
+    if (!vendor) return;
+    const vendorIndex = vendors.findIndex((item) => item.id === id);
     const attached = files.filter((f) => f.vendorId === id);
+    const linkedBudget = setBudget
+      ? budget.map((item, index) => ({ item, index })).filter(({ item }) => item.vendorId === id)
+      : [];
     confirmDialog({
       title: `למחוק את הספק “${vendor?.name || ""}”?`,
       message:
-        "כל הפרטים והמשימות של הספק יימחקו לצמיתות." +
+        "הספק יוסר מהרשימה. אפשר יהיה לבטל את הפעולה מההודעה שתופיע." +
         (attached.length
-          ? `\n\nיימחקו גם ${attached.length} קבצים מצורפים.`
+          ? `\n\n${attached.length} קבצים מצורפים יועברו לאזור הקבצים שנמחקו וניתן יהיה לשחזר אותם.`
           : "") +
         (setBudget
-          ? "\n\nיוסר גם סעיף התקציב של הספק במסך ניהול תקציב."
+          ? "\n\nגם סעיף התקציב המקושר יוסר ויהיה ניתן לשחזרו בביטול."
           : ""),
       confirmLabel: "מחק ספק",
       tone: "danger",
@@ -5017,44 +5732,48 @@ function Vendors({
       //  setOpenId מחושב מראש ולא מתוך ה-updater של setVendors: עדכון state
       //  של קומפוננטה אחת בתוך updater של אחרת מפיק אזהרת React ועלול
       //  להישבר בגרסאות עתידיות.
-      const idx = vendors.findIndex((v) => v.id === id);
       const remaining = vendors.filter((v) => v.id !== id);
       setVendors(remaining);
       setOpenId((cur) => (cur === id ? remaining[0]?.id ?? null : cur));
       //  אותו שיקול של מיחזור מזהים: סעיף שנשאר מאחוריו היה נראה
       //  כשייך לספק הבא שיקבל את אותו מספר.
-      const budgetRows = [];
-      if (setBudget)
-        setBudget((prev) => {
-          budgetRows.push(...prev.filter((b) => b.vendorId === id));
-          return prev.filter((b) => b.vendorId !== id);
-        });
-
-      notify(`הספק “${vendor?.name || ""}” נמחק`, {
+      if (setBudget) setBudget((prev) => prev.filter((b) => b.vendorId !== id));
+      notify(`הספק “${vendor.name}” הוסר`, {
         tone: "success",
         duration: 8000,
         action: {
           label: "בטל מחיקה",
           onClick: async () => {
             setVendors((prev) => {
-              if (prev.some((v) => v.id === id)) return prev;
-              const arr = [...prev];
-              arr.splice(Math.min(idx, arr.length), 0, vendor);
-              return arr;
+              if (prev.some((item) => item.id === id)) return prev;
+              const next = [...prev];
+              next.splice(Math.min(vendorIndex, next.length), 0, vendor);
+              return next;
             });
-            if (budgetRows.length)
-              setBudget((prev) =>
-                prev.some((b) => b.vendorId === id) ? prev : [...prev, ...budgetRows]
+            setOpenId(id);
+            if (setBudget && linkedBudget.length) {
+              setBudget((prev) => {
+                const restored = [...prev];
+                linkedBudget.forEach(({ item, index }) => {
+                  if (restored.some((existing) => existing.id === item.id)) return;
+                  restored.splice(Math.min(index, restored.length), 0, item);
+                });
+                return restored;
+              });
+            }
+            if (weddingId && attached.length) {
+              const results = await Promise.allSettled(
+                attached.map((file) => restoreVendorFile(weddingId, file.id))
               );
-            for (const f of attached) {
-              try {
-                await restoreVendorFile(weddingId, f.id);
-              } catch (err) {
-                console.error("Failed to restore vendor file:", err);
+              const failed = results.filter((result) => result.status === "rejected").length;
+              await reloadFiles();
+              if (failed) {
+                notify("הספק שוחזר, אך חלק מהקבצים לא שוחזרו. אפשר לשחזר אותם מאזור הקבצים שנמחקו.", {
+                  tone: "error",
+                  duration: 8000,
+                });
               }
             }
-            if (attached.length) reloadFiles();
-            setOpenId(id);
           },
         },
       });
@@ -5064,16 +5783,10 @@ function Vendors({
   function addVendor() {
     //  ה-id הוא גם המפתח הראשי ב-DB, ומשמש לקישור הקבצים המצורפים.
     //  nextRowId מבטיח ייחודיות גם כשנוספים שני ספקים באותה מילישנייה.
-    const id = nextRowId(vendors);
-    /*  שם ייחודי ולא "ספק חדש" קבוע. כששניים או שלושה כאלה יושבים זה
-        לצד זה בלשוניות אי אפשר לדעת מי נמחק, ומחיקה מוצלחת נראית כאילו
-        לא קרה כלום — הלשונית הבאה נושאת בדיוק את אותו שם.  */
-    const taken = new Set(vendors.map((v) => v.name));
-    let name = "ספק חדש";
-    for (let n = 2; taken.has(name); n++) name = `ספק חדש ${n}`;
+    const id = crypto.randomUUID();
     const vendor = {
       id,
-      name,
+      name: "ספק חדש",
       type: "כללי",
       phone: "",
       email: "",
@@ -5096,7 +5809,7 @@ function Vendors({
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      <Card>
+      <Card tourId="vendors-selector">
         <SectionTitle
           icon={Briefcase}
           title="ניהול ספקים"
@@ -5105,7 +5818,7 @@ function Vendors({
             canEdit ? (
               <button
                 onClick={addVendor}
-                className="flex items-center gap-2 rounded-2xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:bg-gold-600"
+                className="btn-primary"
               >
                 <Plus size={18} /> ספק חדש
               </button>
@@ -5131,7 +5844,7 @@ function Vendors({
       </Card>
 
       {vendors.length === 0 && (
-        <Card>
+        <Card tourId="vendors-empty">
           <div className="flex flex-col items-center justify-center px-6 py-14 text-center">
             <div className="mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-slate-100 text-slate-400">
               <Briefcase size={26} />
@@ -5145,7 +5858,7 @@ function Vendors({
             {canEdit && (
               <button
                 onClick={addVendor}
-                className="mt-4 flex items-center gap-2 rounded-2xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:bg-gold-600"
+                className="btn-primary mt-4"
               >
                 <Plus size={18} /> הוספת ספק ראשון
               </button>
@@ -5158,21 +5871,25 @@ function Vendors({
         .filter((v) => v.id === openId)
         .map((v) => {
           const balance = v.contractCost - v.deposit;
+          //  grid-cols-1 מפורש: בלעדיו העמודה המשתמעת היא auto, שאינה יורדת
+          //  מתחת ל-min-content, והכרטיס גלש אל מחוץ למסך ב-320px.
           return (
-            <div key={v.id} className="grid gap-6 xl:grid-cols-3">
+            <div key={v.id} className="grid grid-cols-1 gap-6 xl:grid-cols-3">
               {/*  כרטיס הספק כולו הוא טופס עריכה, ואין בו פקד שמשנה רק תצוגה.
                   לכן לצופה מנטרלים אותו במלואו. הקבצים להורדה הם קישורי <a>
                   ואינם מושפעים מ-fieldset מושבת.  */}
               <fieldset disabled={!canEdit} className="contents">
               {/* Details + finance */}
-              <Card className="xl:col-span-1">
+              <Card tourId="vendors-details" className="xl:col-span-1">
                 <div className="space-y-4">
+                  {/*  min-w-0: פריט flex לא מתכווץ מתחת לרוחב הטבעי של input,
+                      ובלעדיו כרטיס הספק גלש אל מחוץ למסך ב-320px.  */}
                   <div className="flex items-center gap-2">
                     <input
                       value={v.name}
                       onChange={(e) => updateVendor(v.id, { name: e.target.value })}
                       aria-label="שם הספק"
-                      className="min-h-11 w-full bg-transparent font-[var(--font-display)] text-xl font-bold text-slate-800 outline-none sm:min-h-0"
+                      className="min-h-11 w-full min-w-0 bg-transparent text-xl font-bold text-slate-800 outline-none sm:min-h-0"
                     />
                     <button
                       onClick={() => removeVendor(v.id)}
@@ -5258,7 +5975,7 @@ function Vendors({
               </Card>
 
               {/* Notes */}
-              <Card className="xl:col-span-2">
+              <Card tourId="vendors-notes-tasks" className="xl:col-span-2">
                 <div className="mb-3 flex items-center gap-2">
                   <FileText size={18} className="text-gold-500" />
                   <h3 className="font-semibold text-slate-800">
@@ -5277,21 +5994,22 @@ function Vendors({
                 </p>
 
                 {/* Task board */}
-                <div className="mt-6">
-                  <div className="mb-3 flex items-center justify-between gap-2">
+                <div data-tour="vendors-task-board" className="mt-6">
+                  {/*  flex-wrap + שדה ברוחב מלא בנייד: הכותרת והטופס יחד
+                      דורשים ~350px, ולכן ב-320px הטופס נדחף אל מחוץ למסך.  */}
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <h3 className="flex items-center gap-2 font-semibold text-slate-800">
                       <ListTodo size={18} className="text-gold-500" /> לוח משימות
                     </h3>
-                    <div className="flex items-center gap-2">
+                    <div className="flex w-full items-center gap-2 sm:w-auto">
                       <input
                         value={taskInput}
                         onChange={(e) => setTaskInput(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && addTask(v.id)}
                         placeholder="משימה חדשה..."
-                        className="min-h-11 w-44 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
+                        className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-gold-400 sm:min-h-0 sm:w-44 sm:text-sm"
                       />
                       <button
-                        type="button"
                         onClick={() => addTask(v.id)}
                         title="הוספת משימה"
                         aria-label="הוספת משימה"
@@ -5310,7 +6028,7 @@ function Vendors({
                       אין עדיין משימות לספק הזה — הוסיפו אחת בשדה שלמעלה.
                     </p>
                   ) : (
-                  <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     {TASK_COLUMNS.map((col) => {
                       const items = v.tasks.filter((t) => t.status === col.key);
                       const ColIcon = col.icon;
@@ -5345,29 +6063,36 @@ function Vendors({
                                       ריחוף כלל, ולכן אי אפשר היה למחוק משימה
                                       מהטלפון. עכשיו הוא תמיד גלוי, רק עמום יותר.  */}
                                   <button
-                                    type="button"
                                     onClick={() => removeTask(v.id, t.id)}
                                     title="מחיקת משימה"
                                     aria-label={`מחיקת המשימה ${t.title}`}
-                                    className="-m-1 grid h-10 w-10 shrink-0 place-items-center rounded-lg text-slate-300 opacity-60 transition group-hover:opacity-100 focus-visible:opacity-100 hover:text-rose-500"
+                                    className="-m-1 grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-300 opacity-60 transition group-hover:opacity-100 focus-visible:opacity-100 hover:text-rose-500"
                                   >
                                     <X size={16} />
                                   </button>
                                 </div>
-                                <div className="mt-2 flex flex-wrap gap-1.5">
-                                  {TASK_COLUMNS.filter(
-                                    (c) => c.key !== t.status
-                                  ).map((c) => (
-                                    <button
-                                      type="button"
-                                      key={c.key}
-                                      onClick={() => moveTask(v.id, t.id, c.key)}
-                                      aria-label={`העברת המשימה ${t.title} ל-${c.label}`}
-                                      className="min-h-10 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-500 transition hover:bg-gold-100 hover:text-gold-700 sm:min-h-0 sm:px-2 sm:py-0.5 sm:text-[11px]"
-                                    >
-                                      → {c.label}
-                                    </button>
-                                  ))}
+                                <div className="mt-2 flex min-w-0 items-center gap-2">
+                                  <label className="sr-only" htmlFor={`vendor-task-status-${v.id}-${t.id}`}>
+                                    סטטוס המשימה {t.title}
+                                  </label>
+                                  <select
+                                    id={`vendor-task-status-${v.id}-${t.id}`}
+                                    value={t.status || "todo"}
+                                    onChange={(event) => moveTask(v.id, t.id, event.target.value)}
+                                    aria-label={`סטטוס המשימה ${t.title}`}
+                                    className={`min-h-11 min-w-0 flex-1 cursor-pointer rounded-xl border px-3 py-2 text-xs font-semibold outline-none transition focus-visible:ring-2 focus-visible:ring-gold-400 sm:min-h-10 ${
+                                      t.status === "done"
+                                        ? "border-sage-200 bg-sage-50 text-sage-700"
+                                        : t.status === "inprogress"
+                                          ? "border-gold-200 bg-gold-50 text-gold-800"
+                                          : "border-slate-200 bg-white text-slate-600"
+                                    }`}
+                                  >
+                                    {TASK_COLUMNS.map((column) => (
+                                      <option key={column.key} value={column.key}>{column.label}</option>
+                                    ))}
+                                  </select>
+                                  <span className="shrink-0 text-[11px] text-slate-400">סטטוס</span>
                                 </div>
                               </div>
                             ))}
@@ -5386,11 +6111,15 @@ function Vendors({
               </Card>
 
               {/* Attachments */}
-              <Card className="min-w-0 xl:col-span-3">
+              <Card tourId="vendors-files" className="min-w-0 xl:col-span-3">
                 <VendorFiles
                   weddingId={weddingId}
                   vendorId={v.id}
                   files={files.filter((f) => f.vendorId === v.id)}
+                  filesStatus={filesStatus}
+                  deletedFiles={deletedFiles.filter((f) => f.vendorId === v.id)}
+                  showDeletedFiles={showDeletedFiles}
+                  setShowDeletedFiles={setShowDeletedFiles}
                   canEdit={canEdit}
                   onChanged={reloadFiles}
                 />
@@ -5420,7 +6149,17 @@ function formatBytes(bytes) {
   return `${Number.isInteger(mb) ? mb : mb.toFixed(1)} MB`;
 }
 
-function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
+function VendorFiles({
+  weddingId,
+  vendorId,
+  files,
+  filesStatus = "ready",
+  deletedFiles = [],
+  showDeletedFiles,
+  setShowDeletedFiles,
+  canEdit,
+  onChanged,
+}) {
   const inputRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(null);
@@ -5504,15 +6243,19 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
   async function download(file) {
     setDownloading(file.id);
     try {
+      const res = await fetch(await vendorFileUrl(weddingId, file.id));
+      if (!res.ok) throw new Error(`status ${res.status}`);
+
+      const url = URL.createObjectURL(await res.blob());
       const a = document.createElement("a");
-      a.href = await vendorFileUrl(weddingId, file.id);
+      a.href = url;
       a.download = file.name;
-      a.target = "_blank";
-      a.rel = "noopener";
       //  חלק מהדפדפנים מתעלמים מלחיצה על עוגן שאינו מחובר ל-DOM.
       document.body.appendChild(a);
       a.click();
       a.remove();
+      //  שחרור מיידי קוטע את ההורדה בחלק מהדפדפנים בנייד.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
       console.error("Download failed:", err);
       notify("הורדת הקובץ נכשלה — נסו שוב", { tone: "error" });
@@ -5524,33 +6267,29 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
   async function remove(file) {
     const ok = await confirmDialog({
       title: `למחוק את “${file.name}”?`,
-      message: "הקובץ יוסר מרשימת הקבצים של הספק. אפשר לבטל מיד אחרי המחיקה.",
+      message: "הקובץ יימחק לצמיתות ולא ניתן יהיה לשחזר אותו.",
       confirmLabel: "מחיקה",
       tone: "danger",
     });
     if (!ok) return;
     try {
       await deleteVendorFile(weddingId, file.id);
+      notify("הקובץ נמחק", { tone: "success" });
       onChanged();
-      notify(`“${file.name}” נמחק`, {
-        tone: "success",
-        duration: 8000,
-        action: {
-          label: "בטל מחיקה",
-          onClick: async () => {
-            try {
-              await restoreVendorFile(weddingId, file.id);
-              onChanged();
-            } catch (err) {
-              console.error(err);
-              notify("שחזור הקובץ נכשל", { tone: "error" });
-            }
-          },
-        },
-      });
     } catch (err) {
       console.error(err);
       notify("מחיקת הקובץ נכשלה", { tone: "error" });
+    }
+  }
+
+  async function restore(file) {
+    try {
+      await restoreVendorFile(weddingId, file.id);
+      notify("הקובץ שוחזר", { tone: "success" });
+      onChanged();
+    } catch (err) {
+      console.error("Failed to restore vendor file:", err);
+      notify("שחזור הקובץ נכשל", { tone: "error" });
     }
   }
 
@@ -5563,6 +6302,16 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
             {files.length}
           </span>
         </h3>
+        {canEdit && deletedFiles.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowDeletedFiles((shown) => !shown)}
+            aria-expanded={showDeletedFiles}
+            className="min-h-10 rounded-xl px-3 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+          >
+            {showDeletedFiles ? "הסתרת" : "שחזור"} קבצים שנמחקו ({deletedFiles.length})
+          </button>
+        )}
         {canEdit && (
           <>
             <input
@@ -5575,7 +6324,7 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
             <button
               onClick={() => inputRef.current?.click()}
               disabled={busy}
-              className="flex items-center gap-2 rounded-2xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:bg-gold-600 disabled:opacity-60"
+              className="btn-primary disabled:opacity-60"
             >
               {busy ? (
                 <Loader2 size={18} className="animate-spin" />
@@ -5591,7 +6340,27 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
       {/*  מצב ריק בגובה של אזור גרירה שלם, עם כפתור שכפול של "צירוף קובץ"
           שכבר יושב בכותרת, הכריח גלילה ארוכה על כל ספק בלי קבצים. שורה
           אחת מספרת את אותו הדבר.  */}
-      {files.length === 0 ? (
+      {filesStatus === "error" && files.length > 0 && (
+        <div role="status" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-200">
+          <span>רענון רשימת הקבצים נכשל. הקבצים שכבר הוצגו נשארים זמינים.</span>
+          <button type="button" onClick={onChanged} className="min-h-11 rounded-lg bg-white px-3 font-semibold ring-1 ring-amber-300 transition hover:bg-amber-100">
+            ניסיון חוזר
+          </button>
+        </div>
+      )}
+      {(filesStatus === "loading" || filesStatus === "refreshing") && files.length === 0 ? (
+        <div role="status" aria-live="polite" className="flex items-center justify-center gap-2 rounded-2xl bg-slate-50 px-4 py-6 text-sm text-slate-500 ring-1 ring-slate-200">
+          <Loader2 size={17} className="animate-spin" /> טוען קבצים מצורפים…
+        </div>
+      ) : filesStatus === "error" && files.length === 0 ? (
+        <div role="alert" className="rounded-2xl bg-rose-50 px-4 py-4 text-center ring-1 ring-rose-200">
+          <p className="text-sm font-semibold text-rose-800">לא ניתן לטעון את הקבצים כרגע</p>
+          <p className="mt-1 text-xs text-rose-700">הקבצים לא נמחקו. בדקו את החיבור ונסו שוב.</p>
+          <button type="button" onClick={onChanged} className="btn-secondary mt-3">
+            <RotateCcw size={15} /> ניסיון חוזר
+          </button>
+        </div>
+      ) : files.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-2.5 text-center text-xs text-slate-400">
           עדיין לא צורפו קבצים — חוזה, הצעת מחיר או תמונה, עד{" "}
           {formatBytes(MAX_FILE_BYTES)} לקובץ.
@@ -5678,6 +6447,26 @@ function VendorFiles({ weddingId, vendorId, files, canEdit, onChanged }) {
           })}
         </ul>
       )}
+      {showDeletedFiles && deletedFiles.length > 0 && (
+        <section className="mt-4 rounded-2xl bg-amber-50/70 p-3 ring-1 ring-amber-200" aria-label="קבצים שנמחקו">
+          <h4 className="mb-2 flex items-center gap-2 text-xs font-bold text-amber-800">
+            <RotateCcw size={14} /> קבצים שנמחקו — אפשר לשחזר
+          </h4>
+          <ul className="space-y-2">
+            {deletedFiles.map((file) => (
+              <li key={file.id} className="flex min-w-0 items-center gap-2 rounded-xl bg-white/80 p-2 ring-1 ring-amber-100">
+                <FileText size={16} className="shrink-0 text-slate-400" />
+                <span className="min-w-0 flex-1 truncate text-xs text-slate-700" title={file.name}>{file.name}</span>
+                {canEdit && (
+                  <button type="button" onClick={() => restore(file)} className="min-h-11 shrink-0 rounded-lg bg-sage-50 px-3 text-xs font-semibold text-sage-700 transition hover:bg-sage-100">
+                    שחזור
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }
@@ -5712,11 +6501,15 @@ function moveBefore(list, id, targetId) {
   return next;
 }
 
+/*  העלות של סעיף תקציב. ההוצאה בפועל גוברת כשנרשמה, ואחרת נשארת
+    ההקצבה המתוכננת — כך סעיף שהגיע ממחשבון האלכוהול (שכותב תכנון בלבד)
+    וסעיף שעודכן ידנית מוצגים באותה עמודה בלי לאבד נתון.  */
+const budgetCostOf = (b) => Number(b?.actual) || Number(b?.expected) || 0;
+
 function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudgetGoal, financeLabels, setFinanceLabels }) {
   const canEdit = useCanEdit();
-  const [form, setForm] = useState({ category: "", expected: "", actual: "", paid: "" });
+  const [form, setForm] = useState({ category: "", cost: "", paid: "" });
   const [goalDraft, setGoalDraft] = useState(budgetGoal);
-  const [colsOpen, setColsOpen] = useState(false);
   const [dragId, setDragId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
 
@@ -5788,25 +6581,6 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
   const updateLabel = (key, val) =>
     setFinanceLabels((prev) => ({ ...prev, [key]: val }));
 
-  /*  עמודות מוסתרות נשמרות כמחרוזת מופרדת בפסיקים באותו אובייקט של התוויות,
-      כדי לעבור באותו ערוץ סנכרון ובלי הגדרה חדשה בשרת. ערך ריק נמחק שם,
-      ולכן "שום עמודה לא מוסתרת" מיוצג כהיעדר המפתח.  */
-  const hiddenCols = String(financeLabels?.hiddenCols || "")
-    .split(",")
-    .filter(Boolean);
-  const showCol = (key) => !hiddenCols.includes(key);
-  const toggleCol = (key) => {
-    const next = hiddenCols.includes(key)
-      ? hiddenCols.filter((k) => k !== key)
-      : [...hiddenCols, key];
-    setFinanceLabels((prev) => {
-      const out = { ...prev };
-      if (next.length) out.hiddenCols = next.join(",");
-      else delete out.hiddenCols;
-      return out;
-    });
-  };
-
   useEffect(() => setGoalDraft(budgetGoal), [budgetGoal]);
 
   const goal = Number(budgetGoal) || 0;
@@ -5818,40 +6592,50 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
   }
 
   const totals = useMemo(() => {
-    const expected = budget.reduce((s, b) => s + b.expected, 0);
-    const actual = budget.reduce((s, b) => s + b.actual, 0);
-    const paid = budget.reduce((s, b) => s + (b.paid || 0), 0);
+    let cost = 0;
+    let paid = 0;
+    let remaining = 0;
+    for (const b of budget) {
+      const rowCost = budgetCostOf(b);
+      const rowPaid = Number(b.paid) || 0;
+      cost += rowCost;
+      paid += rowPaid;
+      //  מי ששילם יותר מהעלות לא “נותר לשלם” סכום שלילי.
+      remaining += Math.max(0, rowCost - rowPaid);
+    }
     const income = guests.reduce((s, g) => s + (g.gift || 0), 0);
-    //  מי ששילם יותר ממה שסוכם לא “נותר לשלם” סכום שלילי.
-    return {
-      expected,
-      actual,
-      paid,
-      remaining: Math.max(0, actual - paid),
-      income,
-      balance: income - actual,
-    };
+    return { cost, paid, remaining, income, balance: income - cost };
   }, [budget, guests]);
 
   function addItem(e) {
     e.preventDefault();
     if (!form.category.trim()) return;
+    const cost = Number(form.cost) || 0;
     setBudget((prev) => [
       ...prev,
       {
         id: nextRowId(prev),
         category: form.category.trim(),
-        expected: Number(form.expected) || 0,
-        actual: Number(form.actual) || 0,
+        //  שני השדות נשמרים זהים: המסך מציג עמודת עלות אחת, והתאימות
+        //  לגיבויים, לייצוא ולסנכרון הספקים נשמרת.
+        expected: cost,
+        actual: cost,
         paid: Number(form.paid) || 0,
       },
     ]);
-    setForm({ category: "", expected: "", actual: "", paid: "" });
+    setForm({ category: "", cost: "", paid: "" });
   }
 
-  function updateItem(id, key, value) {
+  function updateCost(id, value) {
+    const cost = Number(value) || 0;
     setBudget((prev) =>
-      prev.map((b) => (b.id === id ? { ...b, [key]: Number(value) || 0 } : b))
+      prev.map((b) => (b.id === id ? { ...b, expected: cost, actual: cost } : b))
+    );
+  }
+
+  function updatePaid(id, value) {
+    setBudget((prev) =>
+      prev.map((b) => (b.id === id ? { ...b, paid: Number(value) || 0 } : b))
     );
   }
 
@@ -5898,27 +6682,11 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
     }
     confirmDialog({
       title: `למחוק את הסעיף “${b?.category || ""}”?`,
-      message: "סעיף התקציב יוסר מהרשימה. אפשר לבטל מיד אחרי המחיקה.",
+      message: "סעיף התקציב יוסר לצמיתות.",
       confirmLabel: "מחק סעיף",
       tone: "danger",
     }).then((ok) => {
-      if (!ok) return;
-      const idx = budget.findIndex((x) => x.id === id);
-      setBudget((prev) => prev.filter((x) => x.id !== id));
-      notify(`הסעיף “${b?.category || ""}” נמחק`, {
-        tone: "success",
-        duration: 8000,
-        action: {
-          label: "בטל מחיקה",
-          onClick: () =>
-            setBudget((prev) => {
-              if (prev.some((x) => x.id === id)) return prev;
-              const arr = [...prev];
-              arr.splice(Math.min(idx, arr.length), 0, b);
-              return arr;
-            }),
-        },
-      });
+      if (ok) setBudget((prev) => prev.filter((b) => b.id !== id));
     });
   }
 
@@ -5934,7 +6702,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
         ולכן הניטרול הגורף לצופה אינו פוגע בשום פעולת צפייה.  */
     <fieldset disabled={!canEdit} className="contents">
     <div className="space-y-4 sm:space-y-6">
-      <Card>
+      <Card tourId="finance-goal">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <div className="grid h-11 w-11 place-items-center rounded-xl bg-gold-100 text-gold-600">
@@ -5971,154 +6739,72 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
           </div>
         </div>
 
-        <div className="mt-4 space-y-2">
+        <div className="mt-4 space-y-4">
+          {/*  שלושת המספרים של המסך, בסדר שבו שואלים אותם: כמה הכול עולה,
+              כמה כבר שולם, וכמה עוד צריך לשלם.  */}
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
+            <BudgetFigure
+              label={<EditableText value={L.statCost} onCommit={(v) => updateLabel("statCost", v)} />}
+              value={fmt(totals.cost)}
+            />
+            <BudgetFigure
+              label={<EditableText value={L.statPaid} onCommit={(v) => updateLabel("statPaid", v)} />}
+              value={fmt(totals.paid)}
+              tone="sage"
+            />
+            <BudgetFigure
+              label={<EditableText value={L.statRemaining} onCommit={(v) => updateLabel("statRemaining", v)} />}
+              value={fmt(totals.remaining)}
+              tone="gold"
+            />
+          </div>
+
           {/*  יעד 0 = עוד לא נקבע יעד. אין טעם להציג "חריגה" באדום על יעד
               שהמשתמש מעולם לא הגדיר — זה מבהיל בלי סיבה.  */}
           {goal <= 0 ? (
-            <div className="rounded-xl bg-gold-50 px-3 py-2.5 text-xs text-slate-600 ring-1 ring-gold-200">
+            <p className="rounded-xl bg-gold-50 px-3 py-2.5 text-xs leading-5 text-slate-600 ring-1 ring-gold-200">
               {canEdit
-                ? "עוד לא הוגדר יעד תקציב. הזינו סכום למעלה כדי לעקוב אחרי חריגות."
+                ? "עוד לא הוגדר יעד תקציב. הזינו סכום למעלה כדי לראות כמה מרווח נשאר."
                 : "עוד לא הוגדר יעד תקציב לחתונה הזו."}
-              <br />
-              <span className="text-slate-500">
-                תכנון נוכחי (סכום הסעיפים{" "}
-                <span className="font-semibold text-slate-700 underline decoration-gold-400 decoration-2 underline-offset-2">
-                  הצפוי
-                </span>
-                ):{" "}
-                <b className="tabular-nums text-slate-700">{fmt(totals.expected)}</b>
-                {" · "}
-                נדרש לשלם:{" "}
-                <b className="tabular-nums text-slate-700">{fmt(totals.actual)}</b>
-                {" · "}
-                שולם:{" "}
-                <b className="tabular-nums text-slate-700">{fmt(totals.paid)}</b>
-                {" · "}
-                נותר לשלם:{" "}
-                <b className="tabular-nums text-slate-700">{fmt(totals.remaining)}</b>
-              </span>
-            </div>
+            </p>
           ) : (
             <>
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                <span className="text-slate-500">
-                  תכנון נוכחי (סכום הסעיפים{" "}
-                  <span className="font-semibold text-slate-700 underline decoration-gold-400 decoration-2 underline-offset-2">
-                    הצפוי
-                  </span>
-                  ):{" "}
-                  <b className="tabular-nums text-slate-700">{fmt(totals.expected)}</b>
-                </span>
-                <span
-                  className={
-                    totals.expected > goal
-                      ? "font-semibold text-rose-500"
-                      : "font-semibold text-sage-600"
-                  }
-                >
-                  {totals.expected > goal
-                    ? `חריגה מהיעד ב-${fmt(totals.expected - goal)}`
-                    : `נותרו לתכנון ${fmt(goal - totals.expected)}`}
-                </span>
-              </div>
-              <BudgetSplitBar
+              <BudgetGoalBar
+                goal={goal}
+                cost={totals.cost}
                 paid={totals.paid}
                 remaining={totals.remaining}
-                max={goal}
               />
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-                <SplitLegendItem
-                  color="bg-gold-600"
-                  label="שולם"
-                  value={fmt(totals.paid)}
-                />
-                <SplitLegendItem
-                  color={totals.actual > goal ? "bg-rose-300" : "bg-gold-200"}
-                  label="נותר לשלם"
-                  value={fmt(totals.remaining)}
-                />
-                <SplitLegendItem
-                  color="bg-slate-200"
-                  label={totals.actual > goal ? "חריגה מהיעד" : "מרווח עד היעד"}
-                  value={fmt(Math.abs(goal - totals.actual))}
-                />
-              </div>
+              <p
+                className={`rounded-xl px-3 py-2 text-xs font-semibold ${
+                  totals.cost > goal
+                    ? "bg-rose-50 text-rose-700 ring-1 ring-rose-200"
+                    : "bg-sage-50 text-sage-700 ring-1 ring-sage-200"
+                }`}
+              >
+                {totals.cost > goal
+                  ? `העלויות חורגות מהיעד ב-${fmt(totals.cost - goal)}`
+                  : `נשאר מרווח של ${fmt(goal - totals.cost)} עד היעד`}
+              </p>
             </>
+          )}
+
+          {/*  מתנות אינן חלק מניהול ההוצאות, ולכן הן שורה משנית ולא כרטיס
+              נתון משלהן — הן מופיעות רק כשבאמת נרשמו.  */}
+          {totals.income > 0 && (
+            <p className="text-xs text-slate-500">
+              <EditableText value={L.statIncome} onCommit={(v) => updateLabel("statIncome", v)} />
+              :{" "}
+              <b className="tabular-nums text-slate-700">{fmt(totals.income)}</b>
+              {" · "}
+              {totals.balance >= 0 ? "יתרה אחרי מתנות: " : "חסר אחרי מתנות: "}
+              <b className="tabular-nums text-slate-700">{fmt(Math.abs(totals.balance))}</b>
+            </p>
           )}
         </div>
       </Card>
 
-      <div className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-3">
-        <StatCard
-          icon={Wallet}
-          label={
-            <EditableText
-              value={L.statPlanned}
-              onCommit={(v) => updateLabel("statPlanned", v)}
-            />
-          }
-          value={fmt(totals.expected)}
-          tone="gold"
-        />
-        <StatCard
-          icon={TrendingDown}
-          label={
-            <EditableText
-              value={L.statActual}
-              onCommit={(v) => updateLabel("statActual", v)}
-            />
-          }
-          value={fmt(totals.actual)}
-          tone="rose"
-        />
-        <StatCard
-          icon={CheckCircle2}
-          label={
-            <EditableText
-              value={L.statPaid}
-              onCommit={(v) => updateLabel("statPaid", v)}
-            />
-          }
-          value={fmt(totals.paid)}
-          tone="sage"
-        />
-        <StatCard
-          icon={Clock}
-          label={
-            <EditableText
-              value={L.statRemaining}
-              onCommit={(v) => updateLabel("statRemaining", v)}
-            />
-          }
-          value={fmt(totals.remaining)}
-          tone="gold"
-        />
-        <StatCard
-          icon={Gift}
-          label={
-            <EditableText
-              value={L.statIncome}
-              onCommit={(v) => updateLabel("statIncome", v)}
-            />
-          }
-          value={fmt(totals.income)}
-          tone="sage"
-        />
-        <StatCard
-          icon={totals.balance >= 0 ? TrendingUp : TrendingDown}
-          label={
-            <EditableText
-              value={L.statBalance}
-              onCommit={(v) => updateLabel("statBalance", v)}
-            />
-          }
-          value={fmt(totals.balance)}
-          sub={totals.balance >= 0 ? "צפי לרווח 🎉" : "צפי לגרעון"}
-          tone={totals.balance >= 0 ? "sage" : "rose"}
-        />
-      </div>
-
-      <Card>
+      <Card tourId="finance-items">
         <SectionTitle
           icon={PiggyBank}
           title={
@@ -6147,91 +6833,47 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
 
         {canEdit && (
         <form
+          data-tour="finance-add-item"
           onSubmit={addItem}
-          className="mb-4 grid grid-cols-2 gap-2 rounded-2xl bg-white/50 p-3 ring-1 ring-slate-200/70 sm:mb-5 sm:gap-3 sm:p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
+          className="mb-4 grid grid-cols-2 gap-2 rounded-2xl bg-white/50 p-3 ring-1 ring-slate-200/70 sm:mb-5 sm:gap-3 sm:p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
         >
-          <input
-            value={form.category}
-            onChange={(e) => setForm({ ...form, category: e.target.value })}
-            placeholder="שם הסעיף"
-            className="col-span-2 min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400 sm:col-span-1"
-          />
-          <input
-            type="number"
-            value={form.expected}
-            onChange={(e) => setForm({ ...form, expected: e.target.value })}
-            placeholder="עלות צפויה"
-            className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400"
-          />
-          <input
-            type="number"
-            value={form.actual}
-            onChange={(e) => setForm({ ...form, actual: e.target.value })}
-            placeholder="עלות בפועל"
-            className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400"
-          />
-          <input
-            type="number"
-            value={form.paid}
-            onChange={(e) => setForm({ ...form, paid: e.target.value })}
-            placeholder="שולם עד כה"
-            className="col-span-2 min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400 sm:col-span-1"
-          />
+          <label className="col-span-2 min-w-0 space-y-1 sm:col-span-1">
+            <span className="px-1 text-xs font-semibold text-slate-500">שם הסעיף</span>
+            <input
+              value={form.category}
+              onChange={(e) => setForm({ ...form, category: e.target.value })}
+              aria-label="שם הסעיף"
+              className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-100"
+            />
+          </label>
+          <label className="min-w-0 space-y-1">
+            <span className="px-1 text-xs font-semibold text-slate-500">עלות</span>
+            <input
+              type="number"
+              value={form.cost}
+              onChange={(e) => setForm({ ...form, cost: e.target.value })}
+              aria-label="עלות"
+              className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-100"
+            />
+          </label>
+          <label className="min-w-0 space-y-1">
+            <span className="px-1 text-xs font-semibold text-slate-500">שולם</span>
+            <input
+              type="number"
+              value={form.paid}
+              onChange={(e) => setForm({ ...form, paid: e.target.value })}
+              aria-label="שולם"
+              className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-100"
+            />
+          </label>
           <button
             type="submit"
-            className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-gold-600 sm:col-span-1"
+            className="btn-primary col-span-2 self-end sm:col-span-1"
           >
             <Plus size={18} /> הוסף
           </button>
         </form>
         )}
-
-        {/*  בורר עמודות: לא לכל זוג רלוונטיות כל חמש העמודות. ההסתרה היא
-            תצוגתית בלבד — הנתונים נשמרים וממשיכים להיספר בסיכומים.  */}
-        <div className="mb-3 flex justify-end">
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setColsOpen((v) => !v)}
-              aria-expanded={colsOpen}
-              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-gold-300 hover:text-gold-700"
-            >
-              <Settings2 size={15} />
-              עמודות
-              {hiddenCols.length > 0 && (
-                <span className="rounded-full bg-gold-100 px-1.5 text-[11px] text-gold-700">
-                  {BUDGET_COLUMNS.length - hiddenCols.length}/{BUDGET_COLUMNS.length}
-                </span>
-              )}
-            </button>
-            {colsOpen && (
-              <>
-                <button
-                  type="button"
-                  aria-label="סגירת בורר העמודות"
-                  onClick={() => setColsOpen(false)}
-                  className="fixed inset-0 z-10 cursor-default"
-                />
-                <div className="absolute end-0 z-20 mt-1.5 w-52 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-                  {BUDGET_COLUMNS.map((c) => (
-                    <label
-                      key={c.key}
-                      className="flex cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-sm text-slate-700 hover:bg-slate-50"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={showCol(c.key)}
-                        onChange={() => toggleCol(c.key)}
-                        className="h-4 w-4 accent-gold-500"
-                      />
-                      {L[c.label]}
-                    </label>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
 
         <div className="hidden overflow-x-auto lg:block">
           <table className="w-full min-w-[620px] text-right text-sm">
@@ -6244,53 +6886,31 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                     onCommit={(v) => updateLabel("colCategory", v)}
                   />
                 </th>
-                {showCol("expected") && (
-                  <th className="px-3 py-2 font-semibold">
-                    <EditableText
-                      value={L.colExpected}
-                      onCommit={(v) => updateLabel("colExpected", v)}
-                    />
-                  </th>
-                )}
-                {showCol("actual") && (
-                  <th className="px-3 py-2 font-semibold">
-                    <EditableText
-                      value={L.colActual}
-                      onCommit={(v) => updateLabel("colActual", v)}
-                    />
-                  </th>
-                )}
-                {showCol("paid") && (
-                  <th className="px-3 py-2 font-semibold">
-                    <EditableText
-                      value={L.colPaid}
-                      onCommit={(v) => updateLabel("colPaid", v)}
-                    />
-                  </th>
-                )}
-                {showCol("remaining") && (
-                  <th className="px-3 py-2 font-semibold">
-                    <EditableText
-                      value={L.colRemaining}
-                      onCommit={(v) => updateLabel("colRemaining", v)}
-                    />
-                  </th>
-                )}
-                {showCol("diff") && (
-                  <th className="px-3 py-2 font-semibold">
-                    <EditableText
-                      value={L.colDiff}
-                      onCommit={(v) => updateLabel("colDiff", v)}
-                    />
-                  </th>
-                )}
+                <th className="px-3 py-2 font-semibold">
+                  <EditableText
+                    value={L.colCost}
+                    onCommit={(v) => updateLabel("colCost", v)}
+                  />
+                </th>
+                <th className="px-3 py-2 font-semibold">
+                  <EditableText
+                    value={L.colPaid}
+                    onCommit={(v) => updateLabel("colPaid", v)}
+                  />
+                </th>
+                <th className="px-3 py-2 font-semibold">
+                  <EditableText
+                    value={L.colRemaining}
+                    onCommit={(v) => updateLabel("colRemaining", v)}
+                  />
+                </th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
               {budget.map((b, idx) => {
-                const diff = b.expected - b.actual;
-                const remaining = Math.max(0, b.actual - (b.paid || 0));
+                const rowCost = budgetCostOf(b);
+                const remaining = Math.max(0, rowCost - (b.paid || 0));
                 const vendor = vendorOf(b);
                 const cost = vendor ? contractOf(vendor) : 0;
                 const mismatch =
@@ -6360,66 +6980,37 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                         </span>
                       )}
                     </td>
-                    {showCol("expected") && (
-                      <td className="px-3 py-3">
-                        <input
-                          type="number"
-                          value={b.expected}
-                          onChange={(e) =>
-                            updateItem(b.id, "expected", e.target.value)
-                          }
-                          className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
-                        />
-                      </td>
-                    )}
-                    {showCol("actual") && (
-                      <td className="px-3 py-3">
-                        <input
-                          type="number"
-                          value={b.actual}
-                          onChange={(e) =>
-                            updateItem(b.id, "actual", e.target.value)
-                          }
-                          className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
-                        />
-                      </td>
-                    )}
-                    {showCol("paid") && (
-                      <td className="px-3 py-3">
-                        <input
-                          type="number"
-                          value={b.paid ?? 0}
-                          onChange={(e) => updateItem(b.id, "paid", e.target.value)}
-                          className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
-                        />
-                      </td>
-                    )}
-                    {showCol("remaining") && (
-                      <td className="px-3 py-3">
-                        <span
-                          className={`font-semibold tabular-nums ${
-                            remaining > 0 ? "text-gold-600" : "text-sage-600"
-                          }`}
-                        >
-                          {remaining > 0
-                            ? fmt(remaining)
-                            : b.actual > 0
-                              ? "שולם במלואו"
-                              : fmt(0)}
-                        </span>
-                      </td>
-                    )}
-                    {showCol("diff") && (
-                      <td className="px-3 py-3">
-                        <span
-                          className={`font-semibold tabular-nums ${
-                            diff >= 0 ? "text-sage-600" : "text-rose-500"
-                          }`}
-                        >
-                          {fmt(diff)}
-                        </span>
-                      </td>
-                    )}
+                    <td className="px-3 py-3">
+                      <input
+                        type="number"
+                        value={rowCost}
+                        onChange={(e) => updateCost(b.id, e.target.value)}
+                        aria-label={`${L.colCost} — ${b.category}`}
+                        className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
+                      />
+                    </td>
+                    <td className="px-3 py-3">
+                      <input
+                        type="number"
+                        value={b.paid ?? 0}
+                        onChange={(e) => updatePaid(b.id, e.target.value)}
+                        aria-label={`${L.colPaid} — ${b.category}`}
+                        className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm tabular-nums outline-none focus:border-gold-400"
+                      />
+                    </td>
+                    <td className="px-3 py-3">
+                      <span
+                        className={`font-semibold tabular-nums ${
+                          remaining > 0 ? "text-gold-600" : "text-sage-600"
+                        }`}
+                      >
+                        {remaining > 0
+                          ? fmt(remaining)
+                          : rowCost > 0
+                            ? "שולם במלואו"
+                            : fmt(0)}
+                      </span>
+                    </td>
                     <td className="px-3 py-3 text-left">
                       <div className="flex items-center justify-end gap-0.5">
                         <button
@@ -6453,7 +7044,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
               {budget.length === 0 && (
                 <tr>
                   <td
-                    colSpan={3 + BUDGET_COLUMNS.length - hiddenCols.length}
+                    colSpan={6}
                     className="px-3 py-10 text-center text-slate-400"
                   >
                     עדיין אין סעיפי תקציב – הוסיפו סעיף חדש בעזרת הטופס למעלה.
@@ -6465,23 +7056,9 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
               <tr className="border-t-2 border-slate-200 font-bold text-slate-800">
                 <td className="px-2 py-3"></td>
                 <td className="px-3 py-3">סה״כ</td>
-                {showCol("expected") && (
-                  <td className="px-3 py-3 tabular-nums">{fmt(totals.expected)}</td>
-                )}
-                {showCol("actual") && (
-                  <td className="px-3 py-3 tabular-nums">{fmt(totals.actual)}</td>
-                )}
-                {showCol("paid") && (
-                  <td className="px-3 py-3 tabular-nums">{fmt(totals.paid)}</td>
-                )}
-                {showCol("remaining") && (
-                  <td className="px-3 py-3 tabular-nums">{fmt(totals.remaining)}</td>
-                )}
-                {showCol("diff") && (
-                  <td className="px-3 py-3 tabular-nums">
-                    {fmt(totals.expected - totals.actual)}
-                  </td>
-                )}
+                <td className="px-3 py-3 tabular-nums">{fmt(totals.cost)}</td>
+                <td className="px-3 py-3 tabular-nums">{fmt(totals.paid)}</td>
+                <td className="px-3 py-3 tabular-nums">{fmt(totals.remaining)}</td>
                 <td></td>
               </tr>
             </tfoot>
@@ -6491,8 +7068,8 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
         {/* Mobile card view – same data & actions without horizontal scrolling */}
         <div className="space-y-3 lg:hidden">
           {budget.map((b) => {
-            const diff = b.expected - b.actual;
-            const remaining = Math.max(0, b.actual - (b.paid || 0));
+            const rowCost = budgetCostOf(b);
+            const remaining = Math.max(0, rowCost - (b.paid || 0));
             const vendor = vendorOf(b);
             const cost = vendor ? contractOf(vendor) : 0;
             const mismatch = vendor && (b.expected !== cost || b.actual !== cost);
@@ -6579,122 +7156,86 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                 </div>
 
                 <div className="grid grid-cols-2 gap-2.5">
-                  {showCol("expected") && (
-                    <label className="text-xs font-medium text-slate-500">
-                      {L.colExpected}
-                      <input
-                        type="number"
-                        value={b.expected}
-                        onChange={(e) =>
-                          updateItem(b.id, "expected", e.target.value)
-                        }
-                        className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
-                      />
-                    </label>
-                  )}
-                  {showCol("actual") && (
-                    <label className="text-xs font-medium text-slate-500">
-                      {L.colActual}
-                      <input
-                        type="number"
-                        value={b.actual}
-                        onChange={(e) =>
-                          updateItem(b.id, "actual", e.target.value)
-                        }
-                        className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
-                      />
-                    </label>
-                  )}
-                  {showCol("paid") && (
-                    <label className="col-span-2 text-xs font-medium text-slate-500">
-                      {L.colPaid}
-                      <input
-                        type="number"
-                        value={b.paid ?? 0}
-                        onChange={(e) => updateItem(b.id, "paid", e.target.value)}
-                        className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
-                      />
-                    </label>
-                  )}
+                  <label className="text-xs font-medium text-slate-500">
+                    {L.colCost}
+                    <input
+                      type="number"
+                      value={rowCost}
+                      onChange={(e) => updateCost(b.id, e.target.value)}
+                      aria-label={`${L.colCost} — ${b.category}`}
+                      className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base font-semibold tabular-nums outline-none focus:border-gold-400"
+                    />
+                  </label>
+                  <label className="text-xs font-medium text-slate-500">
+                    {L.colPaid}
+                    <input
+                      type="number"
+                      value={b.paid ?? 0}
+                      onChange={(e) => updatePaid(b.id, e.target.value)}
+                      aria-label={`${L.colPaid} — ${b.category}`}
+                      className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base font-semibold tabular-nums outline-none focus:border-gold-400"
+                    />
+                  </label>
                 </div>
 
-                {(showCol("remaining") || showCol("diff")) && (
-                  <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-2 text-sm">
-                    {showCol("remaining") && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-slate-500">
-                          {L.colRemaining}
-                        </span>
-                        <span
-                          className={`font-semibold tabular-nums ${
-                            remaining > 0 ? "text-gold-600" : "text-sage-600"
-                          }`}
-                        >
-                          {remaining > 0
-                            ? fmt(remaining)
-                            : b.actual > 0
-                              ? "שולם במלואו"
-                              : fmt(0)}
-                        </span>
-                      </div>
-                    )}
-                    {showCol("diff") && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-slate-500">
-                          {L.colDiff}
-                        </span>
-                        <span
-                          className={`font-semibold tabular-nums ${
-                            diff >= 0 ? "text-sage-600" : "text-rose-500"
-                          }`}
-                        >
-                          {fmt(diff)}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
+                {/*  “נותר לשלם” הוא השורה התחתונה של כל סעיף, ולכן הוא מקבל
+                    שורה מודגשת משלו ולא עוד שדה בין השאר.  */}
+                <div
+                  className={`mt-3 flex items-center justify-between rounded-xl px-3 py-2 ${
+                    remaining > 0
+                      ? "bg-gold-50 ring-1 ring-inset ring-gold-200"
+                      : "bg-sage-50 ring-1 ring-inset ring-sage-200"
+                  }`}
+                >
+                  <span className="text-xs font-semibold text-slate-600">
+                    {L.colRemaining}
+                  </span>
+                  <span
+                    className={`text-sm font-bold tabular-nums ${
+                      remaining > 0 ? "text-gold-700" : "text-sage-700"
+                    }`}
+                  >
+                    {remaining > 0
+                      ? fmt(remaining)
+                      : rowCost > 0
+                        ? "שולם במלואו"
+                        : fmt(0)}
+                  </span>
+                </div>
               </div>
             );
           })}
 
-          {budget.length === 0 ? (
+          {budget.length === 0 && (
             <div className="rounded-2xl border border-slate-200 bg-white/60 px-4 py-10 text-center text-sm text-slate-400">
               עדיין אין סעיפי תקציב – הוסיפו סעיף חדש בעזרת הטופס למעלה.
-            </div>
-          ) : (
-            <div className="rounded-2xl bg-slate-800 p-4 text-white">
-              <p className="mb-2 text-sm font-bold">סה״כ</p>
-              <div className="grid grid-cols-2 gap-2 text-center">
-                <div>
-                  <p className="text-[11px] text-white/60">{L.colExpected}</p>
-                  <p className="text-sm font-bold tabular-nums">
-                    {fmt(totals.expected)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[11px] text-white/60">{L.colActual}</p>
-                  <p className="text-sm font-bold tabular-nums">
-                    {fmt(totals.actual)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[11px] text-white/60">{L.colPaid}</p>
-                  <p className="text-sm font-bold tabular-nums">
-                    {fmt(totals.paid)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[11px] text-white/60">{L.colRemaining}</p>
-                  <p className="text-sm font-bold tabular-nums">
-                    {fmt(totals.remaining)}
-                  </p>
-                </div>
-              </div>
             </div>
           )}
         </div>
       </Card>
+
+      <div aria-hidden="true" className="h-28 lg:hidden" />
+      <aside
+        aria-label="סיכום תקציב קבוע"
+        data-tour="finance-mobile-totals"
+        className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-3 pt-2.5 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] shadow-[0_-8px_24px_rgba(15,23,42,0.12)] backdrop-blur-xl lg:hidden"
+      >
+        <p className="mb-1.5 text-[11px] font-bold text-slate-500">סיכום תקציב</p>
+        <div className="grid grid-cols-3 gap-1.5 text-center">
+          <div className="min-w-0 rounded-xl bg-slate-100 px-2 py-1.5">
+            <p className="truncate text-[11px] font-medium text-slate-600">{L.statCost}</p>
+            <p className="truncate text-sm font-bold tabular-nums text-slate-800">{fmt(totals.cost)}</p>
+          </div>
+          <div className="min-w-0 rounded-xl bg-sage-50 px-2 py-1.5">
+            <p className="truncate text-[11px] font-medium text-sage-700">{L.statPaid}</p>
+            <p className="truncate text-sm font-bold tabular-nums text-sage-800">{fmt(totals.paid)}</p>
+          </div>
+          <div className="min-w-0 rounded-xl bg-gold-50 px-2 py-1.5">
+            <p className="truncate text-[11px] font-medium text-gold-800">{L.statRemaining}</p>
+            <p className="truncate text-sm font-bold tabular-nums text-gold-800">{fmt(totals.remaining)}</p>
+          </div>
+        </div>
+      </aside>
     </div>
     </fieldset>
   );
@@ -6740,7 +7281,10 @@ function VendorPortal({ vendors, setVendors, weddingName = "", coupleTitle = "" 
           action={
             <select
               value={activeId}
-              onChange={(e) => setSelectedId(Number(e.target.value))}
+              onChange={(e) => {
+                const selected = vendors.find((item) => String(item.id) === e.target.value);
+                setSelectedId(selected?.id ?? e.target.value);
+              }}
               disabled={vendors.length === 0}
               className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold outline-none focus:border-gold-400"
             >
@@ -6798,7 +7342,7 @@ function VendorPortal({ vendors, setVendors, weddingName = "", coupleTitle = "" 
                       .join(" · ")}
                   </span>
                 </div>
-                <h3 className="mt-3 font-[var(--font-display)] text-2xl font-bold">
+                <h3 className="mt-3 text-2xl font-bold">
                   {vendor.name}
                 </h3>
                 <p className="text-sm text-white/70">{vendor.type}</p>
@@ -6962,7 +7506,7 @@ function usePersistentState(key, initial) {
  * see their data vanish. We offer to import it — explicitly, never silently,
  * because on a shared machine that data may belong to a different person.
  */
-const LEGACY_DATASET_KEYS = ["guests", "tables", "vendors", "budget"];
+const LEGACY_DATASET_KEYS = ["guests", "tables", "vendors", "budget", "checklist"];
 
 function readLegacyDatasets() {
   const out = {};
@@ -6974,7 +7518,53 @@ function readLegacyDatasets() {
       total += v.length;
     }
   }
-  return total ? { datasets: out, total } : null;
+
+  const settings = {};
+  for (const key of ["budgetGoal", "financeLabels", "categories", "couple", "weddingDate", "countdownBackgroundUrl"]) {
+    const value = loadStored(STORAGE_ROOT, key, null);
+    if (value != null) settings[key] = value;
+  }
+  total += Object.keys(settings).length;
+  return total ? { datasets: out, settings, total } : null;
+}
+
+function normalizeLegacyVendorIds(weddingId, datasets) {
+  const mapKey = `legacy-vendor-ids-${weddingId}`;
+  let mapping = loadStored(STORAGE_ROOT, mapKey, {});
+  if (!mapping || typeof mapping !== "object" || Array.isArray(mapping)) mapping = {};
+  const isUuid = (value) =>
+    typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  const vendors = (datasets.vendors || []).map((vendor) => {
+    if (isUuid(vendor.id)) {
+      if (vendor.legacyId != null) mapping[String(vendor.legacyId)] = String(vendor.id);
+      return { ...vendor, id: String(vendor.id) };
+    }
+    const legacyId = String(vendor.id);
+    mapping[legacyId] ||= crypto.randomUUID();
+    return { ...vendor, id: mapping[legacyId], legacyId };
+  });
+  try {
+    localStorage.setItem(STORAGE_ROOT + mapKey, JSON.stringify(mapping));
+  } catch {
+    throw new Error("Could not persist the vendor ID migration map locally.");
+  }
+  const vendorIdMap = new Map(Object.entries(mapping));
+  return {
+    ...datasets,
+    vendors,
+    budget: (datasets.budget || []).map((row) => ({
+      ...row,
+      vendorId: row.vendorId == null
+        ? null
+        : (vendorIdMap.get(String(row.vendorId)) || String(row.vendorId)),
+    })),
+  };
+}
+
+function canonicalDataset(key, rows) {
+  return [...(rows || [])]
+    .map((row) => ENTITIES[key].toDoc(row))
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
 }
 
 function clearLegacyData() {
@@ -6988,6 +7578,35 @@ function clearLegacyData() {
     }
   } catch {
     /* ignore */
+  }
+}
+
+class ScreenErrorBoundary extends Component {
+  state = { error: null };
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("Application screen render failed:", error, info);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-slate-800">
+        <h2 className="font-bold text-rose-800">לא ניתן להציג את המסך כרגע</h2>
+        <p className="mt-1 text-sm text-rose-700">הנתונים לא נמחקו. נסו לטעון את המסך מחדש.</p>
+        {import.meta.env.DEV && this.state.error && (
+          <details className="mt-3 rounded-xl bg-white p-3 text-xs text-slate-700 ring-1 ring-rose-200">
+            <summary className="cursor-pointer font-semibold">פרטי תקלה למפתח</summary>
+            <pre className="mt-2 whitespace-pre-wrap break-words">{this.state.error.name}: {this.state.error.message}</pre>
+          </details>
+        )}
+        <button type="button" onClick={() => window.location.reload()} className="btn-secondary mt-3">טעינה מחדש</button>
+      </div>
+    );
   }
 }
 
@@ -7071,11 +7690,20 @@ captureInviteToken();
     (קישורים ישנים שעוד בתוקף). שולפים אותו לזיכרון ומוחקים מיד
     משורת הכתובת, בדיוק כמו טוקן הזמנה: כתובות נשמרות בהיסטוריה,
     נשלחות ב-Referer ומופיעות בלוגים.  */
-function captureResetToken() {
+function captureAuthAction() {
   try {
     const params = new URLSearchParams(window.location.search);
-    const token = params.get("oobCode") || params.get("reset");
-    if (!token) return "";
+    const mode = params.get("mode") || "";
+    const oobCode = params.get("oobCode");
+    const legacyReset = params.get("reset");
+    const verifyEmail = mode === "verifyEmail" && oobCode;
+    const resetPassword = (mode === "resetPassword" && oobCode) || (!mode && legacyReset);
+    const token = verifyEmail ? oobCode : resetPassword ? (oobCode || legacyReset) : "";
+    if (!token) return { resetToken: "", verifyToken: "" };
+    const action = {
+      resetToken: verifyEmail ? "" : token,
+      verifyToken: verifyEmail ? token : "",
+    };
     params.delete("oobCode");
     params.delete("reset");
     params.delete("mode");
@@ -7087,58 +7715,30 @@ function captureResetToken() {
       "",
       window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash
     );
-    return token;
+    return action;
   } catch {
-    return "";
+    return { resetToken: "", verifyToken: "" };
   }
 }
 
-const INITIAL_RESET_TOKEN = captureResetToken();
-
-/*  משך ההיעלמות. חייב להתאים ל-duration-500 שבתוך BootScreen — ערך קצר
-    מכאן מסיר את המסך באמצע ההנפשה, וארוך ממנו משאיר שכבה שקופה תקועה מעל
-    הדשבורד אחרי שהיא כבר בלתי נראית.  */
-const BOOT_FADE_MS = 500;
-/*  רשת ביטחון בלבד, לא זמן טעינה צפוי: טעינה מלאה של חתונה עם
-    596 מוזמנים נמדדה בכ-2.4 שניות. הערך כאן תופס רק תקיעה אמיתית,
-    כמו רשת שנעלמה באמצע הטעינה.  */
-const BOOT_FAILSAFE_MS = 20_000;
+const INITIAL_AUTH_ACTION = captureAuthAction();
 
 /*  מסך הטעינה של האפליקציה. הוא ממשיך ויזואלית את מסך הפתיחה שב-index.html,
     כך שהמעבר מה-HTML הסטטי ל-React אינו נראה כמו קפיצה. אחרי כמה שניות
     מתווספת הודעה שמסבירה למה זה לוקח זמן — השירות בענן נכבה כשאין פעילות,
     וההתעוררות שלו אורכת עשרות שניות. בלי ההסבר המשתמש חושב שהמערכת תקועה.
     הניסוח מדבר על "המערכת" ולא על "השרת", כי זה מונח שלא אומר כלום למי
-    שרק רוצה לתכנן חתונה.
-
-    fading מפעיל את ההיעלמות. המסך נשאר מורכב לאורך ההנפשה ורק אחריה יורד,
-    ולכן הוא חייב להיות fixed מעל התוכן ולא להחליף אותו.  */
-function BootScreen({ fading = false }) {
+    שרק רוצה לתכנן חתונה.  */
+function BootScreen() {
   const [slow, setSlow] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setSlow(true), 4000);
     return () => clearTimeout(t);
   }, []);
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      aria-hidden={fading}
-      className={`fixed inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-gradient-to-b from-white via-gold-50 to-sage-50 px-6 text-center transition-opacity duration-500 motion-reduce:transition-none ${
-        fading ? "pointer-events-none opacity-0" : "opacity-100"
-      }`}
-    >
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gradient-to-b from-white to-gold-50 px-6 text-center">
       <img src="/icon-192.png" alt="" className="h-16 w-16 rounded-2xl shadow-sm" />
-      <div className="relative grid h-20 w-20 place-items-center">
-        <span className="animate-boot-ring absolute inset-0 rounded-full border-[3px] border-gold-100 border-t-gold-500" />
-        <span className="animate-boot-ring-reverse absolute inset-2 rounded-full border-2 border-transparent border-b-sage-300" />
-        <Heart
-          size={26}
-          strokeWidth={1.5}
-          fill="currentColor"
-          className="animate-boot-beat text-gold-500"
-        />
-      </div>
+      <Loader2 className="animate-spin text-gold-500" size={30} />
       <p className="text-lg font-bold text-slate-800">מכינים את החתונה שלכם…</p>
       <p className="max-w-sm text-sm leading-6 text-slate-500">
         {slow
@@ -7158,27 +7758,28 @@ async function signOutAndWipe() {
   }
 }
 
-export default function App() {
+function AppContent() {
   const [authReady, setAuthReady] = useState(!isCloudConfigured);
-  const [initialDataReady, setInitialDataReady] = useState(!isCloudConfigured);
-  const [initialDataTimedOut, setInitialDataTimedOut] = useState(false);
-  const [bootTimedOut, setBootTimedOut] = useState(false);
   const [session, setSession] = useState(null);
-  const [resetToken, setResetToken] = useState(INITIAL_RESET_TOKEN);
-  const handleInitialDataReady = useCallback((timedOut = false) => {
-    setInitialDataTimedOut(timedOut);
-    setInitialDataReady(true);
-  }, []);
+  const [resetToken, setResetToken] = useState(INITIAL_AUTH_ACTION.resetToken);
+  const [verifyToken, setVerifyToken] = useState(INITIAL_AUTH_ACTION.verifyToken);
 
   useEffect(() => {
     if (!isCloudConfigured) return;
     let active = true;
     // העוגייה היא httpOnly, ולכן הדרך היחידה לדעת אם יש סשן היא לשאול את השרת.
-    loadSession().then((s) => {
-      if (!active) return;
-      setSession(s);
-      setAuthReady(true);
-    });
+    loadSession()
+      .then((s) => {
+        if (!active) return;
+        setSession(s);
+        setAuthReady(true);
+      })
+      .catch((err) => {
+        console.error("Firebase Auth session restoration failed:", err);
+        if (!active) return;
+        setSession(null);
+        setAuthReady(true);
+      });
     const unsubscribe = onAuthChange((s) => setSession(s));
     return () => {
       active = false;
@@ -7186,73 +7787,49 @@ export default function App() {
     };
   }, []);
 
-  /*  מי שהגיע מקישור איפוס סיסמה מדלג על מסך הטעינה: המסך שלו מוכן מיד
-      ואינו ממתין לסשן, ולכן אין מה לכסות.  */
-  const bootDone =
-    !isCloudConfigured ||
-    Boolean(resetToken) ||
-    bootTimedOut ||
-    (authReady && (!session || initialDataReady));
-  const [bootMounted, setBootMounted] = useState(!bootDone);
-
-  /*  שני הכיוונים באותו effect. הכניסה למערכת מחזירה את bootDone ל-false
-      (יש סשן, הנתונים עוד לא נטענו), ואם המסך לא מורכב מחדש נשאר מסך לבן
-      ריק עד שהנתונים מגיעים — כי בשלב הזה גם התוכן עדיין null.  */
-  useEffect(() => {
-    if (!bootDone) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setBootMounted(true);
-      return;
-    }
-    const t = setTimeout(() => setBootMounted(false), BOOT_FADE_MS);
-    return () => clearTimeout(t);
-  }, [bootDone]);
-
-  useEffect(() => {
-    if (bootDone || !isCloudConfigured || resetToken) return;
-    const timer = setTimeout(() => {
-      setBootTimedOut(true);
-      handleInitialDataReady(true);
-    }, BOOT_FAILSAFE_MS);
-    return () => clearTimeout(timer);
-  }, [bootDone, handleInitialDataReady, resetToken]);
-
-  let content;
-
   //  מסך איפוס הסיסמה קודם לכל השאר, וגם לפני בדיקת הסשן: מי שהגיע
   //  מהקישור שבמייל רוצה לקבוע סיסמה חדשה גם אם במקרה עדיין יש לו סשן פתוח.
   if (isCloudConfigured && resetToken) {
-    content = <ResetPasswordScreen token={resetToken} onDone={() => setResetToken("")} />;
-  } else if (isCloudConfigured && !authReady) {
-    /*  רק עד שהסשן ידוע. מכאן והלאה התוכן חייב להיות מורכב גם אם מסך
-        הטעינה עדיין מכסה אותו: הוא זה שטוען את הנתונים, ובלעדיו
-        initialDataReady לעולם לא יתקיים והמסך היה נשאר תקוע עד ה-failsafe.  */
-    content = null;
-  } else if (isCloudConfigured && !session) {
-    content = <LoginScreen />;
-  } else if (!isCloudConfigured) {
-    // מצב מקומי בלבד (ללא שרת): אין משתמש ואין חתונה – תחילית ה-localStorage
-    // נשארת הישנה (`wp:v1:<key>`) וכל שכבת הענן מנוטרלת.
-    content = (
-      <StoragePrefixContext.Provider value={STORAGE_ROOT}>
-        <WeddingApp session={null} weddingId={null} role="owner" weddings={[]} />
-      </StoragePrefixContext.Provider>
+    return (
+      <ResetPasswordScreen token={resetToken} onDone={() => setResetToken("")} />
     );
-  } else {
-    content = (
-      <WeddingShell
-        session={session}
-        initialDataTimedOut={initialDataTimedOut}
-        onInitialDataReady={handleInitialDataReady}
+  }
+
+  if (isCloudConfigured && verifyToken) {
+    return (
+      <VerifyEmailScreen
+        token={verifyToken}
+        onDone={() => setVerifyToken("")}
       />
     );
   }
 
+  if (isCloudConfigured && !authReady) {
+    return <BootScreen />;
+  }
+
+  if (isCloudConfigured && !session) {
+    return <LoginScreen />;
+  }
+
+  // מצב מקומי בלבד (ללא שרת): אין משתמש ואין חתונה – תחילית ה-localStorage
+  // נשארת הישנה (`wp:v1:<key>`) וכל שכבת הענן מנוטרלת.
+  if (!isCloudConfigured) {
+    return (
+      <StoragePrefixContext.Provider value={STORAGE_ROOT}>
+        <WeddingApp session={null} weddingId={null} role="owner" weddings={[]} />
+      </StoragePrefixContext.Provider>
+    );
+  }
+
+  return <WeddingShell session={session} />;
+}
+
+export default function App() {
   return (
-    <>
-      {content}
-      {bootMounted && <BootScreen fading={bootDone} />}
-    </>
+    <ScreenErrorBoundary>
+      <AppContent />
+    </ScreenErrorBoundary>
   );
 }
 
@@ -7263,7 +7840,7 @@ const isValidEmail = (value) => EMAIL_RE.test(String(value).trim());
 
 /*  שדה מייל אחיד לכל מסכי ההזדהות: אותה ולידציה, אותו dir="ltr", אותו
     autoComplete. בלי זה כל מסך היה מתנהג קצת אחרת.  */
-function EmailField({ value, onChange, label = "מייל", autoFocus = false, tourId }) {
+function EmailField({ value, onChange, onBlur, label = "מייל", autoFocus = false, tourId }) {
   return (
     <label className="block space-y-1">
       <span className="text-xs font-medium text-slate-500">{label}</span>
@@ -7281,6 +7858,7 @@ function EmailField({ value, onChange, label = "מייל", autoFocus = false, to
           spellCheck={false}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
           className="w-full bg-transparent text-sm outline-none"
           placeholder="name@example.com"
           dir="ltr"
@@ -7294,13 +7872,13 @@ function EmailField({ value, onChange, label = "מייל", autoFocus = false, to
     כדי שהמעבר ביניהם לא "יקפיץ" את העיצוב.  */
 function AuthCard({ title, subtitle, onSubmit, children }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gold-50 via-white to-sage-50 p-6">
+    <div className="flex min-h-screen flex-col items-center bg-gradient-to-br from-gold-50 via-white to-sage-50 p-6">
       <form
         onSubmit={onSubmit}
         //  ולידציית הדפדפן מציגה הודעות באנגלית ובכיוון LTR, מה שנראה שבור
         //  במסך עברי. הבדיקות שלנו רצות בכל מקרה ב-submit ומציגות הודעה בעברית.
         noValidate
-        className="w-full max-w-sm space-y-5 rounded-3xl bg-white/80 p-8 shadow-xl ring-1 ring-white/60 backdrop-blur-xl"
+        className="my-auto w-full max-w-sm space-y-5 rounded-3xl bg-white/80 p-8 shadow-xl ring-1 ring-white/60 backdrop-blur-xl"
       >
         <div className="flex flex-col items-center gap-3 text-center">
           <Logo className="h-32 w-32" rounded="rounded-3xl" />
@@ -7331,6 +7909,10 @@ function LoginScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [passkeyEmail] = useState(rememberedPasskeyEmail);
+  //  האם האתגר כבר בידינו. כל עוד לא, לחיצה תמתין לרשת והכפתור אומר זאת.
+  const [passkeyWarm, setPasskeyWarm] = useState(() => passkeyLoginWarm(passkeyEmail || undefined));
   //  ההדרכה אינה נפתחת לבד: השכבה שלה חוסמת את כפתור ההתחברות,
   //  ומשתמש חוזר שרק רוצה להתחבר נתקל במסך שנראה תקוע. הכפתור
   //  “הדרכה: איך פותחים חשבון” נשאר זמין למי שמעוניין.
@@ -7339,45 +7921,6 @@ function LoginScreen() {
   //  חדש בכל רנדור היה מכניס אותו ללולאת מדידה אינסופית.
   const authSteps = useMemo(() => authTourSteps(setMode), []);
 
-  /*  הכניסה המהירה מוצגת רק כשיש חיישן ביומטרי במכשיר. כפתור שנכשל תמיד
-      גרוע מכפתור שלא קיים, במיוחד במסך שכל מטרתו להכניס אנשים פנימה.  */
-  const [biometricReady, setBiometricReady] = useState(false);
-  const [passkeyBusy, setPasskeyBusy] = useState(false);
-  const rememberedEmail = useMemo(() => rememberedPasskeyEmail(), []);
-
-  useEffect(() => {
-    let alive = true;
-    platformAuthenticatorAvailable().then((ok) => {
-      if (alive) setBiometricReady(ok);
-    });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  async function passkeyLogin() {
-    setError("");
-    setInfo("");
-    /*  תמיד עם כתובת מייל. בקשה בלי allowCredentials נשענת על כך
-        שהמכשיר יציע בעצמו את החשבון, וזה נכשל בחלק מהדפדפנים ומחזיר
-        NotAllowedError שנראה למשתמש כמו ביטול. הכתובת נשמרת ברישום,
-        ולכן ברוב המקרים אין מה להקליד.  */
-    const address = email.trim() || rememberedEmail;
-    if (!address) {
-      setError("הקלידו את כתובת המייל ואז לחצו שוב על הכניסה המהירה.");
-      return;
-    }
-    setPasskeyBusy(true);
-    try {
-      await signInWithPasskey(address);
-      //  onAuthChange כבר מעדכן את App — אין צורך לנווט ידנית.
-    } catch (err) {
-      setError(passkeyErrorMessage(err));
-    } finally {
-      setPasskeyBusy(false);
-    }
-  }
-
   function closeTour() {
     setTourOn(false);
     markGuideSeen("auth");
@@ -7385,6 +7928,36 @@ function LoginScreen() {
 
   const signup = mode === "signup";
   const forgot = mode === "forgot";
+
+  //  החימום עצמו כבר התחיל ב-main.jsx לפני שהרכיב הזה נטען. כאן רק
+  //  מתעדכנים במצב, ומחממים מחדש אם המייל שבשדה שונה מזה שהוכן.
+  const warmPasskey = useCallback((value) => {
+    if (!passkeySupported()) return;
+    setPasskeyWarm(passkeyLoginWarm(value));
+    preparePasskeyLogin(value)
+      .then(() => setPasskeyWarm(passkeyLoginWarm(value)))
+      .catch(() => setPasskeyWarm(false));
+  }, []);
+
+  useEffect(() => {
+    if (signup || forgot) return;
+    warmPasskey(passkeyEmail || undefined);
+  }, [forgot, passkeyEmail, signup, warmPasskey]);
+
+  async function loginWithPasskey() {
+    setError("");
+    setPasskeyBusy(true);
+    const target = email.trim() || passkeyEmail || undefined;
+    try {
+      await signInWithPasskey(target);
+    } catch (err) {
+      setError(passkeyErrorMessage(err));
+      //  הכניסה צורכת את האתגר המוכן. בלי חימום מחדש ניסיון שני היה קר.
+      warmPasskey(target);
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
 
   function switchMode(next) {
     setMode(next);
@@ -7413,7 +7986,7 @@ function LoginScreen() {
         //  נוסח מכוון-מעורפל: השרת לא מסגיר אם הכתובת רשומה, ולכן גם
         //  ההודעה כאן לא יכולה לאשר זאת.
         setInfo(
-          "קישור לאיפוס סיסמא נשלח! אנא בדקו גם את תיבת הדואר הזבל (Spam) שלכם. הקישור תקף לשעה."
+          "אם הכתובת רשומה במערכת, נשלח אליה קישור לאיפוס הסיסמה. הקישור תקף לשעה."
         );
         setPassword("");
       } else if (signup) {
@@ -7472,7 +8045,16 @@ function LoginScreen() {
         </p>
       )}
 
-      <EmailField value={email} onChange={setEmail} tourId="auth-email" />
+      <EmailField
+        value={email}
+        onChange={setEmail}
+        onBlur={() => {
+          if (!signup && !forgot && email.trim()) {
+            warmPasskey(email.trim());
+          }
+        }}
+        tourId="auth-email"
+      />
 
       {/*  מי שמצטרף לחתונה קיימת לא פותח חתונה משלו, ולכן שדה התאריך
           שלה רק מבלבל אותו.  */}
@@ -7574,38 +8156,24 @@ function LoginScreen() {
         type="submit"
         disabled={busy}
         data-tour="auth-submit"
-        className="flex w-full items-center justify-center gap-2 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-gold-600 disabled:opacity-60"
+        className="btn-primary min-h-11 w-full"
       >
         {busy ? <Loader2 size={16} className="animate-spin" /> : <Lock size={16} />}
         {forgot ? "שליחת קישור לאיפוס" : signup ? "הרשמה" : "התחברות"}
       </button>
 
-      {/*  כניסה ביומטרית רק במסך ההתחברות: בהרשמה עוד אין חשבון לקשור
-          אליו מכשיר, ובאיפוס סיסמה זה היה מבלבל בין שני מסלולים.  */}
-      {!signup && !forgot && biometricReady && (
-        <>
-          <div className="flex items-center gap-3">
-            <span className="h-px flex-1 bg-slate-200" />
-            <span className="text-[11px] font-medium text-slate-400">או</span>
-            <span className="h-px flex-1 bg-slate-200" />
-          </div>
-          <button
-            type="button"
-            onClick={passkeyLogin}
-            disabled={passkeyBusy || busy}
-            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:opacity-60"
-          >
-            {passkeyBusy ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <Fingerprint size={16} className="text-gold-600" />
-            )}
-            כניסה עם Face ID או טביעת אצבע
-          </button>
-          <p className="text-center text-[11px] text-slate-400">
-            עובד רק אחרי שהפעלתם את הכניסה המהירה במכשיר הזה, מתוך „הגדרות החתונה”.
-          </p>
-        </>
+      {!signup && !forgot && passkeySupported() && (
+        <button
+          type="button"
+          onClick={loginWithPasskey}
+          disabled={busy || passkeyBusy}
+          className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:opacity-60"
+        >
+          {passkeyBusy ? <Loader2 size={16} className="animate-spin" /> : <Fingerprint size={17} />}
+          {/*  לחיצה לפני שהאתגר מוכן ממתינה לרשת. "מתחמם" אומר למשתמש
+              שמשהו קורה, במקום ספינר כללי שנראה כמו מסך תקוע.  */}
+          {passkeyBusy && !passkeyWarm ? "מתחמם…" : "כניסה מהירה עם Passkey"}
+        </button>
       )}
 
       {/*  min-h-11: קישורי טקסט בגובה של שורה אחת קטנים מדי ללחיצה באצבע.  */}
@@ -7655,11 +8223,34 @@ function ResetPasswordScreen({ token, onDone }) {
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [resetEmail, setResetEmail] = useState("");
+  const [checkingLink, setCheckingLink] = useState(true);
   const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setCheckingLink(true);
+    setResetEmail("");
+    setError("");
+    verifyPasswordResetCode(token)
+      .then((email) => {
+        if (active) setResetEmail(email);
+      })
+      .catch((err) => {
+        if (active) setError(authErrorMessage(err, "reset"));
+      })
+      .finally(() => {
+        if (active) setCheckingLink(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [token]);
 
   async function submit(e) {
     e.preventDefault();
     setError("");
+    if (checkingLink || !resetEmail) return;
     if (password.length < 8) {
       setError("הסיסמה חייבת להכיל לפחות 8 תווים.");
       return;
@@ -7695,7 +8286,7 @@ function ResetPasswordScreen({ token, onDone }) {
         </p>
         <button
           type="submit"
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-gold-600"
+          className="btn-primary w-full"
         >
           <Lock size={16} /> למסך ההתחברות
         </button>
@@ -7706,9 +8297,26 @@ function ResetPasswordScreen({ token, onDone }) {
   return (
     <AuthCard
       title="קביעת סיסמה חדשה"
-      subtitle="בחרו סיסמה שלא השתמשתם בה באתר אחר"
+      subtitle={resetEmail ? `איפוס סיסמה עבור ${resetEmail}` : "בחרו סיסמה שלא השתמשתם בה באתר אחר"}
       onSubmit={submit}
     >
+      {checkingLink && (
+        <p role="status" className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 ring-1 ring-slate-200">
+          בודקים את קישור האיפוס…
+        </p>
+      )}
+      {!checkingLink && !resetEmail && error && (
+        <>
+          <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-600 ring-1 ring-rose-200">
+            {error}
+          </p>
+          <button type="button" onClick={onDone} className="btn-secondary w-full">
+            חזרה למסך ההתחברות
+          </button>
+        </>
+      )}
+      {!checkingLink && resetEmail && (
+        <>
       <label className="block space-y-1">
         <span className="text-xs font-medium text-slate-500">סיסמה חדשה</span>
         <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 ring-1 ring-slate-200 focus-within:ring-gold-400">
@@ -7716,7 +8324,6 @@ function ResetPasswordScreen({ token, onDone }) {
           <input
             type="password"
             required
-            minLength={8}
             autoFocus
             autoComplete="new-password"
             value={password}
@@ -7736,7 +8343,6 @@ function ResetPasswordScreen({ token, onDone }) {
           <input
             type="password"
             required
-            minLength={8}
             autoComplete="new-password"
             value={confirm}
             onChange={(e) => setConfirm(e.target.value)}
@@ -7748,15 +8354,15 @@ function ResetPasswordScreen({ token, onDone }) {
       </label>
 
       {error && (
-        <p className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-600 ring-1 ring-rose-200">
+        <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-600 ring-1 ring-rose-200">
           {error}
         </p>
       )}
 
       <button
         type="submit"
-        disabled={busy}
-        className="flex w-full items-center justify-center gap-2 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-gold-600 disabled:opacity-60"
+        disabled={busy || checkingLink}
+        className="btn-primary w-full"
       >
         {busy ? <Loader2 size={16} className="animate-spin" /> : <Lock size={16} />}
         עדכון הסיסמה
@@ -7769,6 +8375,66 @@ function ResetPasswordScreen({ token, onDone }) {
       >
         ביטול, חזרה למסך ההתחברות
       </button>
+        </>
+      )}
+    </AuthCard>
+  );
+}
+
+function VerifyEmailScreen({ token, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState("");
+
+  async function verify() {
+    setBusy(true);
+    setError("");
+    try {
+      await verifyEmailActionCode(token);
+      setDone(true);
+    } catch (err) {
+      console.error("Email verification failed:", err);
+      setError("קישור האימות אינו תקף או שפג תוקפו. בקשו קישור חדש.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AuthCard
+      title="אימות כתובת המייל"
+      subtitle={done ? "הכתובת אומתה בהצלחה" : "אשרו שהכתובת הזו שייכת לכם"}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (done) onDone();
+        else verify();
+      }}
+    >
+      {error && (
+        <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-600 ring-1 ring-rose-200">
+          {error}
+        </p>
+      )}
+      {done ? (
+        <>
+          <p className="rounded-lg bg-sage-50 px-3 py-2 text-xs text-sage-700 ring-1 ring-sage-200">
+            כתובת המייל אומתה. אפשר לחזור לאפליקציה ולהתחבר.
+          </p>
+          <button type="submit" className="btn-primary w-full">
+            המשך לאפליקציה
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="text-center text-sm leading-6 text-slate-600">
+            אימות המייל נדרש כדי לצרף חשבון קיים לחתונה משותפת.
+          </p>
+          <button type="submit" disabled={busy} className="btn-primary w-full disabled:opacity-60">
+            {busy && <Loader2 size={16} className="animate-spin" />}
+            אימות כתובת המייל
+          </button>
+        </>
+      )}
     </AuthCard>
   );
 }
@@ -7778,7 +8444,7 @@ function ResetPasswordScreen({ token, onDone }) {
  *  ובוחר את החתונה הפעילה. מרנדר את WeddingApp עם key ייחודי לכל צירוף
  *  משתמש+חתונה, כך שכל המצב (וה-localStorage שמאחוריו) מתאפס בהחלפה.
  * ---------------------------------------------------------------------- */
-function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
+function WeddingShell({ session }) {
   const userId = session.user.id;
   const activeKey = `${STORAGE_ROOT}${userId}:activeWeddingId`;
 
@@ -7795,6 +8461,7 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
   //  על השנייה. בלי הניסיון החוזר המשתמש נתקע במסך שגיאה שהמוצא היחיד
   //  ממנו הוא יציאה מהחשבון — והוא לא אמור לדעת שמדובר במסד שמתעורר.
   const [attempt, setAttempt] = useState(0);
+  const [retrying, setRetrying] = useState(false);
 
   const retry = useCallback(() => {
     setError("");
@@ -7816,12 +8483,19 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
         let target = null;
         const token = sessionStorage.getItem(INVITE_STORAGE_KEY);
         if (token) {
-          sessionStorage.removeItem(INVITE_STORAGE_KEY);
           try {
             target = await acceptInvite(token);
+            sessionStorage.removeItem(INVITE_STORAGE_KEY);
             notify("ההזמנה התקבלה – החתונה נוספה לרשימה שלך", { tone: "success" });
           } catch (err) {
-            notify(inviteErrorMessage(err), { tone: "error", duration: 8000 });
+            notify(inviteErrorMessage(err), { tone: "error", duration: 10000 });
+          }
+        } else {
+          try {
+            await ensureMyWedding();
+          } catch (err) {
+            // Keep the signed-in flow recoverable; the create-wedding screen remains available.
+            console.error("Account setup recovery failed:", err);
           }
         }
         //  קוראים ישירות ולא דרך refreshWeddings, כדי ששתי ההשמות — הרשימה
@@ -7830,6 +8504,7 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
         //  החתונה שלכם" מהבהב למי שכבר יש לו חתונה.
         const list = await listWeddings();
         if (cancelled) return;
+        setRetrying(false);
         setWeddings(list);
         setActiveWeddingId((cur) => {
           if (target && list.some((w) => w.id === target)) return target;
@@ -7850,11 +8525,12 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
           err?.code === "timeout";
 
         if (transient && attempt < 3) {
+          setRetrying(true);
           timer = setTimeout(() => setAttempt((n) => n + 1), 2000 * 2 ** attempt);
           return;
         }
 
-        onInitialDataReady?.();
+        setRetrying(false);
         setError(
           transient
             ? "המערכת עדיין מתעוררת. המתינו רגע ונסו שוב."
@@ -7867,7 +8543,7 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
       if (timer) clearTimeout(timer);
     };
     //  attempt בכוונה ברשימה — הגדלתו היא שמפעילה ניסיון טעינה נוסף.
-  }, [attempt, onInitialDataReady]);
+  }, [attempt]);
 
   useEffect(() => {
     try {
@@ -7887,6 +8563,13 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
     [refreshWeddings]
   );
 
+  const handleDeleteWedding = useCallback(async (weddingId, confirmationName) => {
+    await deleteWedding(weddingId, confirmationName);
+    const list = await listWeddings();
+    setWeddings(list);
+    setActiveWeddingId(list[0]?.id ?? null);
+  }, []);
+
   if (error) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
@@ -7895,7 +8578,7 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
         <div className="flex items-center gap-2">
           <button
             onClick={retry}
-            className="rounded-xl bg-gold-500 px-4 py-2 text-sm font-semibold text-white"
+            className="btn-primary"
           >
             נסו שוב
           </button>
@@ -7911,35 +8594,19 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
   }
 
   if (weddings === null) {
-    if (initialDataTimedOut) {
-      return (
-        <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
-          <CloudOff className="text-rose-400" size={32} />
-          <p className="text-sm text-slate-600">טעינת הנתונים נמשכת זמן רב מהרגיל.</p>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={retry}
-              className="rounded-xl bg-gold-500 px-4 py-2 text-sm font-semibold text-white"
-            >
-              נסו שוב
-            </button>
-            <button
-              onClick={signOutAndWipe}
-              className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-600 ring-1 ring-slate-200"
-            >
-              יציאה
-            </button>
-          </div>
-        </div>
-      );
-    }
-    return null;
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3">
+        <Loader2 className="animate-spin text-gold-500" size={32} />
+        {retrying && (
+          <p className="text-xs text-slate-400">המערכת מתעוררת, עוד רגע…</p>
+        )}
+      </div>
+    );
   }
 
   const activeWedding = weddings.find((w) => w.id === activeWeddingId) ?? null;
 
   if (!activeWedding) {
-    onInitialDataReady?.();
     return <NoWeddingScreen onCreate={handleCreateWedding} />;
   }
 
@@ -7955,10 +8622,10 @@ function WeddingShell({ session, initialDataTimedOut, onInitialDataReady }) {
         scopes={activeWedding.scopes}
         weddings={weddings}
         activeWedding={activeWedding}
-        onInitialDataReady={onInitialDataReady}
         onSwitchWedding={setActiveWeddingId}
         onCreateWedding={handleCreateWedding}
         onWeddingChanged={refreshWeddings}
+        onDeleteWedding={handleDeleteWedding}
       />
     </StoragePrefixContext.Provider>
   );
@@ -7970,6 +8637,8 @@ function inviteErrorMessage(err) {
   if (msg.includes("invite_already_used")) return "ההזמנה כבר נוצלה.";
   if (msg.includes("invite_email_mismatch"))
     return "ההזמנה נוצרה עבור כתובת מייל אחרת. התחברו עם הכתובת שעבורה נוצרה.";
+  if (msg.includes("invite_email_unverified"))
+    return "צריך לאמת את כתובת המייל לפני קבלת ההזמנה. אמתו אותה דרך הקישור שנשלח אליכם, ואז רעננו את הדף; ההזמנה נשמרה.";
   if (msg.includes("invite_not_found")) return "קישור ההזמנה אינו תקין.";
   return "קבלת ההזמנה נכשלה.";
 }
@@ -8001,7 +8670,7 @@ function NoWeddingScreen({ onCreate }) {
       >
         <div className="flex flex-col items-center gap-2 text-center">
           <Logo className="h-24 w-24" rounded="rounded-3xl" />
-          <h1 className="font-[var(--font-display)] text-xl font-bold text-slate-800">
+          <h1 className="font-display text-xl font-bold text-slate-800">
             בואו ניצור את החתונה שלכם
           </h1>
         </div>
@@ -8026,7 +8695,7 @@ function NoWeddingScreen({ onCreate }) {
         <button
           type="submit"
           disabled={busy}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-gold-600 disabled:opacity-60"
+          className="btn-primary w-full"
         >
           {busy ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
           יצירת חתונה
@@ -8050,13 +8719,19 @@ function WeddingApp({
   scopes = ["all"],
   weddings = [],
   activeWedding = null,
-  onInitialDataReady,
   onSwitchWedding,
   onCreateWedding,
   onWeddingChanged,
+  onDeleteWedding,
 }) {
   //  הניווט מסונן לפי ההיקף, והמסך הפעיל חייב להיות אחד מהמסכים המותרים.
-  const navItems = useMemo(() => navForScopes(scopes), [scopes]);
+  const adminAllowed = !!session?.user?.emailVerified && isAdminEmail(session?.user?.email);
+  const navItems = useMemo(() => {
+    const items = navForScopes(scopes);
+    return adminAllowed
+      ? [...items, { key: "admin", label: "ניהול מערכת", icon: ShieldCheck, scope: null }]
+      : items;
+  }, [scopes, adminAllowed]);
   const [requestedView, setActive] = useState(
     () => navForScopes(scopes)[0]?.key ?? "guests"
   );
@@ -8082,36 +8757,39 @@ function WeddingApp({
   }, []);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   useDrawerSwipe(sidebarOpen, setSidebarOpen);
-  //  כשמגירת הניווט פתוחה בנייד היא מכסה את המסך, אבל הדף שמאחוריה עדיין
-  //  גלל עם האצבע — מה שגרם לתחושה של "המסך קופץ". נועלים את הגלילה של
-  //  ה-body כל עוד המגירה פתוחה, ומשחררים בסגירה או בפירוק הרכיב.
-  useEffect(() => {
-    if (!sidebarOpen) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [sidebarOpen]);
   const [membersOpen, setMembersOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  //  הדרכה: הסיור עולה לבד פעם אחת בחשבון. סגירת ההסבר בראש מסך אחד
-  //  מסתירה אותו בכל המסכים, כדי שלא לחייב את המשתמש לסגור אותו שוב ושוב.
-  const [tourOn, setTourOn] = useState(false);
-  const [introHidden, setIntroHidden] = usePersistentState("introHidden", false);
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    () => window.matchMedia("(max-width: 1023px)").matches
+  );
+  const [verificationBusy, setVerificationBusy] = useState(false);
+  const [verificationSent, setVerificationSent] = useState(false);
   useEffect(() => {
-    if (guideSeen("app")) return;
-    //  הדגל נרשם רק כשהסיור באמת נפתח. אם נרשום אותו מיד, טעינת החתונה
-    //  שמרכיבה מחדש את הרכיב תבטל את הטיימר — והמשתמש יאבד את ההדרכה
-    //  בלי שראה אותה אף פעם.
-    const t = setTimeout(() => {
-      markGuideSeen("app");
-      setTourOn(true);
-    }, 900);
-    return () => clearTimeout(t);
+    const media = window.matchMedia("(max-width: 1023px)");
+    const update = (event) => setIsMobileViewport(event.matches);
+    media.addEventListener?.("change", update);
+    return () => media.removeEventListener?.("change", update);
   }, []);
+  //  הדרכה: הסיור עולה לבד פעם אחת בחשבון, וההסבר בראש המסך נשאר עד
+  //  שמסתירים אותו — לכל מסך בנפרד, כי כל מסך נלמד בזמן אחר.
+  const [tourOn, setTourOn] = useState(false);
+  const [tourInviteDismissed, setTourInviteDismissed] = usePersistentState("tourInviteDismissed", false);
   function startTour() {
+    setTourInviteDismissed(true);
     setTourOn(true);
+  }
+
+  async function resendVerificationEmail() {
+    setVerificationBusy(true);
+    try {
+      await requestEmailVerification();
+      setVerificationSent(true);
+    } catch (err) {
+      console.error("Failed to resend verification email:", err);
+      notify("לא ניתן לשלוח כרגע. נסו שוב בעוד כמה דקות.", { tone: "error" });
+    } finally {
+      setVerificationBusy(false);
+    }
   }
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistentState(
     "sidebarCollapsed",
@@ -8142,22 +8820,30 @@ function WeddingApp({
   const isOwner = role === "owner";
   const fullScope = isFullScope(scopes);
 
+  useEffect(() => {
+    if (!cloudEnabled || typeof weddingId !== "string" || !weddingId.trim() || !session?.user?.id) return undefined;
+    let cancelled = false;
+    waitForAuthContext(session.user.id)
+      .then(() => {
+        if (!cancelled) return touchMembership(weddingId);
+        return undefined;
+      })
+      .catch((error) => {
+        console.error("Failed to update wedding lastSeenAt:", {
+          weddingId,
+          userId: session.user.id,
+          code: error?.code,
+          error,
+        });
+      });
+    return () => { cancelled = true; };
+  }, [cloudEnabled, weddingId, session?.user?.id]);
+
   /*  הסיור נבנה לפי מה שהמשתמש הזה באמת רואה ורשאי לעשות.
       בלי זה צופה קיבל הדרכה על הוספת מוזמנים ועריכת תקציב,
       ושלבים שהצביעו על לשוניות שאינן קיימות בהיקף שלו.  */
   const showBackup = fullScope || (isCloudConfigured && !!session);
   const navKeys = useMemo(() => navItems.map((n) => n.key), [navItems]);
-  const tourSteps = useMemo(
-    () =>
-      appTourSteps({
-        setSidebarOpen,
-        canEdit,
-        isOwner,
-        navKeys,
-        showBackup,
-      }),
-    [canEdit, isOwner, navKeys, showBackup]
-  );
 
   //  האם מותר לסנכרן ענן עבור dataset מסוים? כתיבה מחוץ להיקף תיחסם ב-RLS
   //  ותחזיר 403, ולכן אין טעם אפילו לנסות.
@@ -8178,10 +8864,7 @@ function WeddingApp({
 
   // האם ה-scope הזה היה ריק ברגע הטעינה? נקבע פעם אחת, לפני ש-usePersistentState
   // מספיק לכתוב את ברירות המחדל (debounce של 400ms).
-  const storagePrefix = useContext(StoragePrefixContext);
-  const scopeWasEmptyRef = useRef(
-    loadStored(storagePrefix, "guests", null) === null
-  );
+  const scopeWasEmptyRef = useRef(readLegacyDatasets() !== null);
 
   // במצב ענן ה-DB הוא מקור האמת: חתונה חדשה מתחילה ריקה ולא עם נתוני הדגמה.
   const [guests, setGuests] = usePersistentState(
@@ -8196,6 +8879,21 @@ function WeddingApp({
     "vendors",
     cloudEnabled ? [] : SEED_VENDORS
   );
+  const tourSteps = useMemo(
+    () =>
+      appTourSteps({
+        setSidebarOpen,
+        canEdit,
+        isOwner,
+        navKeys,
+        showBackup,
+        currentScreen: active,
+        isMobile: isMobileViewport,
+        hasVendors: vendors.length > 0,
+        canTransferBudget: canEdit && hasScope(scopes, "finance"),
+      }),
+    [active, canEdit, isMobileViewport, isOwner, navKeys, scopes, showBackup, vendors.length]
+  );
   //  התקציב חייב להתנהג כמו שאר המערכים: במצב ענן ה-DB הוא מקור האמת, ואסור
   //  שחתונה חדשה תיזרע בסעיפי ההדגמה — הם מוצגים למשתמש כאילו הם שלו.
   const [budget, setBudget] = usePersistentState(
@@ -8205,15 +8903,23 @@ function WeddingApp({
   //  הצ׳קליסט מתחיל ריק תמיד, גם ללא ענן: הרשימה המומלצת נטענת
   //  בלחיצה מפורשת במסך ולא נדחפת לאיש לחשבון.
   const [checklist, setChecklist] = usePersistentState("checklist", []);
-  const [adminStats, setAdminStats] = useState(null);
+  const datasetStateRef = useRef({ guests, tables, vendors, budget, checklist });
+  const baselineRowsRef = useRef({
+    guests: new Map(),
+    tables: new Map(),
+    vendors: new Map(),
+    budget: new Map(),
+    checklist: new Map(),
+  });
+  const restoreIntentRef = useRef(new Set());
   useEffect(() => {
-    if (session?.user?.email?.toLowerCase() !== "orelch97@gmail.com") return;
-    getAdminStats().then(setAdminStats).catch(() => setAdminStats(null));
-  }, [session?.user?.email]);
+    datasetStateRef.current = { guests, tables, vendors, budget, checklist };
+  }, [guests, tables, vendors, budget, checklist]);
   const [budgetGoal, setBudgetGoal] = usePersistentState(
     "budgetGoal",
     cloudEnabled ? 0 : SEED_BUDGET.reduce((s, b) => s + b.expected, 0)
-  );  const [financeLabels, setFinanceLabels] = usePersistentState(
+  );
+  const [financeLabels, setFinanceLabels] = usePersistentState(
     "financeLabels",
     {}
   );
@@ -8231,15 +8937,53 @@ function WeddingApp({
     "couple",
     cloudEnabled ? { partnerA: "", partnerB: "" } : COUPLE
   );
-  const [countdownBackgroundUrl, setCountdownBackgroundUrl] = useState("");
   const couple = cloudEnabled
     ? {
         partnerA: activeWedding?.partnerA || "",
         partnerB: activeWedding?.partnerB || "",
-        countdownBackgroundUrl,
       }
     : localCouple;
   const coupleTitle = coupleToTitle(couple);
+  const [countdownBackgroundUrl, setCountdownBackgroundUrl] = useState("");
+  const [adminStats, setAdminStats] = useState(null);
+
+  useEffect(() => {
+    if (!cloudEnabled || !adminAllowed) return undefined;
+    let active = true;
+    getAdminStats()
+      .then((stats) => {
+        if (active) setAdminStats(stats);
+      })
+      .catch((err) => {
+        if (active) setAdminStats(null);
+        if (err?.code !== "functions/permission-denied") {
+          console.error("Failed to load admin stats:", err);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [cloudEnabled, adminAllowed]);
+
+  const handleCountdownBackgroundChange = useCallback(
+    async (file) => {
+      if (!cloudEnabled || !isOwner) return;
+      try {
+        const url = await uploadCountdownBackground(weddingId, file);
+        setCountdownBackgroundUrl(url);
+        notify("תמונת הרקע עודכנה", { tone: "success" });
+      } catch (err) {
+        console.error("Countdown background upload failed:", err);
+        notify(
+          err?.message === "file_too_large"
+            ? "התמונה גדולה מדי (מקסימום 8MB)."
+            : "העלאת תמונת הרקע נכשלה. נסו שוב.",
+          { tone: "error" }
+        );
+      }
+    },
+    [cloudEnabled, isOwner, weddingId]
+  );
 
   //  פרטי היסוד של החתונה נשמרים יחד בפעולה אחת מתוך מסך ההגדרות. שליחה אחת
   //  ולא שתיים מונעת מצב ביניים שבו נשמרו השמות אבל התאריך נכשל.
@@ -8259,10 +9003,19 @@ function WeddingApp({
     [cloudEnabled, activeWedding, onWeddingChanged, setLocalCouple]
   );
 
+  const saveBudgetGoal = useCallback(async (value) => {
+    if (cloudEnabled && weddingId) {
+      await saveWeddingSettings(weddingId, { budgetGoal: value });
+    }
+    setBudgetGoal(value);
+  }, [cloudEnabled, weddingId, setBudgetGoal]);
+
   // --- Cloud sync (Supabase) ---
   const [cloudStatus, setCloudStatus] = useState(
     isCloudConfigured ? "connecting" : "off"
   );
+  const [cloudReady, setCloudReady] = useState(false);
+  const [initialLoadAttempt, setInitialLoadAttempt] = useState(0);
 
   const cloudReadyRef = useRef(false);
   const settingsReadyRef = useRef(false);
@@ -8287,6 +9040,18 @@ function WeddingApp({
       setSyncRetry((n) => n + 1);
     }, 5000);
   }, []);
+  const handleSyncFailure = useCallback((dataset, err) => {
+    console.error(`Cloud sync failed (${dataset}):`, err);
+    setCloudStatus("error");
+    if (err?.code === "sync_conflict") {
+      notify(
+        "רשומה זו השתנתה במכשיר אחר. השינוי המקומי לא נכתב כדי לא לדרוס נתונים; העתיקו אותו לפני רענון.",
+        { tone: "error", duration: 12_000 }
+      );
+      return;
+    }
+    scheduleSyncRetry();
+  }, [scheduleSyncRetry]);
 
   /*  תור סדרתי לכל הסנכרונים. ארבעת ה-effects נדלקים באותו רגע ושולחים
    *  בקשות במקביל, וסעיף תקציב שמצביע על ספק היה יכול להגיע לשרת לפני הספק
@@ -8303,22 +9068,47 @@ function WeddingApp({
 
   // Initial cloud load: seed an empty wedding from local data, then pull the truth.
   useEffect(() => {
-    if (!cloudEnabled) return;
+    if (
+      !cloudEnabled ||
+      typeof weddingId !== "string" ||
+      !weddingId.trim() ||
+      !session?.user?.id
+    ) return;
     let cancelled = false;
+    let retryTimer = null;
     cloudReadyRef.current = false;
     settingsReadyRef.current = false;
     (async () => {
       try {
+        await waitForAuthContext(session.user.id);
+        if (cancelled) return;
         setCloudStatus("loading");
+        if (isOwner) {
+          //  מיגרציית מזהי-הספקים היא חד-פעמית ואינה תנאי לטעינת שאר הנתונים;
+          //  כשל כאן לא יפיל את כל הטעינה למסך "הסנכרון נכשל" — הוא נרשם
+          //  וינוסה שוב בטעינה הבאה (כתיבות ספקים ממילא מאומתות בכללי האבטחה).
+          try {
+            await migrateVendorIds(weddingId);
+          } catch (err) {
+            console.warn("Vendor UUID migration deferred:", err?.code || err);
+          }
+        }
         // זריעה רק כשיש מה להעלות מהמכשיר (שדרוג ממצב מקומי), ורק לבעלים
         // עם גישה מלאה — למי ששותף לו מסך בודד אין מה לזרוע.
-        if (isOwner && fullScope && (await cloudIsEmpty(weddingId))) {
+        if (isOwner && fullScope) {
+          const migrationKey = `legacy-migration-pending-${weddingId}`;
+          const migrationPending = loadStored(STORAGE_ROOT, migrationKey, false) === true;
+          const cloudEmpty = await cloudIsEmpty(weddingId);
+          const legacy = (scopeWasEmptyRef.current || migrationPending)
+            ? readLegacyDatasets()
+            : null;
+          if (cloudEmpty || migrationPending) {
           let datasets = { guests, tables, vendors, budget, checklist };
+          let acceptedLegacy = migrationPending ? legacy : null;
 
           // שדרוג ממצב מקומי בלבד: הנתונים שמורים תחת התחילית הישנה, ללא
           // שיוך למשתמש. מייבאים רק באישור מפורש – ייתכן שהם של אדם אחר.
-          const legacy = scopeWasEmptyRef.current ? readLegacyDatasets() : null;
-          if (legacy) {
+          if (legacy && !migrationPending) {
             const ok = await confirmDialog({
               title: "נמצאו נתונים שמורים בדפדפן",
               message:
@@ -8330,15 +9120,85 @@ function WeddingApp({
             });
             if (cancelled) return;
             if (ok) {
-              datasets = { ...datasets, ...legacy.datasets };
-              clearLegacyData();
+              localStorage.setItem(STORAGE_ROOT + migrationKey, JSON.stringify(true));
+              datasets = normalizeLegacyVendorIds(weddingId, {
+                ...datasets,
+                ...legacy.datasets,
+              });
+              acceptedLegacy = legacy;
             }
           }
 
+          if (migrationPending && legacy) {
+            datasets = normalizeLegacyVendorIds(weddingId, {
+              ...datasets,
+              ...legacy.datasets,
+            });
+          }
+
           const hasSomething = Object.values(datasets).some((d) => d.length);
-          if (hasSomething) await cloudSeed(weddingId, datasets);
+          if (hasSomething) datasets = await cloudSeed(weddingId, datasets);
+
+          if (acceptedLegacy) {
+            const legacySettings = acceptedLegacy.settings || {};
+            const scopedSettings = Object.fromEntries(
+              Object.entries(legacySettings).filter(([key]) =>
+                ["budgetGoal", "financeLabels", "categories", "countdownBackgroundUrl"].includes(key)
+              )
+            );
+            if (Object.keys(scopedSettings).length) {
+              await saveWeddingSettings(weddingId, scopedSettings);
+            }
+
+            const oldCouple = legacySettings.couple;
+            if (oldCouple && typeof oldCouple === "object") {
+              await saveWeddingBasics({
+                partnerA: String(oldCouple.partnerA || ""),
+                partnerB: String(oldCouple.partnerB || ""),
+                date: legacySettings.weddingDate ?? activeWedding?.weddingDate ?? null,
+              });
+            } else if (legacySettings.weddingDate) {
+              await saveWeddingBasics({
+                partnerA: couple.partnerA,
+                partnerB: couple.partnerB,
+                date: legacySettings.weddingDate,
+              });
+            }
+
+            const verified = await cloudFetchAll(weddingId, { scopes, isOwner });
+            for (const key of Object.keys(ENTITIES)) {
+              if (
+                JSON.stringify(canonicalDataset(key, verified[key])) !==
+                JSON.stringify(canonicalDataset(key, datasets[key]))
+              ) {
+                throw new Error(`Legacy migration verification failed for ${key}`);
+              }
+            }
+            for (const [key, value] of Object.entries(scopedSettings)) {
+              if (JSON.stringify(verified.settings?.[key]) !== JSON.stringify(value)) {
+                throw new Error(`Legacy migration verification failed for settings.${key}`);
+              }
+            }
+            if (oldCouple) {
+              const refreshedWeddings = await listWeddings();
+              const savedWedding = refreshedWeddings.find((item) => item.id === weddingId);
+              if (
+                !savedWedding ||
+                savedWedding.partnerA !== String(oldCouple.partnerA || "") ||
+                savedWedding.partnerB !== String(oldCouple.partnerB || "") ||
+                (legacySettings.weddingDate != null &&
+                  String(savedWedding.weddingDate || "").slice(0, 10) !==
+                    String(legacySettings.weddingDate).slice(0, 10))
+              ) {
+                throw new Error("Legacy migration verification failed for couple names");
+              }
+            }
+
+            clearLegacyData();
+          }
+          }
         }
-        const data = await cloudFetchAll(weddingId);
+        const data = await cloudFetchAll(weddingId, { scopes, isOwner });
         if (cancelled) return;
         setGuests(data.guests);
         setTables(data.tables);
@@ -8358,9 +9218,9 @@ function WeddingApp({
         //  במכשיר אחר. מחילים רק מפתחות שקיימים בפועל, כדי שחתונה חדשה תישאר
         //  עם ברירות המחדל במקום להתאפס לערכים ריקים.
         const s = data.settings || {};
-        setCountdownBackgroundUrl(s.countdownBackgroundUrl || "");
         if (typeof s.budgetGoal === "number") setBudgetGoal(s.budgetGoal);
         if (s.financeLabels) setFinanceLabels(s.financeLabels);
+        setCountdownBackgroundUrl(s.countdownBackgroundUrl || "");
         //  גם רשימה ריקה היא ערך תקף — משתמש שמחק את כל הקטגוריות שלו
         //  לא אמור לקבל בחזרה את ברירת המחדל בטעינה הבאה.
         if (Array.isArray(s.categories)) setCategories(s.categories);
@@ -8371,42 +9231,55 @@ function WeddingApp({
           budget: new Set(data.budget.map((b) => b.id)),
           checklist: new Set(data.checklist.map((c) => c.id)),
         };
+        baselineRowsRef.current = Object.fromEntries(
+          Object.keys(ENTITIES).map((key) => [
+            key,
+            new Map(data[key].map((row) => [row.id, row])),
+          ])
+        );
         cloudReadyRef.current = true;
+        setCloudReady(true);
         //  רק אחרי הטעינה מותר לדחוף הגדרות למעלה. בלי זה, ערכי ברירת המחדל
         //  של הרנדר הראשון היו דורסים את מה ששמור בענן.
         settingsReadyRef.current = true;
         setCloudStatus("synced");
-        onInitialDataReady?.();
       } catch (err) {
-        console.error("Cloud load failed:", err);
-        if (!cancelled) {
-          setCloudStatus("error");
-          onInitialDataReady?.();
+        console.error("Initial wedding data load failed:", {
+          weddingId,
+          userId: session?.user?.id,
+          role,
+          scopes,
+          code: err?.code,
+          error: err,
+        });
+        if (cancelled) return;
+        const transient = [
+          "unavailable",
+          "deadline-exceeded",
+          "network-request-failed",
+          "functions/unavailable",
+          "network_error",
+          "timeout",
+        ].includes(err?.code) || [502, 503, 504].includes(err?.status);
+        if (transient && initialLoadAttempt < 3) {
+          console.warn(`Retrying initial Firestore load (${initialLoadAttempt + 1}/3).`);
+          setCloudStatus("connecting");
+          retryTimer = setTimeout(
+            () => setInitialLoadAttempt((attempt) => attempt + 1),
+            1000 * 2 ** initialLoadAttempt
+          );
+          return;
         }
+        setCloudReady(false);
+        setCloudStatus("error");
       }
     })();
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloudEnabled, weddingId, onInitialDataReady]);
-
-  //  נוכחות: מסמן שהמשתמש נמצא בחתונה עכשיו. בלי זה lastSeenAt נכתב רק
-  //  ביצירת החברות, ומסך "מי מחובר" ווידג׳ט המשתמשים הפעילים מציגים 0
-  //  גם כשיושבים במערכת. החלון בשרת הוא 10 דקות, ולכן די בדקות ספורות.
-  useEffect(() => {
-    if (!cloudEnabled || !weddingId) return;
-    touchMembership(weddingId);
-    const timer = setInterval(() => touchMembership(weddingId), 4 * 60_000);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") touchMembership(weddingId);
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [cloudEnabled, weddingId]);
+  }, [cloudEnabled, weddingId, session?.user?.id, initialLoadAttempt]);
 
   // Debounced per-dataset cloud sync (upsert changes + soft-delete removed).
   // צופה (viewer) לעולם לא כותב – ה-DB גם ידחה אותו, ואין טעם ברעש.
@@ -8420,13 +9293,14 @@ function WeddingApp({
             weddingId,
             "guests",
             guests,
-            prevIdsRef.current.guests
+            prevIdsRef.current.guests,
+            baselineRowsRef.current.guests,
+            { allowRestore: restoreIntentRef.current.has("guests") }
           );
+          restoreIntentRef.current.delete("guests");
           setCloudStatus("synced");
         } catch (err) {
-          console.error("Cloud sync failed (guests):", err);
-          setCloudStatus("error");
-          scheduleSyncRetry();
+          handleSyncFailure("guests", err);
         }
       });
     }, 800);
@@ -8444,13 +9318,14 @@ function WeddingApp({
             weddingId,
             "tables",
             tables,
-            prevIdsRef.current.tables
+            prevIdsRef.current.tables,
+            baselineRowsRef.current.tables,
+            { allowRestore: restoreIntentRef.current.has("tables") }
           );
+          restoreIntentRef.current.delete("tables");
           setCloudStatus("synced");
         } catch (err) {
-          console.error("Cloud sync failed (tables):", err);
-          setCloudStatus("error");
-          scheduleSyncRetry();
+          handleSyncFailure("tables", err);
         }
       });
     }, 800);
@@ -8468,13 +9343,14 @@ function WeddingApp({
             weddingId,
             "vendors",
             vendors,
-            prevIdsRef.current.vendors
+            prevIdsRef.current.vendors,
+            baselineRowsRef.current.vendors,
+            { allowRestore: restoreIntentRef.current.has("vendors") }
           );
+          restoreIntentRef.current.delete("vendors");
           setCloudStatus("synced");
         } catch (err) {
-          console.error("Cloud sync failed (vendors):", err);
-          setCloudStatus("error");
-          scheduleSyncRetry();
+          handleSyncFailure("vendors", err);
         }
       });
     }, 800);
@@ -8482,26 +9358,118 @@ function WeddingApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vendors, syncRetry]);
 
-  /*  סנכרון בזמן אמת לספקים. ספק שמעדכן משימה מפורטל הנייד אמור להופיע
-      בדאשבורד מיד, בלי רענון.
-
-      ההשוואה לפני setState היא מה שמונע לולאה: הכתיבה המושהית מפעילה
-      snapshot, שמחזיר בדיוק את מה שכבר יושב ב-state. בלי הבדיקה הזו
-      כל שמירה הייתה מפעילה שמירה נוספת ללא סוף.  */
+  /* Realtime snapshots update clean records while preserving local drafts. */
   useEffect(() => {
-    if (!cloudEnabled || !mayVendors || !weddingId) return undefined;
+    if (
+      !cloudEnabled ||
+      !cloudReady ||
+      typeof weddingId !== "string" ||
+      !weddingId.trim() ||
+      !session?.user?.id
+    ) return undefined;
+    let cancelled = false;
+    let stops = [];
+    (async () => {
+      try {
+        await waitForAuthContext(session.user.id);
+        if (cancelled) return;
+        const configs = [
+          { key: "guests", allowed: mayGuests, setRows: setGuests },
+          { key: "tables", allowed: mayGuests, setRows: setTables },
+          { key: "vendors", allowed: mayVendors, setRows: setVendors },
+          { key: "budget", allowed: mayFinance, setRows: setBudget },
+          { key: "checklist", allowed: mayChecklist, setRows: setChecklist },
+        ].filter((item) => item.allowed);
 
-    const stop = subscribeCollection(weddingId, "vendors", (remote) => {
-      setVendors((local) =>
-        JSON.stringify(local) === JSON.stringify(remote) ? local : remote
-      );
-    });
-    return stop;
+        stops = configs.map(({ key, setRows }) => subscribeCollection(
+          weddingId,
+          key,
+          (remoteRows, { tombstones = [] } = {}) => {
+        const cfg = ENTITIES[key];
+        const baseline = baselineRowsRef.current[key];
+        const knownIds = prevIdsRef.current[key];
+        const localRows = datasetStateRef.current[key];
+        const localById = new Map(localRows.map((row) => [row.id, row]));
+        const remoteById = new Map(remoteRows.map((row) => [row.id, row]));
+        const tombstoneIds = new Set(tombstones.map((row) => row.id));
+        const next = [];
+        const sameEntity = (left, right) =>
+          JSON.stringify(cfg.toDoc(left)) === JSON.stringify(cfg.toDoc(right));
+
+        for (const local of localRows) {
+          const base = baseline.get(local.id);
+          const remote = remoteById.get(local.id);
+          if (remote) {
+            if (base && (sameEntity(local, base) || sameEntity(local, remote))) {
+              next.push(remote);
+              baseline.set(local.id, remote);
+              knownIds.add(local.id);
+            } else {
+              next.push(local);
+            }
+            continue;
+          }
+
+          if (!base || !sameEntity(local, base)) {
+            next.push(local);
+            continue;
+          }
+
+          // A clean local copy follows a remote soft or hard delete.
+          baseline.delete(local.id);
+          knownIds.delete(local.id);
+        }
+
+        for (const remote of remoteRows) {
+          if (localById.has(remote.id) || knownIds.has(remote.id)) continue;
+          next.push(remote);
+          baseline.set(remote.id, remote);
+          knownIds.add(remote.id);
+        }
+
+        for (const id of tombstoneIds) {
+          if (!localById.has(id) && !knownIds.has(id)) baseline.delete(id);
+        }
+
+        datasetStateRef.current[key] = next;
+        setRows((current) =>
+          JSON.stringify(current.map(cfg.toDoc)) === JSON.stringify(next.map(cfg.toDoc))
+            ? current
+            : next
+        );
+          },
+          (error) => {
+            console.error("Realtime wedding subscription failed:", {
+              weddingId,
+              dataset: key,
+              userId: session.user.id,
+              code: error?.code,
+              error,
+            });
+            if (!cancelled) setCloudStatus("error");
+          }
+        ));
+      } catch (error) {
+        console.error("Unable to initialize realtime subscriptions:", {
+          weddingId,
+          userId: session?.user?.id,
+          code: error?.code,
+          error,
+        });
+        if (!cancelled) setCloudStatus("error");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      stops.forEach((stop) => stop());
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloudEnabled, mayVendors, weddingId]);
+  }, [cloudEnabled, cloudReady, mayGuests, mayVendors, mayFinance, mayChecklist, weddingId, session?.user?.id]);
 
   useEffect(() => {
-    if (!cloudEnabled || !canEdit || !mayFinance || !cloudReadyRef.current) return;    const timer = setTimeout(() => {
+    if (!cloudEnabled || !canEdit || !mayFinance || !cloudReadyRef.current) return;
+    const timer = setTimeout(() => {
       enqueueSync(async () => {
         try {
           setCloudStatus("saving");
@@ -8509,13 +9477,14 @@ function WeddingApp({
             weddingId,
             "budget",
             budget,
-            prevIdsRef.current.budget
+            prevIdsRef.current.budget,
+            baselineRowsRef.current.budget,
+            { allowRestore: restoreIntentRef.current.has("budget") }
           );
+          restoreIntentRef.current.delete("budget");
           setCloudStatus("synced");
         } catch (err) {
-          console.error("Cloud sync failed (budget):", err);
-          setCloudStatus("error");
-          scheduleSyncRetry();
+          handleSyncFailure("budget", err);
         }
       });
     }, 800);
@@ -8533,13 +9502,14 @@ function WeddingApp({
             weddingId,
             "checklist",
             checklist,
-            prevIdsRef.current.checklist
+            prevIdsRef.current.checklist,
+            baselineRowsRef.current.checklist,
+            { allowRestore: restoreIntentRef.current.has("checklist") }
           );
+          restoreIntentRef.current.delete("checklist");
           setCloudStatus("synced");
         } catch (err) {
-          console.error("Cloud sync failed (checklist):", err);
-          setCloudStatus("error");
-          scheduleSyncRetry();
+          handleSyncFailure("checklist", err);
         }
       });
     }, 800);
@@ -8560,6 +9530,7 @@ function WeddingApp({
       patch.budgetGoal = budgetGoal;
       patch.financeLabels = financeLabels;
     }
+    if (isOwner) patch.countdownBackgroundUrl = countdownBackgroundUrl;
     if (!Object.keys(patch).length) return;
     const timer = setTimeout(async () => {
       try {
@@ -8571,7 +9542,7 @@ function WeddingApp({
     }, 800);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [budgetGoal, categories, financeLabels, syncRetry]);
+  }, [budgetGoal, categories, countdownBackgroundUrl, financeLabels, syncRetry]);
 
   // Show a subtle "saved" indicator whenever data changes.
   useEffect(() => {
@@ -8610,19 +9581,25 @@ function WeddingApp({
       .toISOString()
       .slice(0, 10)}${suffix}.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  //  ייצוא לאקסל: גיליון נפרד לכל מערך נתונים (מוזמנים, ספקים, סדר הושבה,
-  //  ניהול תקציב), ולצדם גיליון שחזור שמכיל את אותו payload של גיבוי
-  //  ה-JSON. כך קובץ אחד משמש גם לקריאה וגם לשחזור מלא בחזרה למערכת.
+  //  ייצוא לאקסל: גיליון נפרד לכל מערך נתונים ולצדו payload שחזור זהה ל-JSON.
   const [excelBusy, setExcelBusy] = useState(false);
   async function exportExcel() {
     setBackupMenuOpen(false);
     setExcelBusy(true);
     try {
       await exportWeddingWorkbook(
-        { guests, tables, vendors, budget, checklist, budgetGoal, backup: backupPayload() },
+        {
+          guests,
+          tables,
+          vendors,
+          budget,
+          checklist,
+          budgetGoal,
+          backup: await backupPayload(),
+        },
         coupleTitle || activeWedding?.name
       );
       notify("קובץ האקסל הורד", { tone: "success" });
@@ -8639,19 +9616,42 @@ function WeddingApp({
   //
   //  ⚠ כל נתון שנשמר במערכת חייב להיכנס לכאן. קודם ההגדרות (יעד התקציב,
   //  תוויות מסך התקציב וקטגוריות המוזמנים) לא נכנסו, ומי ששיחזר איבד אותן בשקט.
-  function backupPayload() {
+  async function backupPayload() {
+    const withoutSyncMetadata = (rows) => rows.map((row) => {
+      const clean = { ...row };
+      delete clean._version;
+      return clean;
+    });
+    let vendorAttachments = [];
+    if (cloudEnabled && weddingId && hasScope(scopes, "vendors")) {
+      const [active, deleted] = await Promise.all([
+        listVendorFiles(weddingId),
+        listDeletedVendorFiles(weddingId),
+      ]);
+      vendorAttachments = [
+        ...active.map(({ id, vendorId, name, mime, size, createdAt }) => ({
+          id, vendorId, name, mime, size, createdAt, deleted: false,
+        })),
+        ...deleted.map(({ id, vendorId, name, mime, size, createdAt, deletedAt }) => ({
+          id, vendorId, name, mime, size, createdAt, deleted: true, deletedAt,
+        })),
+      ];
+    }
     return {
       app: "wedding-planner",
-      version: 2,
+      version: 3,
       exportedAt: new Date().toISOString(),
-      guests,
-      tables,
-      vendors,
-      budget,
+      guests: withoutSyncMetadata(guests),
+      tables: withoutSyncMetadata(tables),
+      vendors: withoutSyncMetadata(vendors),
+      budget: withoutSyncMetadata(budget),
+      checklist: withoutSyncMetadata(checklist),
+      vendorAttachments,
       settings: {
         budgetGoal,
         financeLabels,
         categories,
+        countdownBackgroundUrl,
         partnerA: couple.partnerA,
         partnerB: couple.partnerB,
         //  מחרוזת 'YYYY-MM-DD' כמו ב-DB, ולא אובייקט Date שמשתנה לפי אזור זמן.
@@ -8663,7 +9663,7 @@ function WeddingApp({
   }
 
   async function exportBackup() {
-    const payload = backupPayload();
+    const payload = await backupPayload();
 
     if (!isCryptoAvailable) {
       downloadJson(payload);
@@ -8674,6 +9674,7 @@ function WeddingApp({
       title: "להצפין את קובץ הגיבוי?",
       message:
         "הקובץ מכיל שמות וטלפונים של כל המוזמנים ואת כל נתוני התקציב.\n" +
+        "פרטי הקבצים המצורפים נשמרים, אך תוכן הקבצים עצמם אינו כלול.\n" +
         "הצפנה בסיסמה מומלצת בחום.\n\n" +
         "⚠ אין שחזור סיסמה — סיסמה שאבדה = קובץ שלא ניתן לפתוח.",
       confirmLabel: "הצפן בסיסמה",
@@ -8731,6 +9732,10 @@ function WeddingApp({
       Array.isArray(data.tables) ? `${data.tables.length} שולחנות` : null,
       Array.isArray(data.vendors) ? `${data.vendors.length} ספקים` : null,
       Array.isArray(data.budget) ? `${data.budget.length} סעיפי תקציב` : null,
+      Array.isArray(data.checklist) ? `${data.checklist.length} משימות צ׳קליסט` : null,
+      Array.isArray(data.vendorAttachments)
+        ? `${data.vendorAttachments.length} פרטי קבצים מצורפים`
+        : null,
       data.settings ? "הגדרות החתונה" : null,
     ]
       .filter(Boolean)
@@ -8746,16 +9751,24 @@ function WeddingApp({
         "\n\n⚠ כל הנתונים הקיימים בחתונה יוחלפו במה שבקובץ — כולל שינויים " +
         "שבן/בת הזוג או שותפים אחרים ביצעו אחרי שהגיבוי נוצר.\n\n" +
         "לפני השחזור יורד אוטומטית קובץ גיבוי של המצב הנוכחי, כדי שתמיד " +
-        "תהיה דרך חזרה.\n\nלהמשיך?",
+        "תהיה דרך חזרה.\n\n" +
+        (Array.isArray(data.vendorAttachments) && data.vendorAttachments.length
+          ? "רשימת פרטי הקבצים בגיבוי היא לעיון בלבד; השחזור אינו מחבר או משנה קבצים מצורפים. תוכן הקבצים אינו כלול.\n\n"
+          : "") +
+        "להמשיך?",
       confirmLabel: "שחזר נתונים",
       tone: "danger",
-    }).then((ok) => {
+    }).then(async (ok) => {
       if (!ok) return;
+      restoreIntentRef.current = new Set(
+        ["guests", "tables", "vendors", "budget", "checklist"]
+          .filter((key) => Array.isArray(data[key]))
+      );
       //  רשת ביטחון: שחזור הוא פעולה בלתי הפיכה שדורסת גם עבודה של שותפים.
       //  הקובץ יורד לא מוצפן בכוונה — הוא נוצר בלי אינטראקציה ואי אפשר
       //  לבקש סיסמה באמצע, ומטרתו לשמש דקה אחורה ולא ארכיון ארוך טווח.
       try {
-        downloadJson(backupPayload(), "-before-restore");
+        downloadJson(await backupPayload(), "-before-restore");
       } catch (err) {
         console.error("Safety backup failed:", err);
       }
@@ -8776,15 +9789,34 @@ function WeddingApp({
             guestIds: Array.isArray(t.guestIds) ? t.guestIds : [],
           }))
         );
-      if (Array.isArray(data.vendors))
-        setVendors(
-          withIds(data.vendors, (v) => ({
-            ...v,
-            contractCost: Number(v.contractCost) || 0,
-            deposit: Number(v.deposit) || 0,
-            tasks: Array.isArray(v.tasks) ? v.tasks : [],
-          }))
-        );
+      const vendorIdMap = new Map();
+      const currentVendorIds = new Map(
+        vendors
+          .filter((vendor) => vendor.legacyId != null)
+          .map((vendor) => [String(vendor.legacyId), String(vendor.id)])
+      );
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const usedVendorIds = new Set();
+      const restoredVendors = Array.isArray(data.vendors)
+        ? data.vendors.map((vendor) => {
+            const rawId = String(vendor.id ?? "");
+            let id = uuidPattern.test(rawId)
+              ? rawId
+              : currentVendorIds.get(rawId) || crypto.randomUUID();
+            if (usedVendorIds.has(id)) id = crypto.randomUUID();
+            usedVendorIds.add(id);
+            if (rawId) vendorIdMap.set(rawId, id);
+            return {
+              ...vendor,
+              id,
+              ...(uuidPattern.test(rawId) ? {} : { legacyId: rawId }),
+              contractCost: Number(vendor.contractCost) || 0,
+              deposit: Number(vendor.deposit) || 0,
+              tasks: Array.isArray(vendor.tasks) ? vendor.tasks : [],
+            };
+          })
+        : null;
+      if (restoredVendors) setVendors(restoredVendors);
       if (Array.isArray(data.budget))
         setBudget(
           withIds(data.budget, (b) => ({
@@ -8792,13 +9824,30 @@ function WeddingApp({
             expected: Number(b.expected) || 0,
             actual: Number(b.actual) || 0,
             //  גיבוי שנוצר לפני הקישור לספקים אינו מכיל את השדה.
-            vendorId: b.vendorId == null ? null : Number(b.vendorId),
+            vendorId: b.vendorId == null
+              ? null
+              : (vendorIdMap.get(String(b.vendorId)) || String(b.vendorId)),
           }))
         );
+      if (Array.isArray(data.checklist)) {
+        setChecklist(
+          withIds(data.checklist, (item) => ({
+            ...item,
+            title: String(item.title || ""),
+            category: String(item.category || "כללי"),
+            assignee: ["both", "bride", "groom"].includes(item.assignee)
+              ? item.assignee
+              : "both",
+            done: Boolean(item.done),
+          }))
+        );
+      }
 
       //  הגדרות: גיבויים בגרסה 1 לא הכילו אותן, ולכן כל שדה מוחל רק אם קיים
       //  בפועל — אחרת שחזור מקובץ ישן היה מאפס את יעד התקציב והתוויות.
       if (typeof s.budgetGoal === "number") setBudgetGoal(s.budgetGoal);
+      if (typeof s.countdownBackgroundUrl === "string")
+        setCountdownBackgroundUrl(s.countdownBackgroundUrl);
       if (s.financeLabels && typeof s.financeLabels === "object")
         setFinanceLabels((prev) => ({ ...prev, ...s.financeLabels }));
       if (Array.isArray(s.categories)) setCategories(s.categories);
@@ -8901,7 +9950,8 @@ function WeddingApp({
         !Array.isArray(data.guests) &&
         !Array.isArray(data.tables) &&
         !Array.isArray(data.vendors) &&
-        !Array.isArray(data.budget)
+        !Array.isArray(data.budget) &&
+        !Array.isArray(data.checklist)
       ) {
         //  JSON תקין שאינו הקובץ שלנו. בלי הבדיקה השחזור "מצליח" ולא משנה כלום.
         notify("הקובץ אינו קובץ גיבוי של המערכת.", { tone: "error" });
@@ -8917,7 +9967,6 @@ function WeddingApp({
     overview: "דאשבורד ראשי",
     checklist: "צ׳קליסט",
     guests: "מוזמנים",
-    alcohol: "חישוב אלכוהול",
     seating: "סידור הושבה",
     vendors: "ספקים",
     finance: "ניהול תקציב",
@@ -8930,7 +9979,6 @@ function WeddingApp({
       ? `${checklist.filter((c) => c.done).length} מתוך ${checklist.length} משימות הושלמו`
       : "עדיין לא נוספו משימות",
     guests: `${guests.length} רשומות ברשימה`,
-    alcohol: `${guests.filter((guest) => Number(guest.drinkers) > 0).length} מוזמנים שותים`,
     seating: `${tables.length} שולחנות · ${tables.reduce(
       (s, t) => s + (t.guestIds?.length || 0),
       0
@@ -8961,7 +10009,7 @@ function WeddingApp({
         <WeddingSettingsModal
           couple={couple}
           weddingDate={activeWedding?.weddingDate}
-          weddingName={activeWedding?.name || "החתונה שלי"}
+          weddingName={activeWedding?.name || coupleTitle}
           budgetGoal={budgetGoal}
           currentUserId={session?.user?.id ?? null}
           canEditBasics={cloudEnabled ? isOwner : true}
@@ -8969,12 +10017,8 @@ function WeddingApp({
           showDate={cloudEnabled}
           weddingId={cloudEnabled && isOwner ? weddingId : null}
           onSaveBasics={saveWeddingBasics}
-          onSetBudgetGoal={setBudgetGoal}
-          onDeleteWedding={async (confirmationName) => {
-            await deleteWedding(weddingId, confirmationName);
-            setSettingsOpen(false);
-            await onWeddingChanged?.();
-          }}
+          onSaveBudgetGoal={saveBudgetGoal}
+          onDeleteWedding={isOwner ? onDeleteWedding : null}
           onClose={() => setSettingsOpen(false)}
         />
       )}
@@ -8983,6 +10027,7 @@ function WeddingApp({
         onChange={goTo}
         open={sidebarOpen}
         setOpen={setSidebarOpen}
+        modalSuspended={tourOn}
         collapsed={sidebarCollapsed}
         setCollapsed={setSidebarCollapsed}
         navItems={navItems}
@@ -9012,7 +10057,7 @@ function WeddingApp({
             title="פתיחת התפריט"
             aria-label="פתיחת תפריט הניווט"
             aria-expanded={sidebarOpen}
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 lg:hidden"
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 lg:hidden"
           >
             <Menu size={20} />
           </button>
@@ -9031,22 +10076,19 @@ function WeddingApp({
               <p className="truncate text-[11px] text-slate-400 sm:text-xs">
                 {subtitleMap[active]}
               </p>
-              <h2 className="truncate font-[var(--font-display)] text-base font-bold text-slate-800 sm:text-lg">
+              <h2 className="truncate font-display text-base font-bold text-slate-800 sm:text-lg">
                 {titleMap[active]}
               </h2>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-            {/*  כפתור העזרה מחזיר את ההסבר של המסך הנוכחי — וההסבר עצמו
-                מציע את הסיור המודרך. כפתור אחד במקום שניים בכותרת צפופה.  */}
+            {/*  כפתור העזרה פותח ישירות את הסיור המודרך.  */}
             <button
               data-tour="help"
-              onClick={() =>
-                setIntroHidden(false)
-              }
-              title="מה עושים במסך הזה?"
-              aria-label="הסבר על המסך והדרכה"
-              className="grid h-10 w-10 place-items-center rounded-xl bg-white text-gold-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-gold-50 sm:h-9 sm:w-9"
+              onClick={startTour}
+              title="סיור מודרך במערכת"
+              aria-label="פתיחת הסיור המודרך"
+              className="grid h-11 w-11 place-items-center rounded-xl bg-white text-gold-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-gold-50 sm:h-9 sm:w-9"
             >
               <HelpCircle size={19} />
             </button>
@@ -9106,7 +10148,7 @@ function WeddingApp({
                   aria-expanded={backupMenuOpen}
                   /*  בנייד הכפתורים האלה היו 32px — קטן מהמינימום שנדרש
                       ללחיצה באצבע.  */
-                  className="grid h-10 w-10 place-items-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 sm:flex sm:h-auto sm:w-auto sm:min-h-0 sm:items-center sm:gap-1.5 sm:bg-gold-500 sm:px-3 sm:py-2 sm:text-xs sm:font-semibold sm:text-white sm:ring-0 sm:hover:bg-gold-600"
+                  className="grid h-11 w-11 place-items-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 sm:flex sm:h-auto sm:w-auto sm:min-h-0 sm:items-center sm:gap-1.5 sm:bg-gold-500 sm:px-3 sm:py-2 sm:text-xs sm:font-semibold sm:text-slate-950 sm:ring-0 sm:hover:bg-gold-600"
                 >
                   {excelBusy ? (
                     <Loader2 size={16} className="animate-spin" />
@@ -9143,7 +10185,7 @@ function WeddingApp({
                               קובץ גיבוי (JSON)
                             </span>
                             <span className="block text-[11px] text-slate-400">
-                              לשחזור מלא של הנתונים למערכת
+                              כולל פרטי קבצים מצורפים, ללא תוכן הקבצים
                             </span>
                           </span>
                         </button>
@@ -9162,7 +10204,7 @@ function WeddingApp({
                               ייצוא לאקסל (XLSX)
                             </span>
                             <span className="block text-[11px] text-slate-400">
-                              גיליון לכל מסך — וגם גיבוי מלא לשחזור
+                              גיליונות נתונים ופרטי קבצים — ללא תוכן הקבצים
                             </span>
                           </span>
                         </button>
@@ -9221,6 +10263,26 @@ function WeddingApp({
           </div>
         </header>
 
+        {session?.user?.emailVerified === false && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900 sm:px-5 lg:px-8">
+            <p className="min-w-0 flex-1">
+              {verificationSent
+                ? `שלחנו קישור אימות אל ${session.user.email}. פתחו אותו ואז רעננו את האפליקציה.`
+                : `אמתו את כתובת המייל ${session.user.email} כדי לאפשר צירוף לחשבונות משותפים.`}
+            </p>
+            {!verificationSent && (
+              <button
+                type="button"
+                onClick={resendVerificationEmail}
+                disabled={verificationBusy}
+                className="min-h-10 shrink-0 rounded-xl bg-white px-3 font-semibold text-amber-900 ring-1 ring-amber-300 transition hover:bg-amber-100 disabled:opacity-60"
+              >
+                {verificationBusy ? "שולח…" : "שליחת קישור אימות"}
+              </button>
+            )}
+          </div>
+        )}
+
         {!canEdit && (
           <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-5 py-2.5 text-xs font-medium text-slate-600 lg:px-8">
             <Eye size={14} className="shrink-0" />
@@ -9246,27 +10308,50 @@ function WeddingApp({
             טעינת הנתונים מהשרת נכשלה. מה שמוצג כאן אינו מלא —{" "}
             <strong>הנתונים שלכם לא נמחקו</strong> ושום שינוי לא יישמר עד שהחיבור יחזור.
             <button
-              onClick={() => window.location.reload()}
-              className="rounded-full bg-white px-3 py-1 font-semibold text-rose-700 ring-1 ring-rose-300 transition hover:bg-rose-100"
+              onClick={() => {
+                setCloudStatus("connecting");
+                setCloudReady(false);
+                setInitialLoadAttempt((attempt) => attempt >= 3 ? 0 : attempt + 1);
+              }}
+              className="min-h-11 rounded-full bg-white px-3 py-1 font-semibold text-rose-700 ring-1 ring-rose-300 transition hover:bg-rose-100"
             >
-              רענון הדף
+              ניסיון חוזר
             </button>
           </div>
         )}
 
         <div key={active} className="animate-fade-in-up p-3 sm:p-5 lg:p-8">
-          {/*  הסבר קצר על המסך. יושב מחוץ ל-fieldset המושבת כדי שגם צופה
-              בלבד (viewer) יוכל לסגור אותו ולפתוח את הסיור.  */}
-          {introHidden !== true && (
-            <ScreenIntro
-              guide={screenGuide(active, canEdit)}
-              onStartTour={startTour}
-              onDismiss={() => setIntroHidden(true)}
-            />
+          {!tourInviteDismissed && (
+            <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-gold-200 bg-gold-50/80 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-gold-600 shadow-sm ring-1 ring-gold-100">
+                  <Sparkles size={18} />
+                </span>
+                <div>
+                  <p className="text-sm font-bold text-slate-800">רוצים סיור קצר במערכת?</p>
+                  <p className="mt-0.5 text-xs leading-5 text-slate-600">
+                    נציג את המסכים והפעולות העיקריות. הסיור לא יתחיל בלי שתבחרו בו.
+                  </p>
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                <button type="button" onClick={startTour} className="btn-primary min-h-11">
+                  <HelpCircle size={16} /> התחלת הסיור
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTourInviteDismissed(true)}
+                  className="btn-secondary min-h-11"
+                >
+                  לא עכשיו
+                </button>
+              </div>
+            </div>
           )}
           {/*  הרשאת העריכה עוברת ב-context וכל מסך מסתיר בעצמו את מה שכותב.
               קודם היה כאן fieldset מושבת אחד סביב הכול, והוא ניטרל לצופה
               גם את החיפוש, הסינון, המיון והכפתור "הצג עוד".  */}
+          <ScreenErrorBoundary key={`${weddingId || "local"}:${active}`}>
           <CanEditContext.Provider value={canEdit}>
           {active === "overview" && (
             <Overview
@@ -9279,23 +10364,18 @@ function WeddingApp({
               canEditSettings={cloudEnabled ? isOwner : true}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenVendor={canOpenVendors ? openVendor : null}
-              onBackgroundChange={async (file) => {
-                try {
-                  const url = await uploadCountdownBackground(weddingId, file);
-                  setCountdownBackgroundUrl(url);
-                  notify("תמונת הרקע נשמרה", { tone: "success" });
-                } catch (err) {
-                  notify(
-                    err?.message === "file_too_large"
-                      ? "התמונה גדולה מדי. בחרו תמונה עד 8MB."
-                      : err?.message === "image_required"
-                        ? "בחרו קובץ תמונה."
-                        : "שמירת תמונת הרקע נכשלה. נסו שוב.",
-                    { tone: "error" }
-                  );
-                }
-              }}
-              adminStats={adminStats}
+              canAddVendor={canEdit && mayVendors}
+              dataLoading={cloudEnabled && ["connecting", "loading"].includes(cloudStatus)}
+              dataUnavailable={cloudEnabled && cloudStatus === "error"}
+              adminStats={
+                adminAllowed
+                  ? adminStats
+                  : null
+              }
+              backgroundUrl={countdownBackgroundUrl}
+              onBackgroundChange={
+                cloudEnabled && isOwner ? handleCountdownBackgroundChange : null
+              }
             />
           )}
           {active === "checklist" && (
@@ -9310,23 +10390,21 @@ function WeddingApp({
                 setTables={setTables}
                 categories={categories}
                 setCategories={setCategories}
-                setBudget={mayFinance ? setBudget : null}
+                dataLoading={cloudEnabled && ["connecting", "loading"].includes(cloudStatus)}
+                dataUnavailable={cloudEnabled && cloudStatus === "error"}
               />
             </CategoriesContext.Provider>
           )}
-          {active === "alcohol" && (
-            <AlcoholCalculator
-              drinkers={guests
-                .filter((guest) => guest.rsvp !== "declined")
-                .reduce((sum, guest) => sum + Math.min(guest.seats || 1, Math.max(0, Number(guest.drinkers) || 0)), 0)}
-              expectedSeats={
-                guests.filter((guest) => guest.rsvp === "confirmed").reduce((sum, guest) => sum + Math.min(guest.seats || 1, Math.max(0, Number(guest.attendingCount) || guest.seats || 1)), 0) ||
-                guests.filter((guest) => guest.rsvp !== "declined" && guest.probablyComing).reduce((sum, guest) => sum + (guest.seats || 1), 0) ||
-                guests.filter((guest) => guest.rsvp !== "declined").reduce((sum, guest) => sum + (guest.seats || 1), 0)
-              }
-              setBudget={mayFinance ? setBudget : null}
-            />
-          )}
+          {active === "alcohol" && (() => {
+            const stats = getAlcoholStats(guests);
+            return (
+              <AlcoholCalculator
+                drinkers={stats.drinkers}
+                expectedSeats={stats.expectedSeats}
+                setBudget={mayFinance ? setBudget : null}
+              />
+            );
+          })()}
           {active === "seating" && (
             <Seating guests={guests} tables={tables} setTables={setTables} />
           )}
@@ -9334,6 +10412,7 @@ function WeddingApp({
             <Vendors
               vendors={vendors}
               setVendors={setVendors}
+              budget={budget}
               setBudget={mayFinance ? setBudget : null}
               weddingId={cloudEnabled ? weddingId : null}
               canEdit={canEdit}
@@ -9360,12 +10439,15 @@ function WeddingApp({
               coupleTitle={coupleTitle}
             />
           )}
+          {active === "admin" && adminAllowed && <AdminDashboard />}
           </CanEditContext.Provider>
+          </ScreenErrorBoundary>
         </div>
       </main>
 
       {tourOn && (
         <Tour
+          key={active}
           steps={tourSteps}
           onClose={() => {
             setTourOn(false);
@@ -9540,7 +10622,7 @@ function ScopePicker({ scopes, onChange, idPrefix }) {
           onClick={() => onChange(["all"])}
           className={`flex-1 rounded-xl px-3 py-2 text-xs font-semibold transition ${
             full
-              ? "bg-gold-500 text-white shadow-sm"
+              ? "bg-gold-500 text-slate-950 shadow-sm"
               : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
           }`}
         >
@@ -9551,7 +10633,7 @@ function ScopePicker({ scopes, onChange, idPrefix }) {
           onClick={() => onChange(full ? ["guests"] : scopes)}
           className={`flex-1 rounded-xl px-3 py-2 text-xs font-semibold transition ${
             !full
-              ? "bg-gold-500 text-white shadow-sm"
+              ? "bg-gold-500 text-slate-950 shadow-sm"
               : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
           }`}
         >
@@ -9593,50 +10675,44 @@ function ScopePicker({ scopes, onChange, idPrefix }) {
  *  WEDDING SETTINGS MODAL
  * ====================================================================== */
 
-/**
- * בית אחד לכל ההגדרות הכלליות של החתונה — נתונים שקובעים פעם אחת בהתחלה
- * ולא נוגעים בהם תוך כדי עבודה. לפני כן הם היו פזורים בתוך מסכי העבודה
- * (כפתור "שינוי תאריך" באמצע הדאשבורד, עריכת שמות בכותרת), וזה גם הסתיר
- * אותם וגם הפריע לשימוש היומיומי.
- */
-function PasskeyPanel() {
+function PasskeyPanel({ currentUserId }) {
   const [supported, setSupported] = useState(false);
   const [keys, setKeys] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
   const refresh = useCallback(async () => {
     try {
       setKeys(await listPasskeys());
-    } catch {
+    } catch (err) {
+      console.error("Failed to load passkeys:", err);
       setKeys([]);
     }
   }, []);
 
   useEffect(() => {
-    let alive = true;
-    platformAuthenticatorAvailable().then((ok) => {
-      if (!alive) return;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSupported(ok);
-      if (ok) refresh();
+    let active = true;
+    platformAuthenticatorAvailable().then((available) => {
+      if (!active) return;
+      setSupported(available);
+      if (available) refresh();
     });
     return () => {
-      alive = false;
+      active = false;
     };
-  }, [refresh]);
+  }, [refresh, currentUserId]);
 
-  if (!passkeySupported() || !supported) return null;
+  if (!supported) return null;
 
   async function enable() {
-    setMsg("");
-    setError("");
     setBusy(true);
+    setError("");
+    setMessage("");
     try {
-      await registerPasskey(navigator.platform || "מכשיר");
+      await registerPasskey(navigator.platform || "המכשיר שלי");
       await refresh();
-      setMsg("הכניסה המהירה הופעלה במכשיר הזה.");
+      setMessage("הכניסה המהירה הופעלה במכשיר הזה.");
     } catch (err) {
       setError(passkeyErrorMessage(err));
     } finally {
@@ -9646,180 +10722,63 @@ function PasskeyPanel() {
 
   async function remove(id) {
     const ok = await confirmDialog({
-      title: "ביטול כניסה מהירה",
-      message: "לבטל את הכניסה הביומטרית מהמכשיר הזה? תמיד אפשר להפעיל שוב.",
-      confirmLabel: "ביטול הכניסה",
+      title: "הסרת כניסה מהירה",
+      message: "להסיר את מפתח הכניסה מהמכשיר הזה? תמיד אפשר להיכנס עם מייל וסיסמה.",
+      confirmLabel: "הסרה",
       tone: "danger",
     });
     if (!ok) return;
+    setBusy(true);
+    setError("");
     try {
       await deletePasskey(id);
       await refresh();
-      setMsg("הכניסה המהירה בוטלה.");
-    } catch {
-      setError("הביטול נכשל. נסו שוב.");
-    }
-  }
-
-  return (
-    <div className="rounded-2xl bg-sage-50/60 p-3.5 ring-1 ring-sage-200">
-      <div className="flex items-start gap-3">
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-sage-600 shadow-sm">
-          <Fingerprint size={17} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-slate-700">כניסה מהירה</p>
-          <p className="mt-1 text-[11px] leading-5 text-slate-500">
-            במקום להקליד מייל וסיסמה — Face ID או טביעת אצבע. הביומטריה נשארת
-            במכשיר ולא נשלחת לשום מקום.
-          </p>
-
-          {keys.length > 0 && (
-            <ul className="mt-3 space-y-1.5">
-              {keys.map((k) => (
-                <li
-                  key={k.id}
-                  className="flex items-center justify-between gap-2 rounded-xl bg-white px-2.5 py-1.5 text-[11px] ring-1 ring-sage-200"
-                >
-                  <span className="min-w-0 truncate text-slate-600">
-                    {k.label || "מכשיר"}
-                    {k.lastUsedAt && (
-                      <span className="text-slate-400">
-                        {" "}
-                        · שימוש אחרון {new Date(k.lastUsedAt).toLocaleDateString("he-IL")}
-                      </span>
-                    )}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => remove(k.id)}
-                    className="shrink-0 rounded-lg px-2 py-1 text-rose-500 transition hover:bg-rose-50"
-                  >
-                    ביטול
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <button
-            type="button"
-            onClick={enable}
-            disabled={busy}
-            className="mt-3 inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-sage-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-sage-600 disabled:opacity-60"
-          >
-            {busy ? <Loader2 size={14} className="animate-spin" /> : <Fingerprint size={14} />}
-            {keys.length ? "הוספת המכשיר הנוכחי" : "הפעלת כניסה מהירה"}
-          </button>
-
-          {msg && (
-            <p className="mt-2 rounded-lg bg-white px-2.5 py-1.5 text-[11px] text-sage-700 ring-1 ring-sage-200">
-              {msg}
-            </p>
-          )}
-          {error && (
-            <p className="mt-2 rounded-lg bg-rose-50 px-2.5 py-1.5 text-[11px] text-rose-600 ring-1 ring-rose-200">
-              {error}
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ShareAppPanel() {
-  const [installPrompt, setInstallPrompt] = useState(null);
-
-  useEffect(() => {
-    const capturePrompt = (event) => {
-      event.preventDefault();
-      setInstallPrompt(event);
-    };
-    window.addEventListener("beforeinstallprompt", capturePrompt);
-    return () => window.removeEventListener("beforeinstallprompt", capturePrompt);
-  }, []);
-
-  async function shareApp() {
-    const shareData = {
-      title: "תכנון החתונה שלי",
-      text: "מערכת נעימה ופשוטה לתכנון חתונה יחד",
-      url: window.location.origin,
-    };
-    try {
-      if (navigator.share) {
-        await navigator.share(shareData);
-        return;
-      }
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(shareData.url);
-      } else {
-        const field = document.createElement("textarea");
-        field.value = shareData.url;
-        field.setAttribute("readonly", "");
-        field.style.position = "fixed";
-        field.style.opacity = "0";
-        document.body.appendChild(field);
-        field.select();
-        document.execCommand("copy");
-        field.remove();
-      }
-      notify("הקישור הועתק — אפשר לשלוח לחברים", { tone: "success" });
     } catch (err) {
-      if (err?.name === "AbortError") return;
-      notify("לא הצלחנו לשתף. העתיקו את כתובת האתר מהדפדפן.", { tone: "error" });
+      setError(passkeyErrorMessage(err));
+    } finally {
+      setBusy(false);
     }
   }
 
-  async function installApp() {
-    if (!installPrompt) return;
-    installPrompt.prompt();
-    await installPrompt.userChoice;
-    setInstallPrompt(null);
-  }
-
   return (
-    <div className="rounded-2xl bg-gold-50/70 p-3.5 ring-1 ring-gold-200">
+    <section className="mt-5 space-y-3 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
       <div className="flex items-start gap-3">
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-gold-600 shadow-sm">
-          <Share2 size={17} />
-        </div>
+        <Fingerprint size={19} className="mt-0.5 shrink-0 text-gold-600" />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-slate-700">שתפו את האפליקציה</p>
-          <p className="mt-1 text-[11px] leading-5 text-slate-500">
-            קישור כללי לחברים מאורסים. הוא לא מעניק גישה לחתונה שלכם.
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={shareApp}
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-gold-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-gold-600"
-            >
-              <Share2 size={14} /> שתפו את האפליקציה
-            </button>
-            {installPrompt && (
-              <button
-                type="button"
-                onClick={installApp}
-                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-sage-700 ring-1 ring-sage-200 transition hover:bg-sage-50"
-              >
-                <Smartphone size={14} /> הוספה למסך הבית
-              </button>
-            )}
-          </div>
-          <p className="mt-2 text-[11px] text-slate-400">
-            בנייד: פתחו את תפריט הדפדפן ובחרו “הוספה למסך הבית”.
+          <h4 className="text-sm font-bold text-slate-800">כניסה מהירה עם Passkey</h4>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            כניסה באמצעות Face ID, טביעת אצבע או Windows Hello. המפתח נשמר במכשיר ולא נשלחת ממנו סיסמה.
           </p>
         </div>
       </div>
-    </div>
+      {keys.map((key) => (
+        <div key={key.id || key.credentialId} className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+          <span className="min-w-0 truncate text-xs font-medium text-slate-700">{key.label || "מכשיר רשום"}</span>
+          <button type="button" onClick={() => remove(key.id || key.credentialId)} disabled={busy} className="min-h-11 shrink-0 rounded-lg px-3 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-50">
+            הסרה
+          </button>
+        </div>
+      ))}
+      <button type="button" onClick={enable} disabled={busy} className="flex min-h-10 items-center justify-center gap-2 rounded-xl bg-white px-3 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-gold-50 disabled:opacity-50">
+        {busy ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
+        הוספת Passkey למכשיר הזה
+      </button>
+      {message && <p className="text-xs text-sage-700">{message}</p>}
+      {error && <p className="text-xs text-rose-600">{error}</p>}
+    </section>
   );
 }
 
+/**
+ * בית אחד לכל ההגדרות הכלליות של החתונה — נתונים שקובעים פעם אחת בהתחלה
+ * ולא נוגעים בהם תוך כדי עבודה. לפני כן הם היו פזורים בתוך מסכי העבודה
+ * (כפתור "שינוי תאריך" באמצע הדאשבורד, עריכת שמות בכותרת), וזה גם הסתיר
+ * אותם וגם הפריע לשימוש היומיומי.
+ */
 function WeddingSettingsModal({
   couple,
   weddingDate,
-  weddingName,
+  weddingName = "",
   budgetGoal,
   currentUserId,
   canEditBasics,
@@ -9827,7 +10786,7 @@ function WeddingSettingsModal({
   showDate,
   weddingId = null,
   onSaveBasics,
-  onSetBudgetGoal,
+  onSaveBudgetGoal,
   onDeleteWedding,
   onClose,
 }) {
@@ -9835,7 +10794,19 @@ function WeddingSettingsModal({
   const [partnerB, setPartnerB] = useState(couple?.partnerB || "");
   const [date, setDate] = useState(String(weddingDate || "").slice(0, 10));
   const [goal, setGoal] = useState(String(budgetGoal || ""));
+  const [initialDraft, setInitialDraft] = useState(() => ({
+    partnerA: couple?.partnerA || "",
+    partnerB: couple?.partnerB || "",
+    date: String(weddingDate || "").slice(0, 10),
+    goal: String(budgetGoal || ""),
+  }));
+  const dialogRef = useRef(null);
+  const firstFieldRef = useRef(null);
   const [busy, setBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [budgetSaveStatus, setBudgetSaveStatus] = useState("");
+  const [basicsSaveStatus, setBasicsSaveStatus] = useState("");
 
   //  צירוף בן/בת הזוג אינו חלק מטופס השמירה: זו פעולה חד-פעמית שפותחת
   //  חשבון ושולחת מייל, ואין לה מצב של "עוד לא נשמר".
@@ -9843,22 +10814,36 @@ function WeddingSettingsModal({
   const [partnerBusy, setPartnerBusy] = useState(false);
   const [partnerMsg, setPartnerMsg] = useState("");
   const [partnerError, setPartnerError] = useState("");
-  const [linkedPartners, setLinkedPartners] = useState([]);
 
-  const loadLinkedPartners = useCallback(async () => {
-    if (!weddingId) return;
-    try {
-      const list = await listMembers(weddingId);
-      setLinkedPartners(list.filter((member) => member.userId !== currentUserId && member.email));
-    } catch {
-      setLinkedPartners([]);
+  const isDirty =
+    partnerA !== initialDraft.partnerA ||
+    partnerB !== initialDraft.partnerB ||
+    date !== initialDraft.date ||
+    goal !== initialDraft.goal ||
+    !!partnerEmail.trim() ||
+    !!deleteConfirmation.trim();
+
+  async function requestClose() {
+    if (busy || deleteBusy || partnerBusy) return;
+    if (isDirty) {
+      const discard = await confirmDialog({
+        title: "לסגור בלי לשמור שינויים?",
+        message: "השינויים שהקלדתם בהגדרות ובכתובת בן/בת הזוג יימחקו.",
+        confirmLabel: "סגירה בלי לשמור",
+        cancelLabel: "המשך עריכה",
+        tone: "danger",
+      });
+      if (!discard) return;
     }
-  }, [currentUserId, weddingId]);
+    onClose();
+  }
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadLinkedPartners();
-  }, [loadLinkedPartners]);
+  useAccessibleModal({
+    open: true,
+    containerRef: dialogRef,
+    initialFocusRef: firstFieldRef,
+    onRequestClose: requestClose,
+  });
 
   async function addPartnerAccount() {
     const address = partnerEmail.trim();
@@ -9873,7 +10858,6 @@ function WeddingSettingsModal({
     try {
       const res = await addPartner(weddingId, address);
       setPartnerEmail("");
-      await loadLinkedPartners();
       setPartnerMsg(
         res?.alreadyMember
           ? `${res.email} כבר משותף/ת בחתונה הזו — לא בוצע שינוי.`
@@ -9882,9 +10866,11 @@ function WeddingSettingsModal({
             : `${res.email} צורף/ה לחתונה. הכניסה היא עם הסיסמה הקיימת שלו/ה.`
       );
     } catch (err) {
-      const code = err?.code || err?.message;
+      const code = `${err?.code || ""} ${err?.message || ""}`;
       setPartnerError(
-        code === "cannot_invite_self"
+        String(code).includes("partner_email_unverified")
+          ? "לכתובת הזו כבר קיים חשבון שלא אומת. בעל החשבון צריך להתחבר ולאמת את המייל לפני הצירוף."
+          : code === "cannot_invite_self"
           ? "זו כתובת המייל שלכם. הזינו את הכתובת של בן/בת הזוג."
           : code === "invalid_email"
             ? "כתובת המייל אינה תקינה."
@@ -9900,56 +10886,81 @@ function WeddingSettingsModal({
   async function save(e) {
     e.preventDefault();
     setBusy(true);
-    try {
-      //  יעד התקציב נשמר דרך ה-state הרגיל (סנכרון ענן מושהה), ולכן הוא לא
-      //  חלק מאותה בקשה — אבל הוא כן נשמר לפני שהמודאל נסגר.
-      if (canEditBudgetGoal) onSetBudgetGoal(Math.max(0, Number(goal) || 0));
-      if (canEditBasics) {
+    setBudgetSaveStatus("");
+    setBasicsSaveStatus("");
+    const nextGoal = Math.max(0, Number(goal) || 0);
+    const goalChanged = canEditBudgetGoal && nextGoal !== (Number(initialDraft.goal) || 0);
+    const basicsChanged = canEditBasics && (
+      partnerA.trim() !== initialDraft.partnerA ||
+      partnerB.trim() !== initialDraft.partnerB ||
+      (showDate && date !== initialDraft.date)
+    );
+    const failures = [];
+    const savedSections = [];
+
+    if (goalChanged) {
+      try {
+        await onSaveBudgetGoal(nextGoal);
+        setInitialDraft((previous) => ({ ...previous, goal: String(nextGoal) }));
+        setBudgetSaveStatus("saved");
+        savedSections.push("יעד התקציב");
+      } catch (err) {
+        console.error("Failed to save budget goal:", err);
+        setBudgetSaveStatus("error");
+        failures.push("יעד התקציב");
+      }
+    }
+
+    if (basicsChanged) {
+      try {
         await onSaveBasics({
           partnerA: partnerA.trim(),
           partnerB: partnerB.trim(),
           date: showDate ? date : undefined,
         });
+        setInitialDraft((previous) => ({
+          ...previous,
+          partnerA: partnerA.trim(),
+          partnerB: partnerB.trim(),
+          date: showDate ? date : previous.date,
+        }));
+        setBasicsSaveStatus("saved");
+        savedSections.push("פרטי החתונה");
+      } catch (err) {
+        console.error("Failed to save wedding basics:", err);
+        setBasicsSaveStatus("error");
+        failures.push("פרטי החתונה");
       }
-      notify("ההגדרות נשמרו", { tone: "success" });
-      onClose();
-    } catch (err) {
-      console.error("Failed to save wedding settings:", err);
-      notify("שמירת ההגדרות נכשלה. נסו שוב.", { tone: "error" });
-    } finally {
-      setBusy(false);
     }
+
+    setBusy(false);
+    if (failures.length) {
+      notify(
+        `${savedSections.length ? `נשמרו בהצלחה: ${savedSections.join(", ")}. ` : ""}לא נשמרו: ${failures.join(", ")}. אפשר לנסות שוב.`,
+        { tone: "error", duration: 8000 }
+      );
+      return;
+    }
+
+    notify(
+      savedSections.length ? `נשמרו בהצלחה: ${savedSections.join(", ")}.` : "ההגדרות נשמרו",
+      { tone: "success" }
+    );
+    onClose();
   }
 
   async function removeWedding() {
-    const confirmationName = await promptDialog({
-      title: "מחיקת החתונה וכל הנתונים",
-      message: `הפעולה תמחק לצמיתות את כל המוזמנים, הספקים, התקציב, הקבצים והחברים. כדי להמשיך, הקלידו: ${weddingName}`,
-      initialValue: "",
-      confirmLabel: "המשך",
-    });
-    if (confirmationName === null) return;
-    if (confirmationName.trim() !== weddingName) {
-      notify("שם החתונה אינו תואם. המחיקה בוטלה.", { tone: "error" });
-      return;
-    }
-    const confirmed = await confirmDialog({
-      title: "האם למחוק לצמיתות?",
-      message: "לא ניתן לשחזר את החתונה או את הנתונים שלה לאחר המחיקה.",
-      confirmLabel: "מחיקה לצמיתות",
-      tone: "danger",
-    });
-    if (!confirmed) return;
-
-    setBusy(true);
+    if (!onDeleteWedding || deleteConfirmation.trim() !== weddingName.trim()) return;
+    setDeleteBusy(true);
     try {
-      await onDeleteWedding(confirmationName.trim());
-      notify("החתונה וכל הנתונים נמחקו", { tone: "success" });
+      await onDeleteWedding(weddingId, deleteConfirmation.trim());
+      notify("החתונה וכל הנתונים שלה נמחקו", { tone: "success" });
+      onClose();
     } catch (err) {
       console.error("Failed to delete wedding:", err);
       notify("מחיקת החתונה נכשלה. נסו שוב.", { tone: "error" });
     } finally {
-      setBusy(false);
+      setDeleteBusy(false);
     }
   }
 
@@ -9959,21 +10970,24 @@ function WeddingSettingsModal({
   return (
     <div
       className="fixed inset-0 z-[105] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={requestClose}
     >
       <form
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby="wedding-settings-title"
         onSubmit={save}
-        className="animate-fade-in-up relative max-h-[85vh] w-full max-w-md overflow-auto rounded-3xl bg-white p-6 shadow-2xl"
+        className="animate-fade-in-up relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white p-5 shadow-2xl sm:p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <button
           type="button"
-          onClick={onClose}
+          onClick={requestClose}
+          disabled={busy || deleteBusy || partnerBusy}
           aria-label="סגירה"
           title="סגירה"
-          className="absolute left-5 top-5 rounded-xl p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+          className="absolute left-4 top-4 rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:opacity-40"
         >
           <X size={18} />
         </button>
@@ -9983,7 +10997,7 @@ function WeddingSettingsModal({
             <Settings2 size={20} />
           </div>
           <div className="min-w-0">
-            <h3 className="font-[var(--font-display)] text-lg font-bold text-slate-800">
+            <h3 id="wedding-settings-title" className="font-display text-lg font-bold text-slate-800">
               הגדרות החתונה
             </h3>
             <p className="text-xs text-slate-500">
@@ -9992,6 +11006,7 @@ function WeddingSettingsModal({
           </div>
         </div>
 
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-4">
         <div className="space-y-4">
           <div>
             <p className="mb-2 text-xs font-semibold text-slate-500">
@@ -9999,6 +11014,7 @@ function WeddingSettingsModal({
             </p>
             <div className="grid grid-cols-2 gap-2">
               <input
+                ref={firstFieldRef}
                 value={partnerA}
                 onChange={(e) => setPartnerA(e.target.value)}
                 disabled={!canEditBasics}
@@ -10020,6 +11036,11 @@ function WeddingSettingsModal({
             <p className="mt-1.5 text-[11px] text-slate-400">
               השמות האלה הם כותרת החתונה בכל המסכים ובקובץ האקסל.
             </p>
+            {basicsSaveStatus && (
+              <p aria-live="polite" className={`mt-1.5 text-xs font-medium ${basicsSaveStatus === "saved" ? "text-sage-700" : "text-rose-700"}`}>
+                {basicsSaveStatus === "saved" ? "פרטי החתונה נשמרו." : "שמירת פרטי החתונה נכשלה. אפשר לנסות שוב."}
+              </p>
+            )}
           </div>
 
           {showDate && (
@@ -10065,6 +11086,11 @@ function WeddingSettingsModal({
             <p className="mt-1.5 text-[11px] text-slate-400">
               הסכום שאתם מוכנים להוציא בסך הכול. משמש להשוואה במסך התקציב.
             </p>
+            {budgetSaveStatus && (
+              <p aria-live="polite" className={`mt-1.5 text-xs font-medium ${budgetSaveStatus === "saved" ? "text-sage-700" : "text-rose-700"}`}>
+                {budgetSaveStatus === "saved" ? "יעד התקציב נשמר." : "שמירת יעד התקציב נכשלה. אפשר לנסות שוב."}
+              </p>
+            )}
           </div>
 
           {/*  נפרד מכפתור השמירה בכוונה: זו פעולה שפותחת חשבון אמיתי
@@ -10105,23 +11131,6 @@ function WeddingSettingsModal({
                 נפרדת לאותה חתונה, עם גישה מלאה לכל המסכים. הסיסמה שלהם
                 נפרדת משלכם — אתם לא רואים אותה והם לא רואים את שלכם.
               </p>
-              {linkedPartners.length > 0 && (
-                <div className="mt-3 space-y-1.5">
-                  <p className="text-[11px] font-semibold text-slate-500">שותפים עם גישה לחתונה</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {linkedPartners.map((member) => (
-                      <span
-                        key={member.userId}
-                        className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-[11px] text-slate-600 ring-1 ring-sage-200"
-                        dir="ltr"
-                      >
-                        <UserCheck size={12} className="shrink-0 text-sage-500" />
-                        <span className="truncate">{member.email}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
               {partnerMsg && (
                 <p className="mt-2 rounded-lg bg-sage-50 px-2.5 py-1.5 text-[11px] text-sage-700 ring-1 ring-sage-200">
                   {partnerMsg}
@@ -10134,48 +11143,60 @@ function WeddingSettingsModal({
               )}
             </div>
           )}
-
-          {/*  מחוץ לבלוק של הבעלים בכוונה: הכניסה המהירה נרשמת לכל משתמש
-              ולכל מכשיר בנפרד, ולכן בן/בת הזוג חייבים לראות אותה גם כשהם
-              אינם הבעלים. אותו דבר לגבי שיתוף האפליקציה.  */}
-          <PasskeyPanel />
-
-          {canEditBasics && weddingId && onDeleteWedding && (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3.5">
-              <p className="text-sm font-semibold text-rose-700">מחיקת החתונה</p>
-              <p className="mt-1 text-[11px] leading-5 text-rose-600">
-                מחיקה לצמיתות של החתונה, כל הנתונים והקבצים המצורפים שלה.
-              </p>
-              <button
-                type="button"
-                onClick={removeWedding}
-                disabled={busy}
-                className="mt-3 rounded-xl border border-rose-300 bg-white px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
-              >
-                מחיקת החתונה
-              </button>
-            </div>
-          )}
         </div>
+
+        <PasskeyPanel currentUserId={currentUserId} />
+
+        {onDeleteWedding && (
+          <section className="mt-5 space-y-3 rounded-2xl border border-rose-200 bg-rose-50/70 p-4">
+            <div>
+              <h4 className="text-sm font-bold text-rose-800">מחיקת החתונה</h4>
+              <p className="mt-1 text-xs leading-5 text-rose-700">
+                פעולה זו מוחקת לצמיתות את החתונה, החברים, הנתונים והקבצים שלה.
+                לא ניתן לבטל אותה.
+              </p>
+            </div>
+            <label className="block space-y-1 text-xs font-medium text-rose-800">
+              הקלידו את שם החתונה לאישור: <bdi>{weddingName}</bdi>
+              <input
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+                className="w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
+                autoComplete="off"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={removeWedding}
+              disabled={deleteBusy || deleteConfirmation.trim() !== weddingName.trim()}
+              className="flex min-h-10 items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {deleteBusy ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+              מחיקה לצמיתות
+            </button>
+          </section>
+        )}
 
         {!canEditBasics && (
           <p className="mt-4 rounded-xl bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
             שמות בני הזוג ותאריך החתונה ניתנים לשינוי על ידי בעלי החתונה בלבד.
           </p>
         )}
+        </div>
 
-        <div className="mt-6 flex gap-2">
+        <div className="sticky bottom-0 z-10 -mx-5 flex shrink-0 gap-2 border-t border-slate-100 bg-white/95 px-5 pt-3 backdrop-blur sm:-mx-6 sm:px-6">
           <button
             type="submit"
-            disabled={busy}
-            className="flex-1 rounded-xl bg-gradient-to-l from-gold-500 to-gold-400 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-gold-500/30 transition hover:brightness-105 disabled:opacity-60"
+            disabled={busy || deleteBusy || partnerBusy}
+            className="btn-primary flex-1 disabled:opacity-60"
           >
             {busy ? "שומר…" : "שמירה"}
           </button>
           <button
             type="button"
-            onClick={onClose}
-            className="rounded-xl px-4 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-slate-100"
+            onClick={requestClose}
+            disabled={busy || deleteBusy || partnerBusy}
+            className="rounded-xl px-4 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-slate-100 disabled:opacity-40"
           >
             ביטול
           </button>
@@ -10227,6 +11248,8 @@ function MembersModal({
   weddingName = "",
   onClose,
 }) {
+  const dialogRef = useRef(null);
+  const emailRef = useRef(null);
   const [members, setMembers] = useState(null);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("editor");
@@ -10236,6 +11259,30 @@ function MembersModal({
   const [lastLink, setLastLink] = useState("");
   const [lastEmail, setLastEmail] = useState("");
   const [editing, setEditing] = useState(null); // userId שנמצא בעריכת הרשאות
+  const [savingMember, setSavingMember] = useState(false);
+  const isDirty = !!email.trim() || role !== "editor" || !isFullScope(scopes) || editing !== null;
+
+  async function requestClose() {
+    if (busy || savingMember) return;
+    if (isDirty) {
+      const discard = await confirmDialog({
+        title: "לסגור בלי לשמור שינויים?",
+        message: "טיוטת ההזמנה או עריכת ההרשאות שביצעתם תימחק.",
+        confirmLabel: "סגירה בלי לשמור",
+        cancelLabel: "המשך עריכה",
+        tone: "danger",
+      });
+      if (!discard) return;
+    }
+    onClose();
+  }
+
+  useAccessibleModal({
+    open: true,
+    containerRef: dialogRef,
+    initialFocusRef: emailRef,
+    onRequestClose: requestClose,
+  });
 
   const onlineCount =
     members?.filter((m) => presenceLabel(m.lastSeenAt).online).length ?? 0;
@@ -10244,7 +11291,8 @@ function MembersModal({
   //  עצמו: ווטסאפ, אימייל או העתקה. כשההזמנה נצמדה לכתובת מייל ההודעה
   //  מזכירה אותה, אחרת הנמען מנסה להתחבר עם חשבון אחר והקישור נכשל.
   const eventLabel = weddingName || "החתונה שלנו";
-  const shareSubject = `הזמנה לתכנון ${eventLabel}`;  const shareMessage =
+  const shareSubject = `הזמנה לתכנון ${eventLabel}`;
+  const shareMessage =
     `היי! שיתפתי אותך במערכת לתכנון ${eventLabel}.\n` +
     `להצטרפות: ${lastLink}\n` +
     (lastEmail ? `הקישור ממתין לכתובת המייל: ${lastEmail}\n` : "") +
@@ -10266,13 +11314,13 @@ function MembersModal({
 
   const load = useCallback(async () => {
     try {
-      setMembers(await listMembers(weddingId));
+      setMembers(await listMembers(weddingId, isOwner));
     } catch (err) {
       console.error(err);
       notify("טעינת רשימת החברים נכשלה", { tone: "error" });
       setMembers([]);
     }
-  }, [weddingId]);
+  }, [weddingId, isOwner]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -10306,6 +11354,10 @@ function MembersModal({
       setLastLink(inv.link);
       setLastEmail(address.toLowerCase());
       setEmail("");
+      setRole("editor");
+      setScopes(["all"]);
+      setEditing(null);
+      setFormError("");
       notify("הקישור מוכן – שלחו אותו למי שרוצים לשתף", { tone: "success" });
     } catch (err) {
       console.error(err);
@@ -10327,6 +11379,7 @@ function MembersModal({
   }
 
   async function saveMember(m, nextRole, nextScopes) {
+    setSavingMember(true);
     try {
       await updateMember(weddingId, m.userId, nextRole, nextScopes);
       notify("ההרשאות עודכנו", { tone: "success" });
@@ -10335,6 +11388,8 @@ function MembersModal({
     } catch (err) {
       console.error(err);
       notify("עדכון ההרשאות נכשל", { tone: "error" });
+    } finally {
+      setSavingMember(false);
     }
   }
 
@@ -10363,17 +11418,20 @@ function MembersModal({
   return (
     <div
       className="fixed inset-0 z-[105] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={requestClose}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        className="animate-fade-in-up relative max-h-[85vh] w-full max-w-lg overflow-auto rounded-3xl bg-white p-6 shadow-2xl"
+        aria-label="שיתוף החתונה"
+        className="animate-fade-in-up relative max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-auto overscroll-contain rounded-3xl bg-white p-5 shadow-2xl sm:p-6"
         onClick={(e) => e.stopPropagation()}
       >
         {/*  כפתור הסגירה מקובע לפינה כדי שכותרת ארוכה לא תדחוף אותו למטה  */}
         <button
-          onClick={onClose}
+          onClick={requestClose}
+          disabled={busy || savingMember}
           aria-label="סגירה"
           title="סגירה"
           className="absolute left-5 top-5 rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
@@ -10388,16 +11446,13 @@ function MembersModal({
           />
         </div>
 
-        <div className="mb-5">
-          <ShareAppPanel />
-        </div>
-
         {isOwner && (
           <form onSubmit={invite} noValidate className="mb-5 space-y-3">
             <div className="flex flex-wrap gap-2">
               {/*  w-full במסך צר: שלושת הפקדים בשורה אחת כווצו את שדה המייל
                   ל-48px בטלפון, כלומר אי-אפשר היה לראות מה מקלידים בו.  */}
               <input
+                ref={emailRef}
                 type="email"
                 autoCapitalize="none"
                 spellCheck={false}
@@ -10423,7 +11478,7 @@ function MembersModal({
               <button
                 type="submit"
                 disabled={busy}
-                className="flex items-center gap-1.5 rounded-xl bg-gold-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-gold-600 disabled:opacity-60"
+                className="btn-primary disabled:opacity-60"
               >
                 {busy ? (
                   <Loader2 size={16} className="animate-spin" />
@@ -10581,7 +11636,7 @@ function MembersModal({
                       onClick={() => setEditing(editing === m.userId ? null : m.userId)}
                       title="עריכת הרשאות"
                       aria-label="עריכת הרשאות"
-                      className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-white hover:text-gold-600"
+                      className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-white hover:text-gold-600"
                     >
                       <Pencil size={15} />
                     </button>
@@ -10591,7 +11646,7 @@ function MembersModal({
                       onClick={() => revoke(m)}
                       title="הסרה"
                       aria-label="הסרת חבר"
-                      className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                      className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
                     >
                       <Trash2 size={15} />
                     </button>
@@ -10669,7 +11724,7 @@ function MemberPermissionEditor({ member, onCancel, onSave }) {
           type="button"
           onClick={submit}
           disabled={busy}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-gold-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-gold-600 disabled:opacity-60"
+          className="btn-primary min-h-11 flex-1 px-3 text-xs disabled:opacity-60"
         >
           {busy && <Loader2 size={13} className="animate-spin" />} שמירה
         </button>

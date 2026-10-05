@@ -20,7 +20,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { loadEnv } from "../server/env.mjs";
+import { loadEnv } from "./lib/env.mjs";
 
 loadEnv();
 

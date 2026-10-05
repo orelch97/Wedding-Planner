@@ -50,7 +50,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
-import { loadEnv } from "../server/env.mjs";
+import { loadEnv } from "./lib/env.mjs";
 import {
   ts,
   guestDoc,

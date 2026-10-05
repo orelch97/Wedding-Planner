@@ -21,13 +21,12 @@ import {
   writeBatch,
   setDoc,
   updateDoc,
-  deleteDoc,
   deleteField,
   arrayUnion,
-  arrayRemove,
+  runTransaction,
   serverTimestamp,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
 import {
   db,
@@ -55,6 +54,19 @@ function requireWeddingId(weddingId) {
 function requireAuth() {
   const user = auth?.currentUser;
   if (!user) throw new Error("firebaseStore: not authenticated");
+  return user;
+}
+
+/** Wait until Firebase has restored its persisted user before using Firestore. */
+export async function waitForAuthContext(expectedUid) {
+  if (!auth) throw new Error("firebaseStore: Firebase Auth is not configured");
+  if (typeof auth.authStateReady === "function") await auth.authStateReady();
+  const user = requireAuth();
+  if (expectedUid && user.uid !== expectedUid) {
+    const error = new Error("firebaseStore: Auth user does not match the active app session");
+    error.code = "auth_context_mismatch";
+    throw error;
+  }
   return user;
 }
 
@@ -88,30 +100,88 @@ function toIso(value) {
 
 async function fetchCollection(weddingId, key) {
   const cfg = ENTITIES[key];
-  const snap = await getDocs(weddingCol(weddingId, cfg.col));
+  let snap;
+  try {
+    snap = await getDocs(weddingCol(weddingId, cfg.col));
+  } catch (error) {
+    console.error("Firestore initial collection fetch failed:", {
+      weddingId,
+      collection: cfg.col,
+      code: error?.code,
+      error,
+    });
+    throw error;
+  }
   return snap.docs
     .map((d) => d.data())
     .filter(isAlive)
-    .map(cfg.fromDoc);
+    .map((data) => ({ ...cfg.fromDoc(data), _version: Number(data.revision) || 0 }));
 }
 
+const scopedSettingsRef = (weddingId, key) => doc(weddingCol(weddingId, "settings"), key);
+
 /** טוען את כל הנתונים הפעילים של חתונה אחת. */
-export async function cloudFetchAll(weddingId) {
+export async function cloudFetchAll(weddingId, { scopes = ["all"], isOwner = false } = {}) {
   requireWeddingId(weddingId);
-  requireAuth();
+  await waitForAuthContext();
 
+  try {
   const result = {};
-  //  במקביל: חמש שאילתות עצמאיות, ואין סיבה לשרשר אותן.
-  await Promise.all(
-    ENTITY_KEYS.map(async (key) => {
-      result[key] = await fetchCollection(weddingId, key);
-    })
-  );
+  const hasScope = (scope) => scopes.includes("all") || scopes.includes(scope);
+  const visibleKeys = ENTITY_KEYS.filter((key) => {
+    const scope = key === "tables" ? "guests" : key === "budget" ? "finance" : key;
+    return isOwner || hasScope(scope);
+  });
+  await Promise.all(visibleKeys.map(async (key) => {
+    result[key] = await fetchCollection(weddingId, key);
+  }));
+  for (const key of ENTITY_KEYS) result[key] ||= [];
 
-  const settings = await getDoc(settingsRef(weddingId));
-  //  updatedAt הוא מטא של השכבה הזו ולא הגדרה של המשתמש.
-  result.settings = stripMeta(settings.exists() ? settings.data() : {});
+  const reads = [];
+  if (isOwner) reads.push(["legacy", getDoc(settingsRef(weddingId))]);
+  if (isOwner || hasScope("finance")) {
+    reads.push(["finance", getDoc(scopedSettingsRef(weddingId, "finance"))]);
+  }
+  if (isOwner || hasScope("guests")) {
+    reads.push(["guests", getDoc(scopedSettingsRef(weddingId, "guests"))]);
+  }
+  if (isOwner) reads.push(["owner", getDoc(scopedSettingsRef(weddingId, "owner"))]);
+
+  const scopedSettings = {};
+  const snapshots = await Promise.all(reads.map(([, promise]) => promise));
+  for (let index = 0; index < reads.length; index++) {
+    const [key] = reads[index];
+    const snapshot = snapshots[index];
+    if (key !== "legacy" && snapshot.exists()) {
+      Object.assign(scopedSettings, stripMeta(snapshot.data()));
+    }
+  }
+
+  let legacySettings = {};
+  // Owners can read the legacy combined document; migrate only missing keys.
+  if (isOwner) {
+    const legacyIndex = reads.findIndex(([key]) => key === "legacy");
+    const legacy = legacyIndex >= 0 ? snapshots[legacyIndex] : null;
+    if (legacy?.exists()) {
+      legacySettings = stripMeta(legacy.data());
+      const missing = Object.fromEntries(
+        Object.entries(legacySettings).filter(([key]) => !(key in scopedSettings))
+      );
+      if (Object.keys(missing).length) await saveWeddingSettings(weddingId, missing);
+    }
+  }
+  result.settings = { ...legacySettings, ...scopedSettings };
   return result;
+  } catch (error) {
+    console.error("Firestore initial wedding data fetch failed:", {
+      weddingId,
+      isOwner,
+      scopes,
+      code: error?.code,
+      error,
+    });
+    throw error;
+  }
 }
 
 /**
@@ -120,13 +190,28 @@ export async function cloudFetchAll(weddingId) {
 export async function saveWeddingSettings(weddingId, settings) {
   requireWeddingId(weddingId);
   requireAuth();
-  await setDoc(
-    settingsRef(weddingId),
-    { ...(settings || {}), updatedAt: serverTimestamp() },
-    { merge: true }
+  const patch = settings || {};
+  const groups = {
+    finance: Object.fromEntries(
+      ["budgetGoal", "financeLabels"].filter((key) => key in patch).map((key) => [key, patch[key]])
+    ),
+    guests: Object.fromEntries(
+      ["categories"].filter((key) => key in patch).map((key) => [key, patch[key]])
+    ),
+    owner: Object.fromEntries(
+      ["countdownBackgroundUrl"].filter((key) => key in patch).map((key) => [key, patch[key]])
+    ),
+  };
+  await Promise.all(
+    Object.entries(groups)
+      .filter(([, values]) => Object.keys(values).length)
+      .map(([key, values]) => setDoc(
+        scopedSettingsRef(weddingId, key),
+        { ...values, updatedAt: serverTimestamp() },
+        { merge: true }
+      ))
   );
-  const snap = await getDoc(settingsRef(weddingId));
-  return stripMeta(snap.exists() ? snap.data() : {});
+  return { ...patch };
 }
 
 export async function uploadCountdownBackground(weddingId, file) {
@@ -182,12 +267,52 @@ export async function cloudSeed(weddingId, datasets) {
   requireAuth();
 
   const ops = [];
+  const isUuid = (value) =>
+    typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  const normalized = {
+    ...(datasets || {}),
+    vendors: (datasets?.vendors || []).map((vendor) => ({
+      ...vendor,
+      id: isUuid(vendor.id) ? vendor.id : crypto.randomUUID(),
+      ...(isUuid(vendor.id) || vendor.id == null ? {} : { legacyId: String(vendor.id) }),
+    })),
+  };
+  const vendorIds = new Map();
+  normalized.vendors.forEach((vendor, index) => {
+    vendorIds.set(String((datasets?.vendors || [])[index]?.id), vendor.id);
+    if (vendor.legacyId != null) vendorIds.set(String(vendor.legacyId), vendor.id);
+  });
+  normalized.budget = (datasets?.budget || []).map((row) => ({
+    ...row,
+    vendorId: row.vendorId == null
+      ? null
+      : (vendorIds.get(String(row.vendorId)) || String(row.vendorId)),
+  }));
+
+  if (!(await cloudIsEmpty(weddingId))) {
+    const remote = await cloudFetchAll(weddingId, { scopes: ["all"], isOwner: true });
+    for (const key of ENTITY_KEYS) {
+      const remoteRows = remote[key] || [];
+      const rowsById = new Map(remoteRows.map((row) => [row.id, row]));
+      for (const row of normalized[key] || []) rowsById.set(row.id, row);
+      await cloudSyncDataset(
+        weddingId,
+        key,
+        [...rowsById.values()],
+        new Set(remoteRows.map((row) => row.id)),
+        new Map(remoteRows.map((row) => [row.id, row]))
+      );
+    }
+    return normalized;
+  }
+
   for (const [key, cfg] of Object.entries(ENTITIES)) {
-    for (const row of datasets[key] || []) {
+    for (const row of normalized[key] || []) {
       const data = cfg.toDoc(row);
       ops.push((batch) =>
         batch.set(doc(weddingCol(weddingId, cfg.col), String(data.id)), {
           ...data,
+          revision: 1,
           deletedAt: null,
           updatedAt: serverTimestamp(),
         })
@@ -195,45 +320,95 @@ export async function cloudSeed(weddingId, datasets) {
     }
   }
   await commitInChunks(ops);
+  return normalized;
 }
 
 /**
- * מסנכרן dataset בודד:
- *   • upsert לכל הרשומות הנוכחיות,
- *   • soft-delete לרשומות שהוסרו.
+ * מסנכרן רק רשומות ששונו, תוך השוואת revision בתוך טרנזקציה.
+ * שינויים מרוחקים בשדות אחרים מתמזגים; אותו שדה מתנגש ונשמר מקומית.
  * מחזיר Set של ה-ids הנוכחיים לצורך ההשוואה הבאה.
  */
-export async function cloudSyncDataset(weddingId, key, rows, prevIds) {
+export async function cloudSyncDataset(
+  weddingId,
+  key,
+  rows,
+  prevIds,
+  baseline = new Map(),
+  { allowRestore = false } = {}
+) {
   requireWeddingId(weddingId);
   requireAuth();
   const cfg = ENTITIES[key];
   if (!cfg) throw new Error(`firebaseStore: unknown dataset '${key}'`);
 
-  const currentIds = new Set(rows.map((r) => Number(r.id)));
-  const removedIds = [...prevIds].filter((id) => !currentIds.has(Number(id)));
+  const normalizeId = (id) => key === "vendors" ? String(id) : Number(id);
+  const currentIds = new Set(rows.map((row) => normalizeId(row.id)));
+  const removedIds = [...prevIds].filter((id) => !currentIds.has(normalizeId(id)));
 
-  const ops = [];
   for (const row of rows) {
     const data = cfg.toDoc(row);
-    ops.push((batch) =>
-      batch.set(
-        doc(weddingCol(weddingId, cfg.col), String(data.id)),
-        { ...data, deletedAt: null, updatedAt: serverTimestamp() },
-        { merge: true }
-      )
-    );
-  }
-  for (const id of removedIds) {
-    ops.push((batch) =>
-      batch.set(
-        doc(weddingCol(weddingId, cfg.col), String(id)),
-        { deletedAt: serverTimestamp(), updatedAt: serverTimestamp() },
-        { merge: true }
-      )
-    );
+    const base = baseline.get(data.id);
+    const baseData = base ? cfg.toDoc(base) : null;
+    const localChanges = baseData
+      ? Object.keys(data).filter((field) => JSON.stringify(data[field]) !== JSON.stringify(baseData[field]))
+      : Object.keys(data);
+    if (!localChanges.length) continue;
+
+    const recordRef = doc(weddingCol(weddingId, cfg.col), String(data.id));
+    const revision = await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(recordRef);
+      const remote = snapshot.exists() ? snapshot.data() : null;
+      if (!remote && base && !allowRestore) {
+        throw Object.assign(new Error(`Record ${key}/${data.id} was removed remotely.`), { code: "sync_conflict" });
+      }
+      if (remote && !base && !allowRestore) {
+        throw Object.assign(new Error(`Record ${key}/${data.id} already exists remotely.`), { code: "sync_conflict" });
+      }
+      if (remote?.deletedAt && !allowRestore) {
+        throw Object.assign(new Error(`Record ${key}/${data.id} was deleted remotely.`), { code: "sync_conflict" });
+      }
+
+      const actualVersion = Number(remote?.revision) || 0;
+      const expectedVersion = Number(base?._version) || 0;
+      if (remote && actualVersion !== expectedVersion && !allowRestore) {
+        throw Object.assign(
+          new Error(`Stale revision for ${key}/${data.id}.`),
+          { code: "sync_conflict" }
+        );
+      }
+
+      const nextVersion = actualVersion + 1;
+      transaction.set(recordRef, {
+        ...data,
+        revision: nextVersion,
+        deletedAt: null,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      return nextVersion;
+    });
+    baseline.set(data.id, { ...row, _version: revision });
   }
 
-  if (ops.length) await commitInChunks(ops);
+  for (const id of removedIds) {
+    const base = baseline.get(normalizeId(id));
+    const recordRef = doc(weddingCol(weddingId, cfg.col), String(id));
+    await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(recordRef);
+      if ((!snapshot.exists() || snapshot.get("deletedAt")) && !allowRestore) return;
+      const actualVersion = Number(snapshot.get("revision")) || 0;
+      const expectedVersion = Number(base?._version) || 0;
+      if ((!base || actualVersion !== expectedVersion) && !allowRestore) {
+        throw Object.assign(new Error(`Cannot delete stale ${key}/${id}.`), { code: "sync_conflict" });
+      }
+      transaction.set(recordRef, {
+        deletedAt: serverTimestamp(),
+        revision: actualVersion + 1,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    });
+    baseline.delete(normalizeId(id));
+  }
+
   return currentIds;
 }
 
@@ -246,6 +421,7 @@ export async function cloudSyncDataset(weddingId, key, rows, prevIds) {
  */
 export function subscribeCollection(weddingId, key, onChange, onError) {
   requireWeddingId(weddingId);
+  requireAuth();
   const cfg = ENTITIES[key];
   if (!cfg) throw new Error(`firebaseStore: unknown dataset '${key}'`);
 
@@ -255,7 +431,14 @@ export function subscribeCollection(weddingId, key, onChange, onError) {
       //  שינויים שטרם נכתבו לשרת מגיעים עם hasPendingWrites. אלה השינויים
       //  שלנו עצמנו, והחזרתם ל-state היא בדיוק הלולאה שצריך למנוע.
       if (snap.metadata.hasPendingWrites) return;
-      onChange(snap.docs.map((d) => d.data()).filter(isAlive).map(cfg.fromDoc));
+      const allRows = snap.docs.map((document) => ({
+        ...cfg.fromDoc(document.data()),
+        _version: Number(document.get("revision")) || 0,
+        _deleted: !isAlive(document.data()),
+      }));
+      onChange(allRows.filter((row) => !row._deleted), {
+        tombstones: allRows.filter((row) => row._deleted),
+      });
     },
     (err) => {
       console.error(`Realtime subscription failed (${key}):`, err);
@@ -294,14 +477,19 @@ function mapWedding(data, membership) {
  *  כי קריאת החתונה עצמה עדיין מותנית בקיום מסמך חברות.
  */
 export async function listWeddings() {
-  const user = requireAuth();
+  const user = await waitForAuthContext();
 
   try {
     const result = await callListMyWeddings({});
     const weddings = Array.isArray(result?.weddings) ? result.weddings : [];
     weddings.sort((a, b) => String(a.name).localeCompare(String(b.name), "he"));
     return weddings;
-  } catch {
+  } catch (error) {
+    console.error("Callable wedding list failed; trying membership fallback:", {
+      userId: user.uid,
+      code: error?.code,
+      error,
+    });
     //  בזמן פיתוח מקומי או פריסה מדורגת הפונקציה עדיין עשויה לא להיות זמינה
     //  (הדפדפן מדווח עליה לעתים כ-CORS/internal). כניסה למערכת אינה תלויה
     //  בשיפור הזה, ולכן תמיד נופלים בחזרה לרשימת הרמזים הקיימת.
@@ -332,52 +520,22 @@ export async function listWeddings() {
   return out;
 }
 
-/** מוסיף מזהה חתונה לרשימה של המשתמש המחובר. */
-async function rememberWedding(weddingId) {
-  const user = requireAuth();
-  await setDoc(userRef(user.uid), { weddingIds: arrayUnion(weddingId) }, { merge: true });
-}
-
 /**
  * יוצר חתונה חדשה בבעלות המשתמש המחובר.
  *
- * שתי כתיבות נפרדות ולא writeBatch אחד. כלל האבטחה על מסמך החברות שואל
- * `get()` על החתונה כדי לוודא שהיוצר הוא הבעלים, ו-`get()` בכללים קורא
- * רק נתונים שכבר נכתבו. באצווה החתונה עדיין לא קיימת ברגע שהכלל נבדק,
- * ולכן כל יצירת חתונה מהממשק נדחתה ב-permission-denied.
- *
- * המחיר הוא שהפעולה אינה אטומית: אם הכתיבה השנייה תיכשל תישאר חתונה בלי
- * שורת חברות. היא בלתי נראית (listWeddings מדלג על חתונה בלי חברות),
- * ולכן עדיף להשאיר אותה מאשר להיכשל ביצירה.
+ * הכתיבה הראשית אטומית ב-Cloud Function; בפיתוח בלבד, כשהאמולטור אינו רץ,
+ * נשמרת כוונת יצירה לפני כתיבות Firestore ניתנות להמשך.
  */
 export async function createWedding(name, date) {
-  const user = requireAuth();
-  const id = crypto.randomUUID();
-
-  await setDoc(weddingRef(id), {
-    id,
-    name: String(name || "").trim() || "החתונה שלי",
-    weddingDate: date || null,
-    partnerA: "",
-    partnerB: "",
-    ownerId: user.uid,
-    createdAt: serverTimestamp(),
-  });
-
-  await setDoc(doc(weddingCol(id, "members"), user.uid), {
-    userId: user.uid,
-    email: user.email ?? "",
-    ownerId: user.uid,
-    role: "owner",
-    scopes: ["all"],
-    createdAt: serverTimestamp(),
-    lastSeenAt: serverTimestamp(),
-  });
-
-  await rememberWedding(id);
-
-  const snap = await getDoc(weddingRef(id));
-  return mapWedding({ id, ...snap.data() }, { role: "owner", scopes: ["all"] });
+  requireAuth();
+  try {
+    const wedding = await callCreateWedding({ name, weddingDate: date });
+    await auth.currentUser?.getIdToken(true);
+    return mapWedding(wedding, { role: "owner", scopes: ["all"] });
+  } catch (err) {
+    if (!import.meta.env.DEV || err?.code !== "functions/unavailable") throw err;
+    return ensureMyWeddingLocally(date, name, false);
+  }
 }
 
 /** מעדכן חתונה קיימת. בעלים בלבד (נאכף בכללי האבטחה). */
@@ -404,9 +562,25 @@ export async function updateWedding(weddingId, patch = {}) {
  *  מתירים למשתמש לקרוא רק את המסמך של עצמו, אחרת כל בעל חשבון היה
  *  יכול לשלוף את כל כתובות המייל במערכת.
  */
-export async function listMembers(weddingId) {
+export async function listMembers(weddingId, isOwner = false) {
   requireWeddingId(weddingId);
   const me = requireAuth();
+
+  //  פרטיות: רק לבעלים מותר לסרוק את כל האוסף. חבר רגיל קורא אך ורק את
+  //  מסמך החברות של עצמו — שליפת כל האוסף הייתה נדחית בכלל האבטחה.
+  if (!isOwner) {
+    const selfSnap = await getDoc(doc(weddingCol(weddingId, "members"), me.uid));
+    if (!selfSnap.exists()) return [];
+    const m = selfSnap.data();
+    return [{
+      userId: me.uid,
+      email: m.email ?? me.email ?? "",
+      role: m.role,
+      scopes: m.scopes?.length ? m.scopes : ["all"],
+      createdAt: toIso(m.createdAt),
+      lastSeenAt: toIso(m.lastSeenAt),
+    }];
+  }
 
   const snap = await getDocs(weddingCol(weddingId, "members"));
 
@@ -431,7 +605,9 @@ export async function updateMember(weddingId, userId, role, scopes) {
   if (role !== "editor" && role !== "viewer") {
     throw new Error("firebaseStore: role must be 'editor' or 'viewer'");
   }
-  await updateDoc(doc(weddingCol(weddingId, "members"), userId), {
+  await callUpdateWeddingMember({
+    weddingId,
+    userId,
     role,
     scopes: Array.isArray(scopes) && scopes.length ? scopes : ["all"],
   });
@@ -439,14 +615,9 @@ export async function updateMember(weddingId, userId, role, scopes) {
 
 export async function removeMember(weddingId, userId) {
   requireWeddingId(weddingId);
-  const me = requireAuth();
+  requireAuth();
   if (!userId) throw new Error("firebaseStore: userId is required");
-  await deleteDoc(doc(weddingCol(weddingId, "members"), userId));
-  //  עוזב בעצמו — מנקה את הרמז ממסמך המשתמש שלו. הסרת אחרים משאירה
-  //  אצלם מזהה מיותם, ו-listWeddings מדלג עליו בשקט.
-  if (userId === me.uid) {
-    await setDoc(userRef(me.uid), { weddingIds: arrayRemove(weddingId) }, { merge: true });
-  }
+  await callRemoveWeddingMember({ weddingId, userId });
 }
 
 /* =========================================================================
@@ -460,7 +631,7 @@ export async function removeMember(weddingId, userId) {
 function callable(name) {
   return async (payload) => {
     if (!functions) throw new Error("firebaseStore: Firebase לא מוגדר");
-    requireAuth();
+    await waitForAuthContext();
     const fn = httpsCallable(functions, name);
     const res = await fn({ ...payload, env: FIREBASE_ENV });
     return res.data;
@@ -472,11 +643,116 @@ const callCreateInvite = callable("createInvite");
 const callAcceptInvite = callable("acceptInvite");
 const callSyncClaims = callable("syncMyClaims");
 const callAdminStats = callable("getAdminStats");
+const callAdminActivity = callable("getAdminActivity");
 const callListMyWeddings = callable("listMyWeddings");
 const callDeleteWedding = callable("deleteWedding");
+const callCreateWedding = callable("createWedding");
+const callMigrateVendorIds = callable("migrateVendorIds");
+const callEnsureMyWedding = callable("ensureMyWedding");
+const callUpdateWeddingMember = callable("updateWeddingMember");
+const callRemoveWeddingMember = callable("removeWeddingMember");
+
+export async function ensureMyWedding(weddingDate = null) {
+  try {
+    const result = await callEnsureMyWedding({ weddingDate });
+    await auth.currentUser?.getIdToken(true);
+    return result;
+  } catch (err) {
+    if (!import.meta.env.DEV || err?.code !== "functions/unavailable") throw err;
+    return ensureMyWeddingLocally(weddingDate);
+  }
+}
+
+export async function migrateVendorIds(weddingId) {
+  requireWeddingId(weddingId);
+  return callMigrateVendorIds({ weddingId });
+}
+
+async function ensureMyWeddingLocally(
+  weddingDate = null,
+  name = "החתונה שלי",
+  returnExisting = true
+) {
+  const user = requireAuth();
+  const userDocument = userRef(user.uid);
+  const snapshot = await getDoc(userDocument);
+  const existingIds = snapshot.exists() && Array.isArray(snapshot.get("weddingIds"))
+    ? snapshot.get("weddingIds")
+    : [];
+
+  if (returnExisting && !snapshot.get("pendingWeddingSetup")?.id) {
+    for (const id of existingIds) {
+      const [wedding, member] = await Promise.all([
+        getDoc(weddingRef(id)),
+        getDoc(doc(weddingCol(id, "members"), user.uid)),
+      ]);
+      if (wedding.exists() && member.exists()) {
+        return mapWedding({ id, ...wedding.data() }, member.data());
+      }
+    }
+  }
+
+  const candidateId = crypto.randomUUID();
+  const pending = await runTransaction(db, async (transaction) => {
+    const current = await transaction.get(userDocument);
+    const saved = current.exists() ? current.get("pendingWeddingSetup") : null;
+    if (saved?.id) return saved;
+    const setup = {
+      id: candidateId,
+      name: String(name || "החתונה שלי").trim() || "החתונה שלי",
+      weddingDate: weddingDate || null,
+    };
+    transaction.set(userDocument, { pendingWeddingSetup: setup }, { merge: true });
+    return setup;
+  });
+
+  const weddingDocument = weddingRef(pending.id);
+  if (!(await getDoc(weddingDocument)).exists()) {
+    await setDoc(weddingDocument, {
+      id: pending.id,
+      name: pending.name,
+      weddingDate: pending.weddingDate,
+      partnerA: "",
+      partnerB: "",
+      ownerId: user.uid,
+      createdAt: serverTimestamp(),
+    });
+  }
+
+  const memberDocument = doc(weddingCol(pending.id, "members"), user.uid);
+  if (!(await getDoc(memberDocument)).exists()) {
+    await setDoc(memberDocument, {
+      userId: user.uid,
+      email: user.email || "",
+      ownerId: user.uid,
+      role: "owner",
+      scopes: ["all"],
+      createdAt: serverTimestamp(),
+      lastSeenAt: serverTimestamp(),
+    });
+  }
+
+  await setDoc(userDocument, {
+    id: user.uid,
+    email: user.email || "",
+    emailLower: String(user.email || "").toLowerCase(),
+    weddingIds: arrayUnion(pending.id),
+    setupComplete: true,
+    pendingWeddingSetup: deleteField(),
+  }, { merge: true });
+
+  const wedding = await getDoc(weddingDocument);
+  return mapWedding({ id: pending.id, ...wedding.data() }, { role: "owner", scopes: ["all"] });
+}
 
 export async function getAdminStats() {
   return callAdminStats({});
+}
+
+export async function getAdminActivity() {
+  await waitForAuthContext();
+  const result = await callAdminActivity({});
+  return Array.isArray(result?.rows) ? result.rows : [];
 }
 
 /** מוחק לצמיתות חתונה שבבעלות המשתמש, את נתוניה ואת קבציה. */
@@ -552,6 +828,9 @@ export async function inviteMember(weddingId, email, role, scopes = ["all"]) {
 
 export async function acceptInvite(token) {
   if (!token) throw new Error("firebaseStore: token is required");
+  // Email verification can update the user profile before the cached ID token
+  // carries the new email_verified claim. Refresh before the transaction.
+  if (auth?.currentUser) await auth.currentUser.getIdToken(true);
   const data = await callAcceptInvite({ token });
   return data?.weddingId ?? null;
 }
@@ -564,7 +843,12 @@ export async function touchMembership(weddingId) {
     await updateDoc(doc(weddingCol(weddingId, "members"), user.uid), {
       lastSeenAt: serverTimestamp(),
     });
-  } catch {
+  } catch (error) {
+    console.error("Failed to update membership lastSeenAt:", {
+      weddingId,
+      code: error?.code,
+      error,
+    });
     /* לא קריטי */
   }
 }
@@ -613,7 +897,7 @@ export async function listVendorFiles(weddingId) {
     .map((f) => {
       return {
         id: f.id,
-        vendorId: f.vendorId == null ? null : Number(f.vendorId),
+        vendorId: f.vendorId == null ? null : String(f.vendorId),
         name: f.name ?? "",
         mime: f.mime ?? "application/octet-stream",
         size: Number(f.size) || 0,
@@ -621,6 +905,25 @@ export async function listVendorFiles(weddingId) {
         createdAt: toIso(f.createdAt),
       };
     });
+}
+
+export async function listDeletedVendorFiles(weddingId) {
+  requireWeddingId(weddingId);
+  requireAuth();
+  const snap = await getDocs(weddingCol(weddingId, "files"));
+  return snap.docs
+    .map((d) => d.data())
+    .filter((file) => !isAlive(file))
+    .map((file) => ({
+      id: file.id,
+      vendorId: file.vendorId == null ? null : String(file.vendorId),
+      name: file.name ?? "",
+      mime: file.mime ?? "application/octet-stream",
+      size: Number(file.size) || 0,
+      storagePath: file.storagePath ?? "",
+      createdAt: toIso(file.createdAt),
+      deletedAt: toIso(file.deletedAt),
+    }));
 }
 
 export async function uploadVendorFile(weddingId, vendorId, file) {
@@ -638,14 +941,23 @@ export async function uploadVendorFile(weddingId, vendorId, file) {
 
   const record = {
     id,
-    vendorId: Number(vendorId),
+    vendorId: String(vendorId),
     name: file.name,
     mime: file.type || "application/octet-stream",
     size: file.size,
     storagePath: path,
     createdAt: serverTimestamp(),
   };
-  await setDoc(doc(weddingCol(weddingId, "files"), id), record);
+  try {
+    await setDoc(doc(weddingCol(weddingId, "files"), id), record);
+  } catch (error) {
+    try {
+      await deleteObject(ref(storage, path));
+    } catch (cleanupError) {
+      console.error("Orphaned vendor upload cleanup failed:", cleanupError);
+    }
+    throw error;
+  }
   return { ...record, createdAt: new Date().toISOString() };
 }
 

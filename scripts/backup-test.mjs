@@ -76,6 +76,13 @@ const payload = {
   tables,
   vendors,
   budget,
+  checklist: [
+    { id: 1, title: "בחירת מקום", category: "תכנון ראשוני", assignee: "both", done: true },
+    { id: 2, title: "בחירת צלם", category: "ספקים", assignee: "bride", done: false },
+  ],
+  vendorAttachments: [
+    { id: "file-uuid", vendorId: "vendor-uuid", name: "contract.pdf", mime: "application/pdf", size: 2048, createdAt: "2026-09-01T10:00:00.000Z" },
+  ],
   settings: {
     budgetGoal: 180000,
     financeLabels: { income: "הכנסות", expense: "הוצאות" },
@@ -83,6 +90,7 @@ const payload = {
     partnerA: "דנה",
     partnerB: "יואב",
     weddingDate: "2027-05-20",
+    countdownBackgroundUrl: "https://example.test/countdown.jpg",
   },
 };
 
@@ -116,6 +124,7 @@ const buffer = await buildWorkbookBuffer({
   tables,
   vendors,
   budget,
+  checklist: payload.checklist,
   budgetGoal: 180000,
   backup: payload,
 });
@@ -123,6 +132,8 @@ const restored = await readWorkbookBackup({ arrayBuffer: async () => buffer });
 eq("מסלול מלא: קובץ → payload זהה", restored, payload);
 eq("המוזמן ה-400 שרד", restored.guests[399].name, guests[399].name);
 eq("ההגדרות שרדו", restored.settings, payload.settings);
+eq("הצ׳קליסט שרד", restored.checklist, payload.checklist);
+eq("מטא-דאטה של קבצים מצורפים שרדה", restored.vendorAttachments, payload.vendorAttachments);
 eq("הקישור לספק שרד", restored.budget[0].vendorId, 1);
 
 const ExcelJS = (await import("exceljs")).default;

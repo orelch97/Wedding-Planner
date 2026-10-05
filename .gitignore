@@ -11,11 +11,15 @@ node_modules
 dist
 dist-ssr
 *.local
+playwright-report/
+test-results/
+firebase-export-e2e/
 
 # Environment variables / secrets
 .env
 .env.*
 !.env.example
+!.env.e2e.example
 
 # מפתח ה-service account של Firebase — סוד. גישה מלאה לפרויקט, עוקף כל כלל אבטחה.
 firebase-service-account.json

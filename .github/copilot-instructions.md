@@ -1,0 +1,5 @@
+- Always use Tailwind CSS for styling.
+- Adopt a strict Mobile-First approach. All designs must look perfect on mobile phones, tablets, and desktops.
+- Ensure high-level modern UI/UX design, proper spacing, and accessible contrast.
+- Write clean, error-free JavaScript code.
+- When styling components, format the Tailwind classes to mimic popular UI libraries like Flowbite or daisyUI for maximum aesthetic appeal.

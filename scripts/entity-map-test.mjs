@@ -36,6 +36,12 @@ if (!dir || !existsSync(join(dir, "data.json"))) {
 }
 
 const T = JSON.parse(readFileSync(join(dir, "data.json"), "utf8")).tables;
+const legacyVendorIds = new Map(
+  (T["public.vendors"] || []).map((row, index) => [
+    String(row.id),
+    `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+  ])
+);
 
 /*  המסלול הישן, מועתק מ-src/lib/cloudStore.js. מועתק ולא מיובא, כי
     cloudStore נשען על import.meta.env של Vite ואינו נטען ב-Node.
@@ -56,6 +62,7 @@ const LEGACY = {
     drinkers: Math.max(0, Number(r.drinkers) || 0),
     rsvp: r.rsvp ?? "pending",
     gift: Number(r.gift) || 0,
+    attendingCount: r.attendingCount == null ? null : Number(r.attendingCount),
   }),
   tables: (r) => ({
     id: Number(r.id),
@@ -64,7 +71,8 @@ const LEGACY = {
     guestIds: Array.isArray(r.guest_ids) ? r.guest_ids : [],
   }),
   vendors: (r) => ({
-    id: Number(r.id),
+    id: legacyVendorIds.get(String(r.id)),
+    legacyId: String(r.id),
     name: r.name,
     type: r.type ?? "",
     phone: r.phone ?? "",
@@ -80,7 +88,7 @@ const LEGACY = {
     expected: Number(r.expected) || 0,
     actual: Number(r.actual) || 0,
     paid: Number(r.paid) || 0,
-    vendorId: r.vendor_id == null ? null : Number(r.vendor_id),
+    vendorId: r.vendor_id == null ? null : legacyVendorIds.get(String(r.vendor_id)),
   }),
   checklist: (r) => ({
     id: Number(r.id),
@@ -104,6 +112,28 @@ let passed = 0;
 let failed = 0;
 const samples = [];
 
+const partialAttendance = FS_ENTITIES.guests.fromDoc(
+  FS_ENTITIES.guests.toDoc({ id: 7, name: "RSVP", seats: 4, attendingCount: 2 })
+);
+if (partialAttendance.attendingCount === 2) passed++;
+else {
+  failed++;
+  samples.push("guests · attendingCount לא שרד מיפוי Firestore");
+}
+
+const uuidVendorId = "c3e45f2a-72dc-4b9e-872c-f5f672742135";
+const uuidVendor = FS_ENTITIES.vendors.fromDoc(
+  FS_ENTITIES.vendors.toDoc({ id: uuidVendorId, name: "UUID vendor" })
+);
+const linkedBudget = FS_ENTITIES.budget.fromDoc(
+  FS_ENTITIES.budget.toDoc({ id: 4, category: "UUID vendor", vendorId: uuidVendorId })
+);
+if (uuidVendor.id === uuidVendorId && linkedBudget.vendorId === uuidVendorId) passed++;
+else {
+  failed++;
+  samples.push("vendors/budget · UUID linkage לא נשמר");
+}
+
 console.log("\nשקילות: CockroachDB → Firestore → מסך\n");
 
 for (const [key, { table, toFirestore }] of Object.entries(PIPELINE)) {
@@ -117,6 +147,13 @@ for (const [key, { table, toFirestore }] of Object.entries(PIPELINE)) {
     //  מדמה בדיוק את מה שקורה בייצור: השורה נכתבת ל-Firestore דרך
     //  migration-map, ואז נקראת חזרה דרך entityMap.
     const written = toFirestore(row);
+    if (key === "vendors") {
+      written.id = legacyVendorIds.get(String(row.id));
+      written.legacyId = String(row.id);
+    }
+    if (key === "budget" && row.vendor_id != null) {
+      written.vendorId = legacyVendorIds.get(String(row.vendor_id));
+    }
     //  Firestore מחזיר Date עבור חותמות; המפה לא נוגעת בהן, ולכן מסירים.
     const { deletedAt: _d, updatedAt: _u, ...stored } = written;
     const loaded = FS_ENTITIES[key].fromDoc(stored);

@@ -6,122 +6,27 @@
 #  מה שמסומן `sync: false` לא נשמר בקובץ ולא נכנס ל-git — יש להזין אותו
 #  ידנית ב-Dashboard → Environment. אלה סודות.
 #
-#  ── למה שני שירותים ולא אחד ────────────────────────────────────────────────
-#  שירות Web בתוכנית החינם נרדם אחרי 15 דקות ללא תנועה. כל עוד אותו שירות
-#  הגיש גם את דף ה-HTML, כל כניסה אחרי שקט נתפסה אצל Render עוד לפני
-#  שהקוד שלנו רץ, והמשתמש ראה את מסך הטעינה השחור של Render למשך כדקה.
-#  אי אפשר לעקוף את זה מתוך האפליקציה — הדף שלנו כלל לא הגיע לדפדפן.
-#
-#  לכן הממשק עבר ל-Static Site: הוא יושב על CDN, לא נרדם לעולם ונטען מיד,
-#  כך שמסך הפתיחה הממותג שלנו הוא הדבר הראשון שרואים. השירות שמריץ את
-#  ה-API עדיין עשוי להירדם, ובזמן הזה מוצג מסך ההמתנה שלנו ולא של Render.
+#  הממשק הוא אתר סטטי בלבד. כל הנתונים, ההתחברות והלוגיקה המאובטחת יושבים
+#  ב-Firebase (Auth / Firestore / Storage / Cloud Functions) — אין שרת Node
+#  משלנו. Firestore/Storage rules ו-Cloud Functions נפרסים דרך Firebase CLI
+#  (ראו firebase.json), לא דרך Render.
 # =============================================================================
 
 services:
-  # ── ה-API ─────────────────────────────────────────────────────────────────
-  - type: web
-    name: wedding-planner
-    runtime: node
-    plan: free
-    #  חייב להתאים לאזור של הקלאסטר (aws-eu-central-1). שירות באזור אחר
-    #  משלם חציית יבשת על כל שאילתה, וזה מורגש בכל מסך שנטען.
-    region: frankfurt
-
-    #  --include=dev חובה: NODE_ENV=production גורם ל-npm לדלג על
-    #  devDependencies, ואז vite לא מותקן וה-build נכשל.
-    buildCommand: npm ci --include=dev && npm run build
-    startCommand: npm start
-
-    #  נתיב שלא נוגע במסד, כדי ש-Render לא יסמן את השירות כמת בזמן
-    #  שהמסד מתעורר.
-    healthCheckPath: /api/health
-
-    envVars:
-      #  מפעיל את דגל Secure בעוגיית הסשן ואת הגשת dist/ מהשרת.
-      - key: NODE_ENV
-        value: production
-
-      #  Render יושב מאחורי reverse proxy. בלי זה req.ip הוא כתובת ה-proxy,
-      #  וכל התוקפים נספרים יחד בהגבלת הקצב על ניסיונות התחברות.
-      #
-      #  הערך = מספר הקפיצות המהימנות, והוא נשאר 1 בכוונה. עם הפיצול יש
-      #  אולי קפיצה נוספת (ה-CDN), אבל ערך גבוה מדי מסוכן: השירות הזה
-      #  נגיש גם ישירות בכתובת שלו, ואז תוקף יכול לשלוח X-Forwarded-For
-      #  משלו, להתחזות לכתובת אחרת בכל ניסיון ולעקוף לגמרי את חסימת
-      #  ניסיונות ההתחברות. הנזק בערך נמוך מדי הפוך ומתון: כל המשתמשים
-      #  נספרים באותו דלי, ואחרי 20 כישלונות ברצף כולם ממתינים 15 דקות.
-      #  להעלות ל-2 רק אם מתברר בפועל שמשתמשים נחסמים בגלל אחרים.
-      - key: TRUST_PROXY
-        value: "1"
-
-      #  נצרב לתוך ה-build. השירות הזה ממשיך להגיש גם עותק של הממשק, כדי
-      #  שהכתובת הישנה תמשיך לעבוד ולא תשבור קישורים שכבר נשלחו.
-      - key: VITE_API_URL
-        value: /api
-
-      - key: NODE_VERSION
-        value: "24"
-      #  נצרבים לתוך ה-build ולכן חייבים להיות מוגדרים לפניו. בלעדיהם
-      #  הבנייה מצליחה אבל האפליקציה עולה על מסך טעינה ולא ממשיכה.
-      #  VITE_FIREBASE_ENV חייב להיות 'prod' בדיוק — כל ערך אחר מפיל את הבנייה.
-      - key: VITE_FIREBASE_ENV
-        sync: false
-      - key: VITE_FIREBASE_API_KEY
-        sync: false
-      - key: VITE_FIREBASE_AUTH_DOMAIN
-        sync: false
-      - key: VITE_FIREBASE_PROJECT_ID
-        sync: false
-      - key: VITE_FIREBASE_STORAGE_BUCKET
-        sync: false
-      - key: VITE_FIREBASE_MESSAGING_SENDER_ID
-        sync: false
-      - key: VITE_FIREBASE_APP_ID
-        sync: false
-      #  ── להזנה ידנית ב-Dashboard ──────────────────────────────────────────
-      #  מחרוזת החיבור ל-CockroachDB. סוד — לעולם לא בקובץ.
-      - key: DATABASE_URL
-        sync: false
-
-      #  כתובת הבסיס לקישורי איפוס סיסמה, כולל הסכמה:
-      #  https://<the-service>.onrender.com
-      #
-      #  חשוב: מאז הפיצול זו הכתובת של האתר הסטטי, לא של שירות ה-API.
-      #  מלבד קישורי האיפוס, בדיקת ה-CSRF מאשרת בקשות שה-Origin שלהן
-      #  מתאים ל-APP_URL — ובקשה שעברה דרך ה-CDN מגיעה עם ה-Origin שלו.
-      - key: APP_URL
-        sync: false
-
-      #  SMTP. בלעדיהם קישורי איפוס סיסמה נכתבים ללוג במקום להישלח.
-      - key: SMTP_HOST
-        sync: false
-      - key: SMTP_PORT
-        sync: false
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASS
-        sync: false
-      - key: SMTP_FROM
-        sync: false
-
   # ── הממשק ─────────────────────────────────────────────────────────────────
   #  אתר סטטי על CDN. אין כאן מכונה שנרדמת, ולכן אין מסך המתנה של Render.
   - type: web
     name: wedding-planner-web
     runtime: static
+    #  --include=dev חובה: NODE_ENV=production גורם ל-npm לדלג על
+    #  devDependencies, ואז vite לא מותקן וה-build נכשל.
     buildCommand: npm ci --include=dev && npm run build
     staticPublishPath: ./dist
 
     envVars:
-      #  הדפדפן פונה תמיד לכתובת יחסית, וה-CDN מעביר ל-API בכתובת שלמטה.
-      #  כך הכול נשאר same-origin: עוגיית הסשן (SameSite=Strict) ממשיכה
-      #  לעבוד, ואין צורך ב-CORS ובהרפיית הגדרות העוגייה.
-      - key: VITE_API_URL
-        value: /api
-
-      #  זה השירות שבונה את הממשק שהמשתמשים מקבלים, ולכן ערכי Firebase
-      #  חייבים להיות מוגדרים כאן לפני הבנייה — הם נצרבים לתוך ה-bundle
-      #  ואין דרך להוסיף אותם אחרי כן בלי בנייה מחדש.
+      #  ערכי Firebase נצרבים לתוך ה-bundle ולכן חייבים להיות מוגדרים לפני
+      #  הבנייה — אין דרך להוסיף אותם אחרי כן בלי בנייה מחדש.
+      #  VITE_FIREBASE_ENV חייב להיות 'prod' בדיוק — כל ערך אחר מפיל את הבנייה.
       - key: VITE_FIREBASE_ENV
         sync: false
       - key: VITE_FIREBASE_API_KEY
@@ -138,21 +43,14 @@ services:
         sync: false
 
     routes:
-      #  חייב להופיע לפני כלל ה-SPA. Render מחילה את הכלל המתאים הראשון.
-      #  היעד הוא הכתובת המלאה של שירות ה-API — עדכנו אותה אם שם השירות
-      #  משתנה, כאן אי אפשר להשתמש בהפניה לוגית לשירות.
-      - type: rewrite
-        source: /api/*
-        destination: https://wedding-planner-vixy.onrender.com/api/*
-
       #  ניתוב צד-לקוח: כל נתיב שאין לו קובץ מקבל את index.html.
       - type: rewrite
         source: /*
         destination: /index.html
 
     #  Render אינה קוראת את public/_headers (זה פורמט של Netlify /
-    #  Cloudflare Pages). לאתר הסטטי הכותרות חייבות לצאת מכאן, ולשרת ה-API
-    #  הן מוגדרות ב-server/index.js. שלושת המקומות צריכים להישאר תואמים.
+    #  Cloudflare Pages). לאתר הסטטי הכותרות חייבות לצאת מכאן. שני המקומות
+    #  צריכים להישאר תואמים.
     headers:
       - path: /*
         name: Content-Security-Policy

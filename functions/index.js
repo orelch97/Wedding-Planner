@@ -24,7 +24,7 @@ const { initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getStorage } = require("firebase-admin/storage");
-const { randomBytes, createHash } = require("node:crypto");
+const { randomBytes, randomUUID, createHash } = require("node:crypto");
 const {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -32,7 +32,19 @@ const {
   verifyAuthenticationResponse,
 } = require("@simplewebauthn/server");
 
-initializeApp({ storageBucket: "wedding-planner-c3d62.firebasestorage.app" });
+const emulatorMode = Boolean(
+  process.env.STORAGE_EMULATOR_HOST ||
+  process.env.FIREBASE_STORAGE_EMULATOR_HOST ||
+  process.env.FIREBASE_AUTH_EMULATOR_HOST ||
+  process.env.FIRESTORE_EMULATOR_HOST
+);
+if (emulatorMode && process.env.GCLOUD_PROJECT !== "demo-wedding-planner-e2e") {
+  throw new Error("E2E safety stop: Firebase emulators require project demo-wedding-planner-e2e.");
+}
+const storageBucket = emulatorMode
+  ? "demo-wedding-planner-e2e.appspot.com"
+  : "wedding-planner-c3d62.firebasestorage.app";
+initializeApp({ storageBucket });
 const db = getFirestore();
 const auth = getAuth();
 const storage = getStorage();
@@ -40,6 +52,9 @@ const storage = getStorage();
 //  חייב להתאים ל-getFunctions(app, "europe-west1") ב-src/lib/firebase.js,
 //  אחרת הקריאה מהלקוח מגיעה ל-404.
 const REGION = "europe-west1";
+// Keep this value synchronized with ADMIN_EMAIL in src/lib/adminConfig.js.
+// Client-side navigation is only a convenience; this server check is the security boundary.
+const ADMIN_EMAIL = "orelch97@gmail.com";
 
 const envRoot = (env) => db.collection("envs").doc(env);
 const weddingRef = (env, id) => envRoot(env).collection("weddings").doc(id);
@@ -49,6 +64,22 @@ const weddingRef = (env, id) => envRoot(env).collection("weddings").doc(id);
 const envOf = (data) => (data && data.env === "prod" ? "prod" : "test");
 
 const hashToken = (token) => createHash("sha256").update(token).digest("hex");
+const ALL_SCOPES = ["guests", "vendors", "finance", "checklist"];
+
+function normalizeScopes(scopes) {
+  if (Array.isArray(scopes) && scopes.includes("all")) return ["all"];
+  const clean = Array.isArray(scopes)
+    ? [...new Set(scopes.filter((scope) => ALL_SCOPES.includes(scope)))]
+    : [];
+  return clean.length ? clean : ["all"];
+}
+
+function hasScope(scopes, scope) {
+  return !Array.isArray(scopes)
+    || scopes.length === 0
+    || scopes.includes("all")
+    || scopes.includes(scope);
+}
 
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
 
@@ -80,8 +111,8 @@ async function requireOwner(env, weddingId, uid) {
  * -----------------------------------------------------------------------------
  *  כללי ה-Storage אינם יכולים לקרוא את מסמך החברות: firestore.get() בתוך
  *  storage.rules מוחזר כ-403 בפרויקט הזה (נבדק אמפירית — אותה העלאה עוברת
- *  ברגע שהתנאי מוסר). לכן רשימת החתונות נשמרת כ-claim על הטוקן, וכללי
- *  ה-Storage בודקים אותה בלי שום קריאה חוצת-שירות.
+ *  ברגע שהתנאי מוסר). לכן מפת הרשאות קומפקטית לפי חתונה נשמרת כ-claim;
+ *  היא כוללת חברות, scope ספקים ובעלות, בלי קריאה חוצת-שירות.
  *
  *  ⚠ הטוקן מתרענן אחת לשעה. הוספת גישה נכנסת לתוקף מיד בכניסה מחדש;
  *    *הסרת* גישה עלולה להימשך עד שעה במכשיר שכבר פתוח.
@@ -92,17 +123,30 @@ async function refreshWeddingClaims(env, userId) {
   const u = await envRoot(env).collection("users").doc(userId).get();
   const hinted = u.exists && Array.isArray(u.data().weddingIds) ? u.data().weddingIds : [];
 
-  const confirmed = [];
+  const permissions = {};
   for (const wid of hinted) {
-    const m = await weddingRef(env, wid).collection("members").doc(userId).get();
-    if (m.exists) confirmed.push(wid);
+    const [wedding, membership] = await Promise.all([
+      weddingRef(env, wid).get(),
+      weddingRef(env, wid).collection("members").doc(userId).get(),
+    ]);
+    if (!membership.exists || !wedding.exists) continue;
+    const member = membership.data();
+    const isOwner = wedding.get("ownerId") === userId;
+    permissions[wid] = isOwner
+      ? "owner"
+      : hasScope(member.scopes, "vendors")
+        ? (["owner", "editor"].includes(member.role) ? "vendor_write" : "vendor_read")
+        : "member";
   }
 
   const user = await auth.getUser(userId);
   const claims = Object.assign({}, user.customClaims || {});
-  claims[`w_${env}`] = confirmed;
+  for (const targetEnv of ["test", "prod"]) {
+    for (const prefix of ["w", "vr", "vw", "wo"]) delete claims[`${prefix}_${targetEnv}`];
+  }
+  claims[`p_${env}`] = permissions;
   await auth.setCustomUserClaims(userId, claims);
-  return confirmed;
+  return Object.keys(permissions);
 }
 
 /** נקראת מהלקוח אחרי כניסה, כדי לוודא שה-claim מעודכן. */
@@ -137,11 +181,267 @@ exports.listMyWeddings = onCall({ region: REGION }, async (request) => {
   return { weddings: weddings.filter(Boolean) };
 });
 
-exports.getAdminStats = onCall({ region: REGION }, async (request) => {
-  requireAuth(request);
-  if (String(request.auth.token.email || "").toLowerCase() !== "orelch97@gmail.com") {
-    throw new HttpsError("permission-denied", "אין הרשאה.");
+/** Completes owner records after Auth creation; safe to retry after a partial client failure. */
+exports.ensureMyWedding = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+  const env = envOf(request.data);
+  const email = String(request.auth.token.email || "");
+  const weddingId = randomBytes(16).toString("hex");
+  const userDoc = envRoot(env).collection("users").doc(uid);
+  const weddingDoc = weddingRef(env, weddingId);
+  const memberDoc = weddingDoc.collection("members").doc(uid);
+
+  const result = await db.runTransaction(async (tx) => {
+    const userSnap = await tx.get(userDoc);
+    const currentIds = userSnap.exists && Array.isArray(userSnap.get("weddingIds"))
+      ? userSnap.get("weddingIds")
+      : [];
+    for (const currentId of currentIds) {
+      const weddingRefForUser = weddingRef(env, currentId);
+      const [wedding, membership] = await Promise.all([
+        tx.get(weddingRefForUser),
+        tx.get(weddingRefForUser.collection("members").doc(uid)),
+      ]);
+      if (wedding.exists && membership.exists) return { weddingId: currentId, created: false };
+    }
+
+    const requestedDate = String((request.data && request.data.weddingDate) || "");
+    const validDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : null;
+    tx.set(weddingDoc, {
+      id: weddingId,
+      name: "החתונה שלי",
+      weddingDate: validDate,
+      partnerA: "",
+      partnerB: "",
+      ownerId: uid,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    tx.set(memberDoc, {
+      userId: uid,
+      email,
+      ownerId: uid,
+      role: "owner",
+      scopes: ["all"],
+      createdAt: FieldValue.serverTimestamp(),
+      lastSeenAt: FieldValue.serverTimestamp(),
+    });
+    tx.set(userDoc, {
+      id: uid,
+      email,
+      emailLower: email.toLowerCase(),
+      weddingIds: [weddingId],
+      setupComplete: true,
+      createdAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { weddingId, created: true };
+  });
+
+  await refreshWeddingClaims(env, uid);
+  return result;
+});
+
+exports.createWedding = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+  const env = envOf(request.data);
+  const data = request.data || {};
+  const id = randomBytes(16).toString("hex");
+  const name = String(data.name || "החתונה שלי").trim().slice(0, 100) || "החתונה שלי";
+  const requestedDate = String(data.weddingDate || "");
+  const weddingDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : null;
+  const email = String(request.auth.token.email || "");
+  const weddingDoc = weddingRef(env, id);
+  const userDoc = envRoot(env).collection("users").doc(uid);
+
+  await db.runTransaction(async (tx) => {
+    tx.set(weddingDoc, {
+      id,
+      name,
+      weddingDate,
+      partnerA: "",
+      partnerB: "",
+      ownerId: uid,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    tx.set(weddingDoc.collection("members").doc(uid), {
+      userId: uid,
+      email,
+      ownerId: uid,
+      role: "owner",
+      scopes: ["all"],
+      createdAt: FieldValue.serverTimestamp(),
+      lastSeenAt: FieldValue.serverTimestamp(),
+    });
+    tx.set(userDoc, {
+      id: uid,
+      email,
+      emailLower: email.toLowerCase(),
+      weddingIds: FieldValue.arrayUnion(id),
+    }, { merge: true });
+  });
+
+  await refreshWeddingClaims(env, uid);
+  return { id, name, weddingDate, role: "owner", scopes: ["all"] };
+});
+
+exports.migrateVendorIds = onCall({ region: REGION, timeoutSeconds: 120 }, async (request) => {
+  const uid = requireAuth(request);
+  const env = envOf(request.data);
+  const weddingId = String((request.data && request.data.weddingId) || "");
+  if (!weddingId) throw new HttpsError("invalid-argument", "חסר מזהה חתונה.");
+  await requireOwner(env, weddingId, uid);
+
+  const root = weddingRef(env, weddingId);
+  const migrationRef = envRoot(env).collection("migrations").doc(`vendor-ids-${weddingId}`);
+  const lockId = randomUUID();
+  const acquired = await db.runTransaction(async (tx) => {
+    const state = await tx.get(migrationRef);
+    if (state.get("complete") === true) return false;
+    if (state.get("lockId") && Number(state.get("lockUntil")) > Date.now()) {
+      throw new HttpsError("unavailable", "vendor_id_migration_in_progress");
+    }
+    tx.set(migrationRef, {
+      lockId,
+      lockUntil: Date.now() + 150_000,
+      startedAt: FieldValue.serverTimestamp(),
+      complete: false,
+    }, { merge: true });
+    return true;
+  });
+  if (!acquired) return { migrated: false, complete: true };
+
+  try {
+    const vendorSnapshot = await root.collection("vendors").get();
+    const legacyToUuid = new Map();
+    const vendorWrites = [];
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    for (const vendorDoc of vendorSnapshot.docs) {
+      const old = vendorDoc.data();
+      if (old.migratedTo) {
+        legacyToUuid.set(vendorDoc.id, String(old.migratedTo));
+        if (old.legacyId != null) legacyToUuid.set(String(old.legacyId), String(old.migratedTo));
+        continue;
+      }
+      if (uuidPattern.test(vendorDoc.id) && uuidPattern.test(String(old.id || ""))) {
+        if (old.legacyId != null) legacyToUuid.set(String(old.legacyId), vendorDoc.id);
+        continue;
+      }
+
+      const newId = randomUUID();
+      legacyToUuid.set(vendorDoc.id, newId);
+      vendorWrites.push({
+        legacyRef: vendorDoc.ref,
+        uuidRef: root.collection("vendors").doc(newId),
+        old,
+        legacyId: vendorDoc.id,
+        newId,
+      });
+    }
+
+    for (let start = 0; start < vendorWrites.length; start += 200) {
+      const batch = db.batch();
+      for (const entry of vendorWrites.slice(start, start + 200)) {
+        batch.create(entry.uuidRef, {
+          ...entry.old,
+          id: entry.newId,
+          legacyId: entry.legacyId,
+          revision: Number(entry.old.revision) || 1,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        batch.set(entry.legacyRef, {
+          migratedTo: entry.newId,
+          deletedAt: entry.old.deletedAt || FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+      await batch.commit();
+    }
+
+    for (const collectionName of ["budget", "files"]) {
+      const snapshot = await root.collection(collectionName).get();
+      const updates = snapshot.docs.flatMap((record) => {
+        const current = record.get("vendorId");
+        if (current == null) return [];
+        const mapped = legacyToUuid.get(String(current));
+        const currentIsUuid = typeof current === "string"
+          && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(current);
+        if (!mapped && currentIsUuid) return [];
+        return [{ ref: record.ref, mapped: mapped || null, revision: Number(record.get("revision")) || 0 }];
+      });
+      for (let start = 0; start < updates.length; start += 450) {
+        const batch = db.batch();
+        for (const update of updates.slice(start, start + 450)) {
+          const patch = { vendorId: update.mapped, updatedAt: FieldValue.serverTimestamp() };
+          if (collectionName === "budget") patch.revision = update.revision + 1;
+          batch.update(update.ref, patch);
+        }
+        await batch.commit();
+      }
+    }
+
+    await migrationRef.set({ complete: true, lockId: FieldValue.delete(), lockUntil: FieldValue.delete(), completedAt: FieldValue.serverTimestamp() }, { merge: true });
+    return { migrated: vendorWrites.length, complete: true };
+  } catch (err) {
+    await migrationRef.set({ lockId: FieldValue.delete(), lockUntil: FieldValue.delete() }, { merge: true });
+    throw err;
   }
+});
+
+exports.updateWeddingMember = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+  const env = envOf(request.data);
+  const data = request.data || {};
+  const weddingId = String(data.weddingId || "");
+  const memberId = String(data.userId || "");
+  const role = data.role;
+  const scopes = normalizeScopes(data.scopes);
+  if (!weddingId || !memberId) throw new HttpsError("invalid-argument", "חסרים פרטי חבר.");
+  if (!["editor", "viewer"].includes(role)) throw new HttpsError("invalid-argument", "תפקיד לא חוקי.");
+  const wedding = await requireOwner(env, weddingId, uid);
+  const memberRef = weddingRef(env, weddingId).collection("members").doc(memberId);
+  const snapshot = await memberRef.get();
+  if (!snapshot.exists || memberId === wedding.ownerId || snapshot.get("role") === "owner") {
+    throw new HttpsError("failed-precondition", "לא ניתן לשנות את בעלות החתונה.");
+  }
+  await memberRef.update({ role, scopes, updatedAt: FieldValue.serverTimestamp() });
+  await refreshWeddingClaims(env, memberId);
+  await auth.revokeRefreshTokens(memberId);
+  return { ok: true };
+});
+
+exports.removeWeddingMember = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+  const env = envOf(request.data);
+  const weddingId = String((request.data && request.data.weddingId) || "");
+  const memberId = String((request.data && request.data.userId) || "");
+  if (!weddingId || !memberId) throw new HttpsError("invalid-argument", "חסרים פרטי חבר.");
+
+  const wedding = await weddingRef(env, weddingId).get();
+  if (!wedding.exists) throw new HttpsError("not-found", "החתונה לא נמצאה.");
+  if (wedding.get("ownerId") !== uid && memberId !== uid) {
+    throw new HttpsError("permission-denied", "אין הרשאה להסיר חבר זה.");
+  }
+
+  const root = weddingRef(env, weddingId);
+  const memberRef = root.collection("members").doc(memberId);
+  const userDoc = envRoot(env).collection("users").doc(memberId);
+  await db.runTransaction(async (tx) => {
+    const membership = await tx.get(memberRef);
+    if (!membership.exists) return;
+    if (memberId === wedding.get("ownerId") || membership.get("role") === "owner") {
+      throw new HttpsError("failed-precondition", "לא ניתן להסיר את בעל החתונה.");
+    }
+    tx.delete(memberRef);
+    tx.set(userDoc, { weddingIds: FieldValue.arrayRemove(weddingId) }, { merge: true });
+  });
+
+  await refreshWeddingClaims(env, memberId);
+  await auth.revokeRefreshTokens(memberId);
+  return { ok: true };
+});
+
+exports.getAdminStats = onCall({ region: REGION }, async (request) => {
+  requireAdmin(request);
 
   const weddings = await envRoot("prod").collection("weddings").get();
   const cutoff = Date.now() - 10 * 60 * 1000;
@@ -163,6 +463,44 @@ exports.getAdminStats = onCall({ region: REGION }, async (request) => {
   );
 
   return { weddings: weddings.size, activeUsers: active.size };
+});
+
+function requireAdmin(request) {
+  requireAuth(request);
+  const email = String(request.auth.token.email || "").trim().toLowerCase();
+  if (email !== ADMIN_EMAIL.toLowerCase() || request.auth.token.email_verified !== true) {
+    throw new HttpsError("permission-denied", "אין הרשאה.");
+  }
+}
+
+exports.getAdminActivity = onCall({ region: REGION, timeoutSeconds: 60 }, async (request) => {
+  requireAdmin(request);
+  try {
+    const weddings = await envRoot("prod").collection("weddings").get();
+    const snapshots = await Promise.all(
+      weddings.docs.map((wedding) => wedding.ref.collection("members").get())
+    );
+    const rows = [];
+    snapshots.forEach((members, index) => {
+      const wedding = weddings.docs[index];
+      for (const member of members.docs) {
+        const lastSeen = member.get("lastSeenAt");
+        rows.push({
+          email: String(member.get("email") || ""),
+          weddingId: wedding.id,
+          weddingName: String(wedding.get("name") || ""),
+          lastSeenAt: lastSeen && typeof lastSeen.toDate === "function"
+            ? lastSeen.toDate().toISOString()
+            : null,
+        });
+      }
+    });
+    rows.sort((a, b) => (Date.parse(b.lastSeenAt || "") || 0) - (Date.parse(a.lastSeenAt || "") || 0));
+    return { rows: rows.slice(0, 500), truncated: rows.length > 500 };
+  } catch (error) {
+    console.error("Admin activity query failed:", error);
+    throw new HttpsError("internal", "לא ניתן לטעון פעילות משתמשים.");
+  }
 });
 
 /* =============================================================================
@@ -187,14 +525,17 @@ exports.deleteWedding = onCall({ region: REGION, timeoutSeconds: 120 }, async (r
   }
 
   const root = weddingRef(env, weddingId);
-  const [members, files, settings] = await Promise.all([
+  const [members, files, legacySettings, ownerSettings] = await Promise.all([
     root.collection("members").get(),
     root.collection("files").limit(1).get(),
     root.collection("settings").doc("main").get(),
+    root.collection("settings").doc("owner").get(),
   ]);
   const memberIds = members.docs.map((member) => member.id);
   const invites = await envRoot(env).collection("invites").where("weddingId", "==", weddingId).get();
-  const hasStorageAssets = !files.empty || Boolean(settings.get("countdownBackgroundUrl"));
+  const hasStorageAssets = !files.empty
+    || Boolean(legacySettings.get("countdownBackgroundUrl"))
+    || Boolean(ownerSettings.get("countdownBackgroundUrl"));
 
   //  ההזמנות חיות מחוץ לתת-העץ של החתונה, ולכן הן נמחקות בנפרד.
   for (let start = 0; start < invites.docs.length; start += 450) {
@@ -341,7 +682,12 @@ exports.passkeyRegisterVerify = onCall({ region: REGION }, async (request) => {
   return { ok: true, credentialId: credential.id };
 });
 
-exports.passkeyLoginOptions = onCall({ region: REGION }, async (request) => {
+/*  minInstances: 1 — הפונקציה היחידה שיושבת על המסלול הקריטי של חוויית
+    המשתמש. היא נקראת לפני שיש זהות, ולכן אי אפשר להקדים אותה בשום דרך
+    אחרת, וקר-סטארט של דקה ראשונה גרם ללחיצה על "כניסה מהירה" להיראות
+    תקועה. מופע חם אחד מבטל את ההמתנה הזו לגמרי. שאר הפונקציות נקראות
+    כשהמשתמש כבר בפנים ועומס ההמתנה שם נסבל, ולכן הן נשארות ב-0.  */
+exports.passkeyLoginOptions = onCall({ region: REGION, minInstances: 1 }, async (request) => {
   const env = envOf(request.data);
   const { rpID } = resolveRp(request.data && request.data.origin);
   const email = normalizeEmail(request.data && request.data.email);
@@ -474,6 +820,10 @@ exports.addPartner = onCall({ region: REGION }, async (request) => {
     created = true;
   }
 
+  if (!created && !partner.emailVerified) {
+    throw new HttpsError("failed-precondition", "partner_email_unverified");
+  }
+
   await envRoot(env).collection("users").doc(partner.uid).set(
     { id: partner.uid, email, emailLower: email, createdAt: FieldValue.serverTimestamp() },
     { merge: true }
@@ -514,7 +864,7 @@ exports.createInvite = onCall({ region: REGION }, async (request) => {
   const data = request.data || {};
   const weddingId = String(data.weddingId || "");
   const role = data.role;
-  const scopes = Array.isArray(data.scopes) && data.scopes.length ? data.scopes : ["all"];
+  const scopes = normalizeScopes(data.scopes);
   const email = data.email ? normalizeEmail(data.email) : null;
 
   if (role !== "editor" && role !== "viewer") {
@@ -556,44 +906,58 @@ exports.acceptInvite = onCall({ region: REGION }, async (request) => {
 
   if (found.empty) throw new HttpsError("not-found", "ההזמנה אינה קיימת.");
 
-  const doc = found.docs[0];
-  const invite = doc.data();
-
-  if (invite.acceptedAt) throw new HttpsError("failed-precondition", "ההזמנה כבר מומשה.");
-  if (invite.expiresAt && invite.expiresAt.toDate() < new Date()) {
-    throw new HttpsError("deadline-exceeded", "תוקף ההזמנה פג.");
-  }
-
-  //  הזמנה שהונפקה לכתובת מסוימת תקפה רק לה.
-  if (invite.email) {
-    const user = await auth.getUser(uid);
-    if (!user.email || user.email.toLowerCase() !== invite.email) {
-      throw new HttpsError("permission-denied", "ההזמנה הונפקה לכתובת מייל אחרת.");
+  const inviteRef = found.docs[0].ref;
+  const user = await auth.getUser(uid);
+  const acceptance = await db.runTransaction(async (tx) => {
+    const inviteSnap = await tx.get(inviteRef);
+    if (!inviteSnap.exists || inviteSnap.get("tokenHash") !== hashToken(token)) {
+      throw new HttpsError("not-found", "ההזמנה אינה קיימת.");
     }
-  }
+    const invite = inviteSnap.data();
+    if (invite.acceptedAt) throw new HttpsError("failed-precondition", "ההזמנה כבר מומשה.");
+    if (invite.expiresAt && invite.expiresAt.toDate() < new Date()) {
+      throw new HttpsError("deadline-exceeded", "תוקף ההזמנה פג.");
+    }
+    if (invite.email) {
+      if (!user.email || user.email.toLowerCase() !== invite.email) {
+        throw new HttpsError("permission-denied", "ההזמנה הונפקה לכתובת מייל אחרת.");
+      }
+      if (!user.emailVerified) {
+        throw new HttpsError("failed-precondition", "invite_email_unverified");
+      }
+    }
 
-  const wedding = await weddingRef(env, invite.weddingId).get();
-  if (!wedding.exists) throw new HttpsError("not-found", "החתונה לא נמצאה.");
+    const weddingDoc = weddingRef(env, invite.weddingId);
+    const memberDoc = weddingDoc.collection("members").doc(uid);
+    const userDoc = envRoot(env).collection("users").doc(uid);
+    const [wedding, membership] = await Promise.all([
+      tx.get(weddingDoc),
+      tx.get(memberDoc),
+    ]);
+    if (!wedding.exists) throw new HttpsError("not-found", "החתונה לא נמצאה.");
+    if (membership.exists) {
+      throw new HttpsError("already-exists", "אתם כבר חברים בחתונה הזו.");
+    }
 
-  const batch = db.batch();
-  batch.set(weddingRef(env, invite.weddingId).collection("members").doc(uid), {
-    userId: uid,
-    email: (await auth.getUser(uid)).email || "",
-    ownerId: wedding.data().ownerId,
-    role: invite.role,
-    scopes: invite.scopes && invite.scopes.length ? invite.scopes : ["all"],
-    createdAt: FieldValue.serverTimestamp(),
-    lastSeenAt: null,
+    tx.set(memberDoc, {
+      userId: uid,
+      email: user.email || "",
+      ownerId: wedding.get("ownerId"),
+      role: invite.role,
+      scopes: normalizeScopes(invite.scopes),
+      createdAt: FieldValue.serverTimestamp(),
+      lastSeenAt: null,
+    });
+    tx.set(userDoc, {
+      id: uid,
+      email: user.email || "",
+      emailLower: String(user.email || "").toLowerCase(),
+      weddingIds: FieldValue.arrayUnion(invite.weddingId),
+    }, { merge: true });
+    tx.update(inviteRef, { acceptedAt: FieldValue.serverTimestamp() });
+    return { weddingId: invite.weddingId };
   });
-  batch.set(
-    envRoot(env).collection("users").doc(uid),
-    { weddingIds: FieldValue.arrayUnion(invite.weddingId) },
-    { merge: true }
-  );
-  batch.update(doc.ref, { acceptedAt: FieldValue.serverTimestamp() });
-  await batch.commit();
 
   await refreshWeddingClaims(env, uid);
-
-  return { weddingId: invite.weddingId };
+  return acceptance;
 });

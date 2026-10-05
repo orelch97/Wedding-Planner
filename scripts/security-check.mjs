@@ -1,4 +1,4 @@
-import { loadEnv } from "../server/env.mjs";
+import { loadEnv } from "./lib/env.mjs";
 loadEnv();
 import { readFileSync } from "node:fs";
 

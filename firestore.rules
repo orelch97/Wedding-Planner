@@ -45,17 +45,50 @@ service cloud.firestore {
       }
 
       function isOwner(weddingId) {
-        return isMember(weddingId) && member(weddingId).role == 'owner';
+        return uid() != null
+               && get(/databases/$(database)/documents/envs/$(env)/weddings/$(weddingId))
+                    .data.ownerId == uid();
       }
 
       //  viewer רשאי לקרוא בלבד. owner ו-editor רשאים לכתוב.
       function canWriteRole(weddingId) {
-        return isMember(weddingId) && member(weddingId).role in ['owner', 'editor'];
+        return isOwner(weddingId)
+               || (isMember(weddingId) && member(weddingId).role == 'editor');
       }
 
       function hasScope(weddingId, scope) {
         return isMember(weddingId) &&
-               ('all' in member(weddingId).scopes || scope in member(weddingId).scopes);
+               (!('scopes' in member(weddingId)) ||
+                !(member(weddingId).scopes is list) ||
+                member(weddingId).scopes.size() == 0 ||
+                'all' in member(weddingId).scopes ||
+                scope in member(weddingId).scopes);
+      }
+
+      function startsAtRevisionOne() {
+        return request.resource.data.revision is int
+               && request.resource.data.revision == 1;
+      }
+
+      function advancesRevision() {
+        return request.resource.data.revision is int
+               && ((!('revision' in resource.data)
+                    && request.resource.data.revision == 1)
+                   || ('revision' in resource.data
+                       && resource.data.revision is int
+                       && request.resource.data.revision == resource.data.revision + 1));
+      }
+
+      function isUuid(value) {
+        return value is string
+               && value.matches('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$');
+      }
+
+      function validVendorReference(data) {
+        return !('vendorId' in data) ? true
+               : data.vendorId is string ? isUuid(data.vendorId)
+               : data.vendorId == null ? true
+               : false;
       }
 
       /* ── שורש הסביבה ─────────────────────────────────────────────────── */
@@ -89,8 +122,9 @@ service cloud.firestore {
 
         /* ── חברים ──────────────────────────────────────────────── */
         match /members/{memberId} {
-          //  כל חבר רואה את רשימת החברים של החתונה שלו (נדרש למסך השיתוף).
-          allow read: if isMember(weddingId);
+          //  פרטיות: רק הבעלים קורא את כל רשימת החברים (מייל, תפקיד, היקפים
+          //  ונוכחות חשופים שם). חבר רגיל קורא אך ורק את מסמך החברות של עצמו.
+          allow read: if isOwner(weddingId) || uid() == memberId;
 
           //  ביצת הבעלות: כדי להיות בעלים צריך מסמך חברות, וכדי ליצור מסמך
           //  חברות צריך להיות בעלים. לכן יצירת שורת הבעלים של עצמי נשענת
@@ -100,64 +134,91 @@ service cloud.firestore {
                         && get(/databases/$(database)/documents/envs/$(env)/weddings/$(weddingId))
                              .data.ownerId == uid();
 
-          //  שינוי הרשאות — הבעלים בלבד, ואסור להעניק 'owner' לאף אחד —
-          //  שורת בעלים שנייה היתה עוקפת את בדיקת isOwner.
-          allow update: if isOwner(weddingId)
-                        && request.resource.data.role in ['editor', 'viewer'];
-
           //  נוכחות: כל חבר מסמן שהוא כאן, על השורה של עצמו בלבד ורק על
-          //  השדה הזה. בלי הכלל הזה גם הבעלים נחסם — הכלל שמעליו דורש
-          //  שהתפקיד החדש יהיה editor/viewer, ותפקידו הוא 'owner'.
+          //  השדה הזה בלבד. שינויי תפקיד עוברים דרך Cloud Functions כדי
+          //  לרענן גם את claims של Storage.
           allow update: if uid() == memberId
                         && request.resource.data.diff(resource.data)
                              .affectedKeys().hasOnly(['lastSeenAt']);
 
-          //  הבעלים מסיר כל חבר; כל חבר מסיר את עצמו (עזיבה). שורת הבעלים
-          //  מוגנת, כדי שלא יינעל מחוץ לחתונה שלו.
-          allow delete: if (isOwner(weddingId) || uid() == memberId)
-                        && resource.data.role != 'owner';
+          //  שינוי הרשאות, הסרה ועזיבה נעשים דרך Cloud Functions בלבד.
+          allow delete: if false;
         }
 
         /* ── הגדרות החתונה ─────────────────────────────────────────────── */
         //  ההגדרות מרכזות מפתחות מכמה היקפים (יעד תקציב, קטגוריות מוזמנים).
-        //  קריאה לכל חבר; כתיבה למי שרשאי לערוך לפחות היקף אחד מהם.
+        //  כל היקף במסמך נפרד, מפני שכללי Firestore אינם מסתירים שדות במסמך.
         match /settings/{docId} {
-          allow read: if isMember(weddingId);
-          allow write: if canWriteRole(weddingId)
-                       && (hasScope(weddingId, 'finance') || hasScope(weddingId, 'guests'));
+          allow read: if isOwner(weddingId)
+                      || (docId == 'finance' && hasScope(weddingId, 'finance'))
+                      || (docId == 'guests' && hasScope(weddingId, 'guests'));
+          allow write: if (docId == 'finance'
+                           && hasScope(weddingId, 'finance')
+                           && canWriteRole(weddingId))
+                       || (docId == 'guests'
+                           && hasScope(weddingId, 'guests')
+                           && canWriteRole(weddingId))
+                       || (docId == 'owner' && isOwner(weddingId));
         }
 
         /* ── נתוני המסכים ──────────────────────────────────────────────── */
         match /guests/{docId} {
           allow read:  if hasScope(weddingId, 'guests');
-          allow write: if hasScope(weddingId, 'guests') && canWriteRole(weddingId);
+          allow create: if hasScope(weddingId, 'guests') && canWriteRole(weddingId) && startsAtRevisionOne();
+          allow update: if hasScope(weddingId, 'guests') && canWriteRole(weddingId) && advancesRevision();
+          allow delete: if false;
         }
 
         match /tables/{docId} {
           allow read:  if hasScope(weddingId, 'guests');
-          allow write: if hasScope(weddingId, 'guests') && canWriteRole(weddingId);
+          allow create: if hasScope(weddingId, 'guests') && canWriteRole(weddingId) && startsAtRevisionOne();
+          allow update: if hasScope(weddingId, 'guests') && canWriteRole(weddingId) && advancesRevision();
+          allow delete: if false;
         }
 
         match /vendors/{docId} {
           allow read:  if hasScope(weddingId, 'vendors');
-          allow write: if hasScope(weddingId, 'vendors') && canWriteRole(weddingId);
+          allow create: if hasScope(weddingId, 'vendors')
+                        && canWriteRole(weddingId)
+                        && startsAtRevisionOne()
+                        && isUuid(docId)
+                        && request.resource.data.id == docId;
+          allow update: if hasScope(weddingId, 'vendors')
+                        && canWriteRole(weddingId)
+                        && advancesRevision()
+                        && resource.data.id == docId
+                        && request.resource.data.id == resource.data.id;
+          allow delete: if false;
         }
 
         //  מטא-דאטה של מסמכים מצורפים. הקובץ עצמו יושב ב-Storage ומוגן
         //  בנפרד ב-storage.rules.
         match /files/{docId} {
           allow read:  if hasScope(weddingId, 'vendors');
-          allow write: if hasScope(weddingId, 'vendors') && canWriteRole(weddingId);
+          allow create, update: if hasScope(weddingId, 'vendors')
+                                && canWriteRole(weddingId)
+                                && validVendorReference(request.resource.data);
+          allow delete: if false;
         }
 
         match /budget/{docId} {
           allow read:  if hasScope(weddingId, 'finance');
-          allow write: if hasScope(weddingId, 'finance') && canWriteRole(weddingId);
+          allow create: if hasScope(weddingId, 'finance')
+                        && canWriteRole(weddingId)
+                        && startsAtRevisionOne()
+                        && validVendorReference(request.resource.data);
+          allow update: if hasScope(weddingId, 'finance')
+                        && canWriteRole(weddingId)
+                        && advancesRevision()
+                        && validVendorReference(request.resource.data);
+          allow delete: if false;
         }
 
         match /checklist/{docId} {
           allow read:  if hasScope(weddingId, 'checklist');
-          allow write: if hasScope(weddingId, 'checklist') && canWriteRole(weddingId);
+          allow create: if hasScope(weddingId, 'checklist') && canWriteRole(weddingId) && startsAtRevisionOne();
+          allow update: if hasScope(weddingId, 'checklist') && canWriteRole(weddingId) && advancesRevision();
+          allow delete: if false;
         }
       }
 

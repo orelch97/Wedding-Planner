@@ -12,7 +12,7 @@
  * ========================================================================== */
 
 import { readFileSync } from "node:fs";
-import { loadEnv } from "../server/env.mjs";
+import { loadEnv } from "./lib/env.mjs";
 import { accessToken } from "./lib/gcs.mjs";
 
 loadEnv();

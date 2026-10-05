@@ -4,20 +4,22 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n vite,api -c cyan,magenta \"vite\" \"node --watch server/index.js\"",
+    "dev": "vite",
     "dev:web": "vite",
-    "server": "node server/index.js",
-    "start": "node server/index.js",
+    "dev:e2e": "vite --mode e2e --host 127.0.0.1 --port 4173 --strictPort",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "db:migrate": "node db/migrate.mjs",
-    "db:reset": "node db/reset.mjs",
-    "test:api": "node scripts/api-test.mjs",
     "test:excel": "node scripts/excel-test.mjs",
+    "test:alcohol": "node scripts/alcohol-test.mjs",
+    "test:guide": "node scripts/guide-tour-test.mjs",
+    "test:e2e": "firebase emulators:exec --project demo-wedding-planner-e2e --only auth,firestore,storage,functions \"node scripts/run-e2e.mjs\"",
+    "test:e2e:headed": "firebase emulators:exec --project demo-wedding-planner-e2e --only auth,firestore,storage,functions \"node scripts/run-e2e.mjs --headed\"",
+    "test:e2e:ui": "firebase emulators:exec --project demo-wedding-planner-e2e --only auth,firestore,storage,functions \"node scripts/run-e2e.mjs --ui\"",
+    "e2e:install-browsers": "playwright install chromium",
+    "e2e:report": "playwright show-report playwright-report",
     "test:backup": "node scripts/backup-test.mjs",
-    "test:import": "node scripts/import-test.mjs",
-    "test:cleanup": "node scripts/test-cleanup.mjs"
+    "test:import": "node scripts/import-test.mjs"
   },
   "engines": {
     "node": ">=22"
@@ -26,11 +28,8 @@
     "@tailwindcss/vite": "^4.3.1",
     "autoprefixer": "^10.5.0",
     "exceljs": "^4.4.0",
-    "express": "^5.2.1",
     "firebase": "^12.18.0",
     "lucide-react": "^1.21.0",
-    "nodemailer": "^9.0.4",
-    "pg": "^8.22.0",
     "postcss": "^8.5.15",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
@@ -38,6 +37,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
@@ -46,6 +46,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "firebase-admin": "^14.3.0",
+    "firebase-tools": "^15.32.1",
     "globals": "^17.6.0",
     "vite": "^8.0.12"
   }

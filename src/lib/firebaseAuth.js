@@ -14,9 +14,16 @@ import {
   signOut as fbSignOut,
   onAuthStateChanged,
   sendPasswordResetEmail,
+  verifyPasswordResetCode as verifyFirebasePasswordResetCode,
   confirmPasswordReset,
+  sendEmailVerification,
+  applyActionCode,
+  reload,
+  createUserWithEmailAndPassword as createUserWithCredential,
+  signInWithEmailAndPassword as signInWithCredential,
 } from "firebase/auth";
-import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";import { auth, db, firebaseConfigured, weddingRef, weddingCol, userRef } from "./firebase.js";
+import { getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { auth, firebaseConfigured, userRef } from "./firebase.js";
 
 let currentSession = null;
 const listeners = new Set();
@@ -31,7 +38,11 @@ function setSession(user) {
   return currentSession;
 }
 
-const toUser = (fbUser) => (fbUser ? { id: fbUser.uid, email: fbUser.email } : null);
+const toUser = (fbUser) => (
+  fbUser
+    ? { id: fbUser.uid, email: fbUser.email, emailVerified: !!fbUser.emailVerified }
+    : null
+);
 
 /*  ה-SDK משחזר את הסשן מ-IndexedDB באופן אסינכרוני. onAuthStateChanged
     יורה פעם אחת עם המצב ההתחלתי, ולכן ההבטחה נפתרת רק אחריו — אחרת
@@ -88,45 +99,28 @@ export async function signUp(
   const cred = await createUserWithEmailAndPassword(auth, email, password);
   const user = toUser(cred.user);
 
-  await setDoc(userRef(user.id), {
-    id: user.id,
-    email: user.email,
-    emailLower: String(user.email).toLowerCase(),
-    weddingIds: [],
-    createdAt: serverTimestamp(),
-  });
+  if (!cred.user.emailVerified) {
+    try {
+      await sendEmailVerification(cred.user);
+    } catch (err) {
+      console.error("Failed to send signup verification email:", err);
+    }
+  }
 
   //  מצטרף דרך הזמנה אינו פותח חתונה משלו: חתונה פרטית הייתה הופכת אותו
   //  לבעלים עם גישה מלאה, בניגוד להיקף המצומצם שקיבל.
   let joinedWeddingId = null;
   if (inviteToken) {
-    const { acceptInvite } = await import("./firebaseStore.js");
-    joinedWeddingId = await acceptInvite(inviteToken);
+    await setDoc(userRef(user.id), {
+      id: user.id,
+      email: user.email,
+      emailLower: String(user.email).toLowerCase(),
+      weddingIds: [],
+      createdAt: serverTimestamp(),
+    }, { merge: true });
   } else {
-    const weddingId = crypto.randomUUID();
-    /*  שתי כתיבות נפרדות ולא אצווה: כלל האבטחה על מסמך החברות עושה
-        `get()` על החתונה, ו-`get()` בכללים רואה רק מה שכבר נכתב. באצווה
-        החתונה עדיין לא קיימת כשהכלל נבדק, וכל הרשמה נדחתה.  */
-    await setDoc(weddingRef(weddingId), {
-      id: weddingId,
-      name: "החתונה שלי",
-      weddingDate: weddingDate || null,
-      partnerA: "",
-      partnerB: "",
-      ownerId: user.id,
-      createdAt: serverTimestamp(),
-    });
-    await setDoc(doc(weddingCol(weddingId, "members"), user.id), {
-      userId: user.id,
-      email: user.email ?? "",
-      ownerId: user.id,
-      role: "owner",
-      scopes: ["all"],
-      createdAt: serverTimestamp(),
-      lastSeenAt: serverTimestamp(),
-    });
-    //  הרמז ש-listWeddings נשען עליו. בלעדיו המשתמש לא יראה את החתונה שלו.
-    await setDoc(userRef(user.id), { weddingIds: [weddingId] }, { merge: true });
+    const { ensureMyWedding } = await import("./firebaseStore.js");
+    await ensureMyWedding(weddingDate);
   }
 
   let partner = null;
@@ -227,14 +221,36 @@ export async function requestPasswordReset(email) {
   //  auth/user-not-found נבלע בכוונה: אחרת הטופס הופך לכלי לגילוי
   //  אילו כתובות רשומות במערכת.
   try {
-    await sendPasswordResetEmail(auth, email);
+    auth.languageCode = "he";
+    await sendPasswordResetEmail(auth, email, { url: window.location.origin });
   } catch (err) {
     if (err?.code !== "auth/user-not-found") throw err;
   }
+}
+
+/** בודק קישור איפוס לפני הצגת טופס שינוי הסיסמה ומחזיר את כתובת החשבון. */
+export async function verifyPasswordResetCode(oobCode) {
+  return verifyFirebasePasswordResetCode(auth, oobCode);
 }
 
 /** קובע סיסמה חדשה לפי ה-oobCode מהקישור שבמייל. לא מחבר — צריך להתחבר מחדש. */
 export async function resetPassword(oobCode, password) {
   await confirmPasswordReset(auth, oobCode, password);
   await signOut();
+}
+
+export async function requestEmailVerification() {
+  const user = auth?.currentUser;
+  if (!user) throw new Error("auth/not-authenticated");
+  if (user.emailVerified) return { alreadyVerified: true };
+  await sendEmailVerification(user);
+  return { alreadyVerified: false };
+}
+
+export async function verifyEmailActionCode(oobCode) {
+  await applyActionCode(auth, oobCode);
+  if (auth.currentUser) {
+    await reload(auth.currentUser);
+    setSession(toUser(auth.currentUser));
+  }
 }

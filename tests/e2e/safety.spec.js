@@ -1,0 +1,700 @@
+import { test, expect } from "@playwright/test";
+import { readFile, stat } from "node:fs/promises";
+import path from "node:path";
+import ExcelJS from "exceljs";
+import { assertEmulatorEnvironment, expectAppHealthy, uniqueIdentity, signUp, signIn, navigateTo, openNavigationMenu, expectGuestPresent } from "./helpers/emulator.js";
+
+assertEmulatorEnvironment();
+
+const blockedCloudRequests = new WeakMap();
+const isFirebaseCloudHost = (hostname) =>
+  (/\.googleapis\.com$/i.test(hostname) && hostname.toLowerCase() !== "fonts.googleapis.com") ||
+  /(^|\.)firebaseio\.com$/i.test(hostname) ||
+  /(^|\.)firebasestorage\.app$/i.test(hostname) ||
+  /(^|\.)cloudfunctions\.net$/i.test(hostname) ||
+  /(^|\.)run\.app$/i.test(hostname);
+
+test.beforeEach(async ({ page }) => {
+  const attempts = [];
+  blockedCloudRequests.set(page, attempts);
+  page.on("request", (request) => {
+    if (isFirebaseCloudHost(new URL(request.url()).hostname)) attempts.push(request.url());
+  });
+  await page.route("**/*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.hostname.toLowerCase() === "fonts.googleapis.com") {
+      await route.abort("blockedbyclient");
+      return;
+    }
+    if (isFirebaseCloudHost(url.hostname)) {
+      await route.abort("blockedbyclient");
+      return;
+    }
+    await route.continue();
+  });
+});
+
+test.afterEach(async ({ page }) => {
+  expect(blockedCloudRequests.get(page), "E2E must not attempt Firebase cloud traffic").toEqual([]);
+});
+
+test.describe("emulator isolation and account lifecycle", () => {
+  test("rejects non-local or non-demo configuration before browser actions", async () => {
+    expect(process.env.VITE_USE_FIREBASE_EMULATORS).toBe("true");
+    expect(process.env.VITE_FIREBASE_ENV).toBe("test");
+    expect(process.env.VITE_FIREBASE_PROJECT_ID).toBe("demo-wedding-planner-e2e");
+  });
+
+  test("creates a synthetic account and renders its isolated wedding workspace", async ({ page }) => {
+    const identity = uniqueIdentity("signup");
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await signUp(page, identity);
+    await expectAppHealthy(page);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("sign-in form reports invalid synthetic credentials without crashing", async ({ page }) => {
+    await page.goto("/");
+    await page.getByLabel("מייל", { exact: true }).fill("missing-user@example.test");
+    await page.getByLabel(/^סיסמה|^password/i).fill("wrong-password");
+    await page.locator('[data-tour="auth-submit"]').click();
+    await expect(page.locator("body")).toContainText(/שגיאה|נכשל|לא נמצא|invalid|failed|incorrect/i, { timeout: 15_000 });
+    await expect(page.getByRole("main")).toBeHidden();
+  });
+
+  test("warms Passkey options before tap so the platform prompt opens immediately", async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator.credentials, "get", {
+        configurable: true,
+        value: async () => {
+          window.__passkeyPromptAt = performance.now();
+          return null;
+        },
+      });
+    });
+    const optionsReady = page.waitForResponse(
+      (response) => response.url().includes("passkeyLoginOptions") && response.status() === 200,
+      { timeout: 30_000 }
+    );
+    await page.goto("http://localhost:4173/");
+    await optionsReady;
+
+    const tapAt = await page.evaluate(() => performance.now());
+    await page.getByRole("button", { name: "כניסה מהירה עם Passkey" }).click();
+    await expect(page.locator("body")).toContainText("הפעולה בוטלה או שפג הזמן. נסו שוב.");
+    const promptAt = await page.evaluate(() => window.__passkeyPromptAt);
+    expect(promptAt - tapAt).toBeLessThan(500);
+  });
+
+  test("sends a Hebrew reset action and completes password reset in the app", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const identity = uniqueIdentity("reset");
+    await signUp(page, identity);
+
+    const desktopLogout = page.getByRole("button", { name: "יציאה", exact: true });
+    if (await desktopLogout.isVisible()) {
+      await desktopLogout.click();
+    } else {
+      await page.getByRole("button", { name: "פעולות נוספות" }).click();
+      await page.getByRole("menuitem", { name: "יציאה מהחשבון" }).click();
+    }
+    await page.getByLabel("מייל", { exact: true }).waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "שכחתי סיסמה", exact: true }).click();
+    await page.getByLabel("מייל", { exact: true }).fill(identity.email);
+    const resetRequestPromise = page.waitForRequest((outgoingRequest) =>
+      outgoingRequest.url().includes("accounts:sendOobCode")
+    );
+    await page.locator('[data-tour="auth-submit"]').click();
+    const resetRequest = await resetRequestPromise;
+    expect((await resetRequest.allHeaders())["x-firebase-locale"]).toBe("he");
+    await expect(page.locator("body")).toContainText("אם הכתובת רשומה במערכת, נשלח אליה קישור לאיפוס הסיסמה.");
+
+    const codesResponse = await request.get(
+      "http://127.0.0.1:9099/emulator/v1/projects/demo-wedding-planner-e2e/oobCodes"
+    );
+    expect(codesResponse.ok()).toBe(true);
+    const { oobCodes = [] } = await codesResponse.json();
+    const resetAction = [...oobCodes].reverse().find(
+      (code) => code.email === identity.email && code.requestType === "PASSWORD_RESET"
+    );
+    expect(resetAction?.oobCode).toBeTruthy();
+    expect(resetAction?.oobLink).toContain("continueUrl=http%3A%2F%2F127.0.0.1%3A4173");
+
+    await page.goto("http://127.0.0.1:4173/?mode=resetPassword&oobCode=invalid-code&lang=he");
+    await expect(page.getByRole("alert")).toContainText("קישור האיפוס אינו תקף או שכבר השתמשתם בו");
+    await page.getByRole("button", { name: "חזרה למסך ההתחברות" }).click();
+
+    await page.goto(`http://127.0.0.1:4173/?mode=resetPassword&oobCode=${encodeURIComponent(resetAction.oobCode)}&lang=he`);
+    await expect(page.getByRole("heading", { name: "קביעת סיסמה חדשה" })).toBeVisible();
+    await expect(page.locator("body")).toContainText(identity.email);
+    const password = page.getByLabel("סיסמה חדשה");
+    const confirmation = page.getByLabel("אימות סיסמה");
+    await password.fill("short");
+    await confirmation.fill("short");
+    await page.getByRole("button", { name: "עדכון הסיסמה" }).click();
+    await expect(page.getByRole("alert")).toContainText("הסיסמה חייבת להכיל לפחות 8 תווים");
+
+    const newPassword = "QA-Reset-Password-2026!";
+    await password.fill(newPassword);
+    await confirmation.fill(`${newPassword}-mismatch`);
+    await page.getByRole("button", { name: "עדכון הסיסמה" }).click();
+    await expect(page.getByRole("alert")).toContainText("שתי הסיסמאות אינן זהות");
+
+    await confirmation.fill(newPassword);
+    await page.getByRole("button", { name: "עדכון הסיסמה" }).click();
+    await expect(page.getByRole("heading", { name: "הסיסמה עודכנה" })).toBeVisible();
+    await page.getByRole("button", { name: "למסך ההתחברות" }).click();
+    await page.getByLabel("מייל", { exact: true }).fill(identity.email);
+    await page.getByLabel(/^סיסמה|^password/i).fill(newPassword);
+    await page.locator('[data-tour="auth-submit"]').click();
+    await expect(page.getByRole("main")).toBeVisible({ timeout: 30_000 });
+  });
+
+  test("creates a synthetic guest and exports the isolated list", async ({ page }) => {
+    await signUp(page, uniqueIdentity("guest"));
+    await navigateTo(page, "guests");
+
+    const guestName = `E2E guest ${Date.now()}`;
+    await page.getByRole("textbox", { name: "שם האורח או המשפחה" }).fill(guestName);
+    await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
+    await expectGuestPresent(page, guestName);
+
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: /ייצוא/ }).click();
+    expect((await download).suggestedFilename()).toMatch(/\.csv$/i);
+  });
+
+  test("downloads guest and workbook exports, then restores an encrypted backup", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signUp(page, uniqueIdentity("backup"));
+    await navigateTo(page, "guests");
+
+    const guestName = `E2E backup guest ${Date.now()}`;
+    await page.getByRole("textbox", { name: "שם האורח או המשפחה" }).fill(guestName);
+    await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
+    await expectGuestPresent(page, guestName);
+
+    const templateDownload = page.waitForEvent("download");
+    await page.getByRole("button", { name: "תבנית", exact: true }).click();
+    const template = await templateDownload;
+    expect(template.suggestedFilename()).toMatch(/\.csv$/i);
+    expect((await stat(await template.path())).size).toBeGreaterThan(0);
+
+    await page.getByRole("button", { name: "פעולות נוספות" }).click();
+    const workbookDownload = page.waitForEvent("download");
+    await page.getByRole("menuitem", { name: /ייצוא לאקסל/ }).click();
+    const workbookFile = await workbookDownload;
+    expect(workbookFile.suggestedFilename()).toMatch(/\.xlsx$/i);
+    const workbookPath = await workbookFile.path();
+    expect((await stat(workbookPath)).size).toBeGreaterThan(0);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(workbookPath);
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toContain("מוזמנים");
+    expect(workbook.getWorksheet("מוזמנים").getCell(2, 2).value).toBe(guestName);
+
+    await page.getByRole("button", { name: "פעולות נוספות" }).click();
+    await page.getByRole("menuitem", { name: /^קובץ גיבוי \(JSON\)/ }).click();
+    const backupChoice = page.getByRole("alertdialog", { name: "להצפין את קובץ הגיבוי?" });
+    const plainBackupDownload = page.waitForEvent("download");
+    await backupChoice.getByRole("button", { name: "הורד ללא הצפנה" }).click();
+    const plainBackup = await plainBackupDownload;
+    await expect(backupChoice).toBeHidden();
+    const plainBackupPath = await plainBackup.path();
+    const plainPayload = JSON.parse(await readFile(plainBackupPath, "utf8"));
+    expect(plainBackup.suggestedFilename()).toMatch(/\.json$/i);
+    expect(plainPayload.app).toBe("wedding-planner");
+    expect(plainPayload.guests.some((guest) => guest.name === guestName)).toBe(true);
+
+    await page.getByRole("button", { name: "פעולות נוספות" }).click();
+    await page.getByRole("menuitem", { name: /^קובץ גיבוי \(JSON\)/ }).click();
+    await expect(backupChoice).toBeVisible();
+    await backupChoice
+      .getByRole("button", { name: "הצפן בסיסמה" }).click();
+    const encryptionDialog = page.getByRole("dialog", { name: "סיסמת הצפנה" });
+    const passphrase = "QA-only-restore-passphrase-2026";
+    await encryptionDialog.getByRole("textbox").fill(passphrase);
+    const encryptedDownload = page.waitForEvent("download");
+    await encryptionDialog.getByRole("button", { name: "הצפן והורד" }).click();
+    const encryptedFile = await encryptedDownload;
+    const encryptedPath = await encryptedFile.path();
+    const encryptedPayload = JSON.parse(await readFile(encryptedPath, "utf8"));
+    expect(encryptedFile.suggestedFilename()).toMatch(/encrypted.*\.json$/i);
+    expect(encryptedPayload.data).toBeTruthy();
+    expect(JSON.stringify(encryptedPayload)).not.toContain(guestName);
+
+    const guestNameLabel = (page.viewportSize()?.width ?? 1365) < 500 ? "שם האורח" : "שם";
+    const guestNameField = page.getByRole("textbox", { name: guestNameLabel, exact: true });
+    const changedGuestName = `${guestName} changed`;
+    await guestNameField.fill(changedGuestName);
+    await guestNameField.blur();
+    const changedGuestAction = (page.viewportSize()?.width ?? 1365) < 500
+      ? page.getByRole("button", { name: `פתיחת פרטי ${changedGuestName}` })
+      : page.getByRole("button", { name: `מחיקת ${changedGuestName}` });
+    await expect(changedGuestAction).toBeVisible();
+    await page.waitForTimeout(2500);
+    await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible();
+    await page.reload();
+    await page.getByRole("main").waitFor({ state: "visible", timeout: 30_000 });
+    await page.locator('[aria-label="מצב סנכרון: מסונכרן"]').waitFor({ state: "visible", timeout: 30_000 });
+    await navigateTo(page, "guests");
+    await expectGuestPresent(page, changedGuestName);
+
+    const backupInput = page.locator('input[type="file"]').first();
+    await backupInput.setInputFiles(encryptedPath);
+    const decryptDialog = page.getByRole("dialog", { name: "קובץ גיבוי מוצפן" });
+    await decryptDialog.getByRole("textbox").fill("wrong-passphrase");
+    await decryptDialog.getByRole("button", { name: "פענח" }).click();
+    await expect(page.getByText("הסיסמה שגויה או שהקובץ פגום.")).toBeVisible();
+    await expectGuestPresent(page, changedGuestName);
+
+    await backupInput.setInputFiles(encryptedPath);
+    await page.getByRole("dialog", { name: "קובץ גיבוי מוצפן" })
+      .getByRole("textbox").fill(passphrase);
+    await page.getByRole("dialog", { name: "קובץ גיבוי מוצפן" })
+      .getByRole("button", { name: "פענח" }).click();
+    const restoreConfirmation = page.getByRole("alertdialog", { name: "שחזור גיבוי יחליף את כל הנתונים" });
+    await restoreConfirmation.getByRole("button", { name: "ביטול" }).click();
+    await expectGuestPresent(page, changedGuestName);
+
+    await backupInput.setInputFiles(encryptedPath);
+    await page.getByRole("dialog", { name: "קובץ גיבוי מוצפן" })
+      .getByRole("textbox").fill(passphrase);
+    await page.getByRole("dialog", { name: "קובץ גיבוי מוצפן" })
+      .getByRole("button", { name: "פענח" }).click();
+    const restoreDownload = page.waitForEvent("download");
+    await page.getByRole("alertdialog", { name: "שחזור גיבוי יחליף את כל הנתונים" })
+      .getByRole("button", { name: "שחזר נתונים" }).click();
+    const beforeRestore = await restoreDownload;
+    expect(beforeRestore.suggestedFilename()).toMatch(/before-restore.*\.json$/i);
+    await expectGuestPresent(page, guestName);
+  });
+
+  test("creates and completes a checklist item in the isolated wedding", async ({ page }) => {
+    await signUp(page, uniqueIdentity("checklist"));
+    await navigateTo(page, "checklist");
+    const taskTitle = `E2E task ${Date.now()}`;
+    await page.getByRole("textbox", { name: "שם המשימה החדשה" }).fill(taskTitle);
+    await page.getByRole("button", { name: "הוספה" }).click();
+    const task = page.getByRole("checkbox", { name: `סימון "${taskTitle}" כבוצע` });
+    await expect(task).toBeVisible();
+    const search = page.getByRole("textbox", { name: "חיפוש משימה" });
+    await search.fill("no matching task");
+    await expect(task).toBeHidden();
+    await search.fill("");
+    await page.getByRole("button", { name: "כלה", exact: true }).click();
+    await expect(task).toBeHidden();
+    await page.getByRole("button", { name: "שניהם", exact: true }).click();
+    await expect(task).toBeVisible();
+    await task.check();
+    await expect(task).toBeChecked();
+    await page.getByRole("button", { name: /שהושלמו/ }).click();
+    await expect(task).toBeHidden();
+    await page.getByRole("button", { name: /שהושלמו/ }).click();
+    await expect(task).toBeVisible();
+
+    await page.getByRole("button", { name: `שינוי שם המשימה "${taskTitle}"` }).click();
+    const renamedTitle = `${taskTitle} renamed`;
+    const titleField = page.getByRole("textbox", { name: "שם המשימה", exact: true });
+    await titleField.fill(renamedTitle);
+    await titleField.press("Enter");
+    const renamedTask = page.getByRole("checkbox", { name: `סימון "${renamedTitle}" כבוצע` });
+    await expect(renamedTask).toBeVisible();
+
+    const deleteTask = page.getByRole("button", { name: `מחיקת המשימה "${renamedTitle}"` });
+    await deleteTask.click();
+    const deleteDialog = page.getByRole("alertdialog", { name: "מחיקת משימה" });
+    await deleteDialog.getByRole("button", { name: "ביטול" }).click();
+    await expect(renamedTask).toBeVisible();
+    await deleteTask.click();
+    await page.getByRole("alertdialog", { name: "מחיקת משימה" })
+      .getByRole("button", { name: "מחיקה" }).click();
+    await expect(renamedTask).toBeHidden();
+
+    const loadTemplate = page.getByRole("button", { name: "טעינת הרשימה המומלצת" });
+    await loadTemplate.click();
+    const templateDialog = page.getByRole("alertdialog", { name: "טעינת הרשימה המומלצת" });
+    await templateDialog.getByRole("button", { name: "ביטול" }).click();
+    await expect(loadTemplate).toBeVisible();
+    await loadTemplate.click();
+    await page.getByRole("alertdialog", { name: "טעינת הרשימה המומלצת" })
+      .getByRole("button", { name: "הוספה" }).click();
+    await expect(page.getByRole("main")).toContainText("0 מתוך 45 משימות הושלמו");
+  });
+
+  test("calculates alcohol estimates and transfers cost to the budget", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signUp(page, uniqueIdentity("alcohol"));
+    await navigateTo(page, "guests");
+    await page.getByRole("textbox", { name: "שם האורח או המשפחה" }).fill(`E2E drinkers ${Date.now()}`);
+    await page.getByRole("spinbutton", { name: "מספר כיסאות" }).fill("8");
+    await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
+    await navigateTo(page, "alcohol");
+
+    await page.getByRole("spinbutton", { name: "אחוז האורחים ששותים אלכוהול" }).fill("50");
+    await expect(page.locator('[data-tour="alcohol-result"]')).toContainText("4 אנשים");
+    await page.getByRole("button", { name: /שותים הרבה/ }).click();
+    await expect(page.getByRole("spinbutton", { name: "כמה אנשים לבקבוק אחד" })).toHaveValue("4");
+
+    // The list starts empty — nothing is pre-seeded for the couple.
+    await expect(page.locator('[data-tour="alcohol-shopping-list"]')).toContainText("הרשימה עדיין ריקה");
+
+    const addDrink = page.locator('[data-tour="alcohol-add-drink"]');
+    await addDrink.getByRole("textbox", { name: "שם המשקה" }).fill("QA Vodka");
+    await addDrink.getByRole("spinbutton", { name: "ליטר לבקבוק" }).fill("1");
+    await addDrink.getByRole("button", { name: "הוספה" }).click();
+    await expect(page.getByRole("spinbutton", { name: "כמות QA Vodka" })).toHaveValue("1");
+
+    // Every field lives in the row itself and is editable in place.
+    await page.getByRole("textbox", { name: "שם המשקה QA Vodka" }).fill("QA Grey");
+    await page.getByRole("spinbutton", { name: "מחיר לבקבוק של QA Grey" }).fill("90");
+    await page.getByRole("spinbutton", { name: "כמות QA Grey" }).fill("5");
+    await expect(page.locator('[data-tour="alcohol-totals"]')).toContainText("5 מתוך 1 ליטר");
+
+    // A tray is counted in units, so it swaps the liters field for "units per pack".
+    await page.locator('[data-tour="alcohol-shopping-list"]').getByRole("button", { name: "אקסל" }).click();
+    await expect(page.getByRole("spinbutton", { name: "יחידות במגש של אקסל" })).toHaveValue("24");
+    await expect(page.getByRole("spinbutton", { name: "ליטר למגש של אקסל" })).toHaveCount(0);
+    // Counting it toward the liters target is the user's call, on any pack kind.
+    await page.getByRole("button", { name: "אקסל לא מחושב באלכוהול" }).click();
+    await expect(page.getByRole("spinbutton", { name: "ליטר למגש של אקסל" })).toBeVisible();
+    await page.getByRole("button", { name: "מחיקת אקסל מהרשימה" }).click();
+    await expect(page.getByRole("textbox", { name: "שם המשקה אקסל" })).toHaveCount(0);
+
+    const transfer = page.locator('[data-tour="alcohol-budget-transfer"]');
+    await expect(transfer).not.toContainText(/0\s*₪/);
+    await transfer.getByRole("button", { name: "העבר לסעיף תקציב" }).click();
+    await page.waitForTimeout(1000);
+    await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible({ timeout: 20_000 });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("main").waitFor({ state: "visible", timeout: 30_000 });
+    await page.locator('[aria-label="מצב סנכרון: מסונכרן"]').waitFor({ state: "visible", timeout: 30_000 });
+    await navigateTo(page, "finance");
+    await expect(page.getByRole("button", { name: /עריכת אלכוהול/ })).toBeVisible();
+    await expect(page.locator('[data-tour="finance-add-item"]')).toContainText("עלות");
+  });
+
+  test("creates a guest and table, then assigns the guest to the table", async ({ page }) => {
+    await signUp(page, uniqueIdentity("seating"));
+    await navigateTo(page, "guests");
+    const guestName = `E2E seated guest ${Date.now()}`;
+    await page.getByRole("textbox", { name: "שם האורח או המשפחה" }).fill(guestName);
+    await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
+    await expectGuestPresent(page, guestName);
+
+    await navigateTo(page, "seating");
+    const tableName = `E2E table ${Date.now()}`;
+    await page.getByRole("textbox", { name: "שם השולחן החדש" }).fill(tableName);
+    await page.locator('[data-tour="seating-add-table"]').getByRole("button").click();
+    await page.getByRole("button", { name: "שבץ מוזמן" }).click();
+    const picker = page.getByRole("dialog", { name: new RegExp(tableName) });
+    await picker.getByRole("button").filter({ hasText: guestName }).click();
+    await expect(page.locator('[data-tour="seating-table-cards"]')).toContainText(guestName);
+  });
+
+  test("adds an isolated budget line", async ({ page }) => {
+    await signUp(page, uniqueIdentity("budget"));
+    await navigateTo(page, "finance");
+    const lineName = `E2E budget ${Date.now()}`;
+    const form = page.locator('[data-tour="finance-add-item"]');
+    await form.getByRole("textbox", { name: "שם הסעיף" }).fill(lineName);
+    await form.getByRole("spinbutton", { name: "עלות", exact: true }).fill("1250");
+    await form.getByRole("button", { name: "הוסף" }).click();
+    await expect(page.getByRole("button", { name: new RegExp(`עריכת ${lineName}`) })).toBeVisible();
+  });
+
+  test("creates and edits a synthetic vendor", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signUp(page, uniqueIdentity("vendor"));
+    const memberships = await page.evaluate(async () => {
+      const store = await import("/src/lib/firebaseStore.js");
+      return store.listWeddings();
+    });
+    expect(memberships[0]).toMatchObject({ role: "owner", scopes: ["all"] });
+    await navigateTo(page, "vendors");
+    await page.getByRole("button", { name: "ספק חדש" }).click();
+    const vendorName = `E2E vendor ${Date.now()}`;
+    const nameField = page.getByRole("textbox", { name: "שם הספק" });
+    await nameField.fill(vendorName);
+    await expect(nameField).toHaveValue(vendorName);
+    await expect(page.getByRole("button", { name: vendorName })).toBeVisible();
+
+    const attachmentName = "vendor-attachment.txt";
+    await page.locator('input[type="file"]').last().setInputFiles(
+      path.join(process.cwd(), "tests/e2e/fixtures/vendor-attachment.txt")
+    );
+    await expect(page.getByText(attachmentName, { exact: true })).toBeVisible();
+    const attachmentDownload = page.waitForEvent("download");
+    await page.getByRole("button", { name: `הורדת ${attachmentName}` }).click();
+    const downloadedAttachment = await attachmentDownload;
+    expect(downloadedAttachment.suggestedFilename()).toBe(attachmentName);
+    expect(await readFile(await downloadedAttachment.path(), "utf8")).toContain("Synthetic QA vendor attachment");
+
+    await page.getByRole("button", { name: `מחיקת ${attachmentName}` }).click();
+    const deleteFileDialog = page.getByRole("alertdialog").filter({ hasText: attachmentName });
+    await deleteFileDialog.getByRole("button", { name: "ביטול" }).click();
+    await expect(page.getByText(attachmentName, { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: `מחיקת ${attachmentName}` }).click();
+    await page.getByRole("alertdialog").filter({ hasText: attachmentName })
+      .getByRole("button", { name: "מחיקה" }).click();
+    const deletedFiles = page.locator('[aria-label="קבצים שנמחקו"]');
+    await page.getByRole("button", { name: /שחזור קבצים שנמחקו/ }).click();
+    await expect(deletedFiles).toContainText(attachmentName);
+    await deletedFiles.getByRole("button", { name: "שחזור" }).click();
+    await expect(page.getByText(attachmentName, { exact: true })).toBeVisible();
+
+    const taskTitle = `E2E vendor task ${Date.now()}`;
+    await page.getByPlaceholder("משימה חדשה...").fill(taskTitle);
+    await page.getByRole("button", { name: "הוספת משימה" }).click();
+    const status = page.getByRole("combobox", { name: `סטטוס המשימה ${taskTitle}` });
+    await expect(status).toHaveValue("todo");
+    await status.selectOption("inprogress");
+    await expect(status).toHaveValue("inprogress");
+    await status.selectOption("done");
+    await expect(status).toHaveValue("done");
+    await page.getByRole("button", { name: `מחיקת המשימה ${taskTitle}` }).click();
+    await expect(status).toHaveCount(0);
+
+    await page.waitForTimeout(1000);
+    await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible({ timeout: 20_000 });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("main").waitFor({ state: "visible", timeout: 30_000 });
+    await page.locator('[aria-label="מצב סנכרון: מסונכרן"]').waitFor({ state: "visible", timeout: 30_000 });
+    await navigateTo(page, "vendors");
+    await expect(page.getByRole("button", { name: vendorName })).toBeVisible();
+    await navigateTo(page, "finance");
+    await expect(page.getByRole("main")).toContainText(vendorName);
+  });
+
+  test("opens the owner sharing and members dialog", async ({ page }) => {
+    await signUp(page, uniqueIdentity("sharing"));
+    const shareButton = page.getByRole("button", { name: /שיתוף וחברים/ });
+    await openNavigationMenu(page);
+    await shareButton.click();
+    await expect(page.getByRole("dialog", { name: "שיתוף החתונה" })).toBeVisible();
+  });
+
+  test("navigates every exposed planning screen without a render error", async ({ page }) => {
+    await signUp(page, uniqueIdentity("screens"));
+    for (const key of ["overview", "checklist", "guests", "alcohol", "seating", "vendors", "finance"]) {
+      await navigateTo(page, key);
+      await expect(page.locator("main h2:visible").first()).toBeVisible();
+      await expectAppHealthy(page);
+    }
+  });
+
+  test("keeps the authenticated planning shell within a mobile viewport", async ({ page }) => {
+    test.skip((page.viewportSize()?.width ?? 1365) >= 500, "Mobile layout assertion runs in the Pixel 7 project.");
+    await signUp(page, uniqueIdentity("mobile"));
+    for (const key of ["overview", "checklist", "guests", "alcohol", "seating", "vendors", "finance"]) {
+      await navigateTo(page, key);
+      await expect(page.locator("main h2:visible").first()).toBeVisible();
+      const dimensions = await page.evaluate(() => ({
+        viewport: document.documentElement.clientWidth,
+        content: document.documentElement.scrollWidth,
+      }));
+      expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport + 1);
+      await expect(page.getByRole("main")).toBeVisible();
+    }
+  });
+
+  test("signs in to an emulator account, then registers a second account and saves onboarding settings", async ({ page }) => {
+    test.setTimeout(120_000);
+    const firstIdentity = uniqueIdentity("account-roundtrip");
+    const secondIdentity = uniqueIdentity("onboarding");
+
+    await test.step("Register the first synthetic account in the isolated emulator", async () => {
+      await signUp(page, firstIdentity);
+      await expectAppHealthy(page);
+    });
+
+    await test.step("Sign out and sign back in with the existing emulator account", async () => {
+      const desktopLogout = page.getByRole("button", { name: "יציאה", exact: true });
+      if (await desktopLogout.isVisible()) {
+        await desktopLogout.click();
+      } else {
+        await page.getByRole("button", { name: "פעולות נוספות" }).click();
+        await page.getByRole("menuitem", { name: "יציאה מהחשבון" }).click();
+      }
+      await expect(page.getByLabel("מייל", { exact: true })).toBeVisible();
+      await signIn(page, firstIdentity);
+      await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible({ timeout: 30_000 });
+    });
+
+    await test.step("Register a second synthetic account with its wedding date", async () => {
+      const desktopLogout = page.getByRole("button", { name: "יציאה", exact: true });
+      if (await desktopLogout.isVisible()) {
+        await desktopLogout.click();
+      } else {
+        await page.getByRole("button", { name: "פעולות נוספות" }).click();
+        await page.getByRole("menuitem", { name: "יציאה מהחשבון" }).click();
+      }
+      await expect(page.getByLabel("מייל", { exact: true })).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByLabel(/^סיסמה|^password/i)).toBeVisible();
+      await expect(page.locator('[data-tour="auth-submit"]')).toHaveText("התחברות");
+      await signUp(page, secondIdentity, { weddingDate: "2027-05-26" });
+      await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible({ timeout: 30_000 });
+    });
+
+    await test.step("Save partner names, wedding date, and budget goal", async () => {
+      await openNavigationMenu(page);
+      await page.getByRole("button", { name: "הגדרות החתונה" }).click();
+      const settings = page.getByRole("dialog", { name: "הגדרות החתונה" });
+      await settings.getByRole("textbox", { name: "שם בן/בת זוג א׳" }).fill("QA Partner A");
+      await settings.getByRole("textbox", { name: "שם בן/בת זוג ב׳" }).fill("QA Partner B");
+      await settings.locator("#wedding-date").fill("2028-06-15");
+      await settings.locator("#budget-goal").fill("320000");
+      await settings.getByRole("button", { name: "שמירה" }).click();
+      await expect(settings).toBeHidden();
+    });
+
+    await test.step("Reload and verify settings persisted in the emulator-backed wedding", async () => {
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByRole("main").waitFor({ state: "visible", timeout: 30_000 });
+      await page.locator('[aria-label="מצב סנכרון: מסונכרן"]').waitFor({ state: "visible", timeout: 30_000 });
+      await openNavigationMenu(page);
+      await page.getByRole("button", { name: "הגדרות החתונה" }).click();
+      const settings = page.getByRole("dialog", { name: "הגדרות החתונה" });
+      await expect(settings.getByRole("textbox", { name: "שם בן/בת זוג א׳" })).toHaveValue("QA Partner A");
+      await expect(settings.getByRole("textbox", { name: "שם בן/בת זוג ב׳" })).toHaveValue("QA Partner B");
+      await expect(settings.locator("#wedding-date")).toHaveValue("2028-06-15");
+      await expect(settings.locator("#budget-goal")).toHaveValue("320000");
+      await settings.getByRole("button", { name: "ביטול" }).click();
+    });
+  });
+
+  test("imports full guest records, toggles and persists every optional column, exports, undoes deletion, and verifies empty state", async ({ page }) => {
+    test.skip((page.viewportSize()?.width ?? 1365) < 500, "Guest-table controls are available in the desktop table project.");
+    test.setTimeout(180_000);
+    await signUp(page, uniqueIdentity("guest-full-record"));
+    await navigateTo(page, "guests");
+    const guestTable = page.locator("table");
+
+    const csvGuest = `E2E CSV Guest ${Date.now()}`;
+    const xlsxGuest = `E2E XLSX Guest ${Date.now()}`;
+    const csv = [
+      "שם,נייד,קטגוריה,אזכור,כיסאות,מקור,גלאט,שותים,כנראה יבוא,לשקול,אישור הגעה,כמה אישרו,מתנה",
+      `${csvGuest},0501234567,Family E2E,"Aunt, cousin",3,CSV source,כן,2,כן,כן,אישרו הגעה,2,2500`,
+    ].join("\n");
+
+    await test.step("Import a CSV guest with contact, seating, dietary, RSVP, source, and gift data", async () => {
+      await page.locator('[data-tour="guests-management"] input[type="file"]').setInputFiles({
+        name: "e2e-full-guests.csv",
+        mimeType: "text/csv",
+        buffer: Buffer.from(`\uFEFF${csv}`, "utf8"),
+      });
+      await guestTable.scrollIntoViewIfNeeded();
+      await expect(guestTable.locator('tbody input[placeholder="שם"]')).toHaveValue(csvGuest);
+      await expect(guestTable.locator('tbody input[placeholder="נייד"]')).toHaveValue("0501234567");
+      await expect(guestTable.getByRole("checkbox", { name: `${csvGuest} — שותים אלכוהול` })).toBeChecked();
+    });
+
+    await test.step("Import an XLSX guest and verify the row renders", async () => {
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("Guests");
+      worksheet.addRow(["שם", "נייד", "קטגוריה", "אזכור", "כיסאות", "מקור", "גלאט", "שותים", "כנראה יבוא", "לשקול", "אישור הגעה", "כמה אישרו", "מתנה"]);
+      worksheet.addRow([xlsxGuest, "0527654321", "Friends E2E", "College", 2, "XLSX source", "", 1, "", "", "ממתין", "", 700]);
+      const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+      await page.locator('[data-tour="guests-management"] input[type="file"]').setInputFiles({
+        name: "e2e-full-guests.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        buffer,
+      });
+      const guestNameInputs = guestTable.locator('tbody input[placeholder="שם"]');
+      await expect(guestNameInputs).toHaveCount(2, { timeout: 30_000 });
+      await expect(guestNameInputs.nth(0)).toHaveValue(csvGuest, { timeout: 30_000 });
+      await expect(guestNameInputs.nth(1)).toHaveValue(xlsxGuest, { timeout: 30_000 });
+    });
+
+    await test.step("Toggle every optional column and verify corresponding headers appear", async () => {
+      const columnsButton = page.getByRole("button", { name: /עמודות/ });
+      await columnsButton.click();
+      const chooser = page.getByRole("group", { name: "בחירת עמודות בטבלת המוזמנים" });
+      const defaults = [
+        ["קטגוריה", true], ["אזכור / הערות", false], ["כיסאות", true], ["מקור", false],
+        ["גלאט", true], ["שותים", true], ["כנראה יבוא", false], ["לשקול", false],
+        ["אישור הגעה", true], ["מתנה", true],
+      ];
+      for (const [label, checked] of defaults) {
+        await expect(chooser.getByRole("checkbox", { name: label })).toHaveJSProperty("checked", checked);
+        if (!checked) await chooser.getByRole("checkbox", { name: label }).check();
+      }
+      await expect(guestTable.getByRole("columnheader", { name: "אזכור / הערות", exact: true })).toBeVisible();
+      await expect(guestTable.getByRole("columnheader", { name: "מקור", exact: true })).toBeVisible();
+      await expect(guestTable.getByRole("columnheader", { name: "כנראה יבוא", exact: true })).toBeVisible();
+      await expect(guestTable.getByRole("columnheader", { name: "לשקול", exact: true })).toBeVisible();
+      const mentionInputs = guestTable.locator('tbody input[placeholder="אזכור"]');
+      await expect(mentionInputs).toHaveCount(2);
+      await expect(mentionInputs.nth(0)).toHaveValue("Aunt, cousin");
+      await expect(mentionInputs.nth(1)).toHaveValue("College");
+      await expect(guestTable.getByText("CSV source", { exact: true })).toBeVisible();
+      await expect(guestTable.getByText("XLSX source", { exact: true })).toBeVisible();
+      await expect(guestTable.getByRole("button", { name: "מסומן ככנראה יבוא" })).toBeVisible();
+      await expect(guestTable.getByRole("button", { name: "מסומן לשקילה" })).toBeVisible();
+      await chooser.getByRole("checkbox", { name: "קטגוריה" }).uncheck();
+      await expect(guestTable.getByRole("columnheader", { name: "קטגוריה", exact: true })).toBeHidden();
+      await chooser.getByRole("checkbox", { name: "קטגוריה" }).check();
+      await chooser.getByRole("button", { name: "ברירת מחדל" }).click();
+      await expect(chooser.getByRole("checkbox", { name: "שותים" })).toBeChecked();
+      await page.keyboard.press("Escape");
+      await expect(columnsButton).toHaveAttribute("aria-expanded", "false");
+    });
+
+    await test.step("Save a custom layout, reload, and verify it remains selected", async () => {
+      const columnsButton = page.getByRole("button", { name: /עמודות/ });
+      await columnsButton.click();
+      const chooser = page.getByRole("group", { name: "בחירת עמודות בטבלת המוזמנים" });
+      await chooser.getByRole("checkbox", { name: "מקור" }).check();
+      await chooser.getByRole("checkbox", { name: "אזכור / הערות" }).check();
+      await chooser.getByRole("checkbox", { name: "קטגוריה" }).uncheck();
+      await expect.poll(() => page.evaluate(() => {
+        const key = Object.keys(localStorage).find((item) => item.endsWith(":guestTableColumns"));
+        return key ? JSON.parse(localStorage.getItem(key)) : null;
+      }), { timeout: 5_000 }).toMatchObject({ category: false, mention: true, source: true });
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByRole("main").waitFor({ state: "visible", timeout: 30_000 });
+      await page.locator('[aria-label="מצב סנכרון: מסונכרן"]').waitFor({ state: "visible", timeout: 30_000 });
+      await navigateTo(page, "guests");
+      await page.getByRole("button", { name: /עמודות/ }).click();
+      const persistedChooser = page.getByRole("group", { name: "בחירת עמודות בטבלת המוזמנים" });
+      await expect(persistedChooser.getByRole("checkbox", { name: "מקור" })).toBeChecked();
+      await expect(persistedChooser.getByRole("checkbox", { name: "אזכור / הערות" })).toBeChecked();
+      await expect(persistedChooser.getByRole("checkbox", { name: "קטגוריה" })).not.toBeChecked();
+      await persistedChooser.getByRole("button", { name: "ברירת מחדל" }).click();
+    });
+
+    await test.step("Export the imported records and verify the downloaded CSV data", async () => {
+      const downloadPromise = page.waitForEvent("download");
+      await page.getByRole("button", { name: "ייצוא", exact: true }).click();
+      const download = await downloadPromise;
+      expect(download.suggestedFilename()).toMatch(/\.csv$/i);
+      const exported = await readFile(await download.path(), "utf8");
+      expect(exported).toContain(csvGuest);
+      expect(exported).toContain("Aunt, cousin");
+      expect(exported).toContain("CSV source");
+      expect(exported).toContain(xlsxGuest);
+      expect(exported).toContain("XLSX source");
+    });
+
+    await test.step("Undo a guest deletion, then delete both imported records and verify the empty state survives reload", async () => {
+      await guestTable.getByRole("button", { name: `מחיקת ${csvGuest}` }).click();
+      const undo = page.getByRole("button", { name: "בטל מחיקה" });
+      await expect(undo).toBeVisible();
+      await undo.click();
+      const guestNameInputs = guestTable.locator('tbody input[placeholder="שם"]');
+      await expect(guestNameInputs).toHaveCount(2);
+      await expect(guestNameInputs.nth(0)).toHaveValue(csvGuest);
+      await expect(guestNameInputs.nth(1)).toHaveValue(xlsxGuest);
+
+      await guestTable.getByRole("button", { name: `מחיקת ${csvGuest}` }).click();
+      await guestTable.getByRole("button", { name: `מחיקת ${xlsxGuest}` }).click();
+      await page.waitForTimeout(2500);
+      await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible({ timeout: 20_000 });
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByRole("main").waitFor({ state: "visible", timeout: 30_000 });
+      await page.locator('[aria-label="מצב סנכרון: מסונכרן"]').waitFor({ state: "visible", timeout: 30_000 });
+      await navigateTo(page, "guests");
+      await expect(page.getByRole("heading", { name: "רשימת המוזמנים עדיין ריקה" })).toBeVisible();
+    });
+  });
+});

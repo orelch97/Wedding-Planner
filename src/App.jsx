@@ -145,6 +145,7 @@ import {
   MAX_FILE_BYTES,
 } from "./lib/firebaseStore";
 import AdminDashboard from "./components/AdminDashboard.jsx";
+import ChecklistOptionsManager from "./components/ChecklistOptionsManager.jsx";
 import { isAdminEmail } from "./lib/adminConfig.js";
 import { findDuplicatePhones, describeDuplicates } from "./lib/guestDuplicates.js";
 import {
@@ -1516,6 +1517,7 @@ function Overview({
   vendors,
   budget,
   checklist = [],
+  checklistAssignees = ASSIGNEES,
   weddingDate,
   couple,
   canEditSettings,
@@ -1567,12 +1569,12 @@ function Overview({
   //  ומי משנינו נשאר עם העבודה. בלי הפילוח השני המספר לא מסייע לאיש.
   const checklistStats = useMemo(() => {
     const done = checklist.filter((c) => c.done).length;
-    const open = ASSIGNEES.map((a) => ({
-      label: a.short,
+    const open = checklistAssignees.map((a) => ({
+      label: a.label,
       count: checklist.filter((c) => !c.done && (c.assignee || "both") === a.key).length,
     })).filter((x) => x.count > 0);
     return { done, total: checklist.length, open };
-  }, [checklist]);
+  }, [checklist, checklistAssignees]);
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -5304,6 +5306,22 @@ const ASSIGNEES = [
   { key: "groom", label: "חתן", short: "חתן", icon: Crown, badge: "bg-sky-50 text-sky-600 ring-sky-200" },
 ];
 
+const DEFAULT_CHECKLIST_OPTIONS = {
+  categories: CHECKLIST_CATEGORIES,
+  assignees: ASSIGNEES.map(({ key, label }) => ({ key, label })),
+};
+
+function normalizeChecklistOptions(value) {
+  const categories = Array.isArray(value?.categories)
+    ? [...new Set(value.categories.filter((name) => typeof name === "string" && name.trim()).map((name) => name.trim()))] : [];
+  const assignees = Array.isArray(value?.assignees)
+    ? value.assignees.filter((option) => typeof option?.key === "string" && option.key && typeof option.label === "string" && option.label.trim()) : [];
+  return {
+    categories: categories.length ? categories : DEFAULT_CHECKLIST_OPTIONS.categories,
+    assignees: assignees.length ? assignees : DEFAULT_CHECKLIST_OPTIONS.assignees,
+  };
+}
+
 const assigneeOf = (key) => ASSIGNEES.find((a) => a.key === key) || ASSIGNEES[0];
 
 /**  סדר הקטגוריות: קודם אלו שמגיעות מהתבנית ובסדר שלה, ואחריהן קטגוריות
@@ -5313,20 +5331,21 @@ function orderCategories(list) {
   return [...CHECKLIST_CATEGORIES.filter((c) => list.includes(c)), ...extra];
 }
 
-function AssigneeBadge({ value }) {
-  const a = assigneeOf(value);
+function AssigneeBadge({ value, options = ASSIGNEES }) {
+  const configured = options.find((option) => option.key === value);
+  const a = { ...assigneeOf(value), ...configured };
   const Icon = a.icon;
   return (
     <span
       className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${a.badge}`}
     >
       <Icon size={11} />
-      {a.short}
+      {a.label}
     </span>
   );
 }
 
-function ChecklistRow({ item, canEdit, onToggle, onRename, onAssign, onDelete }) {
+function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename, onAssign, onPatch, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.title);
 
@@ -5342,7 +5361,7 @@ function ChecklistRow({ item, canEdit, onToggle, onRename, onAssign, onDelete })
 
   return (
     <li
-      className={`flex flex-wrap items-center gap-2 rounded-2xl border px-3 py-2 transition sm:flex-nowrap ${
+      className={`grid min-w-0 grid-cols-2 items-start gap-2 rounded-2xl border px-3 py-2 transition lg:grid-cols-[minmax(0,1.6fr)_minmax(0,.8fr)_minmax(0,.7fr)_minmax(0,1.2fr)_auto] ${
         item.done
           ? "border-sage-200/70 bg-sage-50/50"
           : "border-slate-200/70 bg-white/60"
@@ -5350,7 +5369,7 @@ function ChecklistRow({ item, canEdit, onToggle, onRename, onAssign, onDelete })
     >
       {/*  שטח הלחיצה הוא ה-label כולו ולא רק הריבוע — 44px בגובה, כדי
           שסימון משימה בטלפון לא ידרוש כיוון עדין.  */}
-      <label className="flex min-h-11 flex-1 cursor-pointer items-center gap-2.5">
+      <label className="col-span-2 flex min-h-11 min-w-0 cursor-pointer items-center gap-2.5 lg:col-span-1">
         <input
           type="checkbox"
           checked={item.done}
@@ -5387,23 +5406,36 @@ function ChecklistRow({ item, canEdit, onToggle, onRename, onAssign, onDelete })
         )}
       </label>
 
-      <div className="flex shrink-0 items-center gap-1.5">
+      <label className="min-w-0 text-xs font-medium text-slate-500">
+        קטגוריה
+        <select value={item.category || "כללי"} disabled={!canEdit} onChange={(event) => onPatch(item.id, { category: event.target.value })} aria-label={`קטגוריה — ${item.title}`} className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 text-base text-slate-700 outline-none focus:border-gold-400 disabled:bg-slate-50 sm:text-sm">
+          {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+        </select>
+      </label>
+      <div className="min-w-0">
+        <p className="mb-1 text-xs font-medium text-slate-500">שיוך</p>
         {canEdit ? (
           <select
             value={item.assignee}
             onChange={(e) => onAssign(item.id, e.target.value)}
-            className="min-h-11 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs text-slate-600 outline-none focus:border-gold-400"
-            aria-label={`מי אחראי על "${item.title}"`}
+            className="min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-2 text-base text-slate-600 outline-none focus:border-gold-400 sm:text-sm"
+            aria-label={`שיוך — ${item.title}`}
           >
-            {ASSIGNEES.map((a) => (
+            {assignees.map((a) => (
               <option key={a.key} value={a.key}>
                 {a.label}
               </option>
             ))}
           </select>
         ) : (
-          <AssigneeBadge value={item.assignee} />
+          <AssigneeBadge value={item.assignee} options={assignees} />
         )}
+      </div>
+      <div className="col-span-2 min-w-0 space-y-1 lg:col-span-1">
+        <p className="text-xs font-medium text-slate-500">הערות</p>
+        <BudgetNotes item={item} label={item.title} canEdit={canEdit} onChange={onPatch} />
+      </div>
+      <div className="col-span-2 flex shrink-0 items-center justify-end gap-1.5 lg:col-span-1">
         {canEdit && (
           <>
             <button
@@ -5429,23 +5461,40 @@ function ChecklistRow({ item, canEdit, onToggle, onRename, onAssign, onDelete })
   );
 }
 
-function Checklist({ items, setItems }) {
+function Checklist({ items, setItems, options, setOptions }) {
   const canEdit = useCanEdit();
   const [query, setQuery] = useState("");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
   const [hideDone, setHideDone] = useState(false);
-  const [form, setForm] = useState({ title: "", category: CHECKLIST_CATEGORIES[0] || "כללי", assignee: "both" });
+  const [form, setForm] = useState({ title: "", category: options.categories[0], assignee: options.assignees[0].key, notes: "" });
+  const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
+  const [managerOpen, setManagerOpen] = useState(false);
+  const addTaskToggleRef = useRef(null);
+  const taskNameRef = useRef(null);
+  const addTaskTouched = useRef(false);
+  useEffect(() => {
+    if (!addTaskTouched.current) return;
+    (isAddTaskOpen ? taskNameRef : addTaskToggleRef).current?.focus({ preventScroll: true });
+  }, [isAddTaskOpen]);
 
   const categories = useMemo(
-    () => orderCategories([...new Set([...items.map((i) => i.category || "כללי"), form.category || "כללי"])]),
-    [items, form.category]
+    () => orderCategories([...new Set([...options.categories, ...items.map((item) => item.category || "כללי")])]),
+    [items, options.categories]
   );
+  const assignees = useMemo(() => {
+    const known = new Set(options.assignees.map((option) => option.key));
+    const missing = [...new Set(items.map((item) => item.assignee || "both"))].filter((key) => !known.has(key));
+    return [...options.assignees, ...missing.map((key) => ({ key, label: ASSIGNEES.find((option) => option.key === key)?.label || key }))];
+  }, [items, options.assignees]);
+  const formCategory = categories.includes(form.category) ? form.category : categories[0];
+  const formAssignee = assignees.some((option) => option.key === form.assignee) ? form.assignee : assignees[0].key;
 
   const stats = useMemo(() => {
-    const per = { both: { done: 0, total: 0 }, bride: { done: 0, total: 0 }, groom: { done: 0, total: 0 } };
+    const per = Object.fromEntries(assignees.map((option) => [option.key, { done: 0, total: 0 }]));
     let done = 0;
     for (const i of items) {
-      const bucket = per[i.assignee] || per.both;
+      const bucket = per[i.assignee || "both"];
       bucket.total += 1;
       if (i.done) {
         bucket.done += 1;
@@ -5453,7 +5502,7 @@ function Checklist({ items, setItems }) {
       }
     }
     return { done, total: items.length, per };
-  }, [items]);
+  }, [items, assignees]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -5461,11 +5510,12 @@ function Checklist({ items, setItems }) {
       .filter((i) => {
         if (hideDone && i.done) return false;
         if (assigneeFilter !== "all" && i.assignee !== assigneeFilter) return false;
-        if (q && !i.title.toLowerCase().includes(q)) return false;
+        if (categoryFilter !== "all" && (i.category || "כללי") !== categoryFilter) return false;
+        if (q && !`${i.title} ${i.notes || ""}`.toLowerCase().includes(q)) return false;
         return true;
       })
       .sort((a, b) => (Number(a.position) || 0) - (Number(b.position) || 0));
-  }, [items, query, assigneeFilter, hideDone]);
+  }, [items, query, assigneeFilter, categoryFilter, hideDone]);
 
   const grouped = useMemo(() => {
     const map = new Map();
@@ -5492,6 +5542,56 @@ function Checklist({ items, setItems }) {
     (id, assignee) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, assignee } : i))),
     [setItems]
   );
+  const patchTask = (id, patch) => {
+    if (canEdit) setItems((previous) => previous.map((item) => item.id === id ? { ...item, ...patch } : item));
+  };
+
+  function addOption(kind, raw) {
+    const label = raw.trim();
+    const labels = kind === "category" ? categories : assignees.map((option) => option.label);
+    if (!label || labels.some((name) => name.toLowerCase() === label.toLowerCase())) {
+      notify("האפשרות כבר קיימת או שהשם ריק", { tone: "error" });
+      return false;
+    }
+    setOptions((previous) => kind === "category"
+      ? { ...previous, categories: [...categories, label] }
+      : { ...previous, assignees: [...assignees, { key: `custom_${crypto.randomUUID()}`, label }] });
+    return true;
+  }
+
+  function renameOption(kind, key, raw) {
+    const label = raw.trim();
+    const labels = kind === "category" ? categories.filter((name) => name !== key) : assignees.filter((option) => option.key !== key).map((option) => option.label);
+    if (!label || labels.some((name) => name.toLowerCase() === label.toLowerCase())) {
+      notify("השם ריק או כבר קיים", { tone: "error" });
+      return;
+    }
+    if (kind === "category") {
+      setOptions((previous) => ({ ...previous, categories: categories.map((name) => name === key ? label : name) }));
+      setItems((previous) => previous.map((item) => (item.category || "כללי") === key ? { ...item, category: label } : item));
+      setForm((previous) => ({ ...previous, category: previous.category === key ? label : previous.category }));
+      if (categoryFilter === key) setCategoryFilter(label);
+    } else {
+      setOptions((previous) => ({ ...previous, assignees: assignees.map((option) => option.key === key ? { ...option, label } : option) }));
+    }
+  }
+
+  async function deleteOption(kind, key) {
+    const remaining = kind === "category" ? categories.filter((name) => name !== key) : assignees.filter((option) => option.key !== key);
+    if (!remaining.length) return;
+    const fallback = kind === "category" ? remaining[0] : remaining[0].key;
+    const label = kind === "category" ? key : assignees.find((option) => option.key === key)?.label;
+    const fallbackLabel = kind === "category" ? fallback : remaining[0].label;
+    const belongs = (item) => (item[kind] || (kind === "category" ? "כללי" : "both")) === key;
+    const used = items.filter(belongs).length;
+    const ok = await confirmDialog({ title: `מחיקת ${label}`, message: used ? `${used} משימות יעברו אל „${fallbackLabel}”. המשימות וההערות שלהן לא יימחקו.` : "האפשרות תוסר מהרשימה. המשימות לא יימחקו.", confirmLabel: "מחיקה", tone: "danger" });
+    if (!ok) return;
+    setOptions((previous) => ({ ...previous, [kind === "category" ? "categories" : "assignees"]: remaining }));
+    setItems((previous) => previous.map((item) => belongs(item) ? { ...item, [kind]: fallback } : item));
+    setForm((previous) => ({ ...previous, [kind]: previous[kind] === key ? fallback : previous[kind] }));
+    if (kind === "category" && categoryFilter === key) setCategoryFilter("all");
+    if (kind === "assignee" && assigneeFilter === key) setAssigneeFilter("all");
+  }
 
   async function remove(id) {
     const item = items.find((i) => i.id === id);
@@ -5515,14 +5615,16 @@ function Checklist({ items, setItems }) {
         {
           id: nextRowId(prev),
           title,
-          category: form.category || "כללי",
-          assignee: form.assignee,
+          category: formCategory,
+          assignee: formAssignee,
+          notes: form.notes,
           done: false,
           position,
         },
       ];
     });
-    setForm((f) => ({ ...f, title: "" }));
+    setForm((f) => ({ ...f, title: "", notes: "" }));
+    taskNameRef.current?.focus({ preventScroll: true });
     notify("המשימה נוספה לצ׳קליסט", { tone: "success" });
   }
 
@@ -5548,7 +5650,7 @@ function Checklist({ items, setItems }) {
         ...prev,
         ...missing.map((t) => {
           position += 10;
-          return { ...t, id: id++, done: false, position };
+          return { ...t, id: id++, done: false, position, notes: "", category: categories.includes(t.category) ? t.category : categories[0], assignee: assignees.some((option) => option.key === t.assignee) ? t.assignee : assignees[0].key };
         }),
       ];
     });
@@ -5570,8 +5672,10 @@ function Checklist({ items, setItems }) {
           icon={ListChecks}
           title="הצ׳קליסט של החתונה"
           subtitle="כל מה שצריך לסגור עד היום הגדול, במקום אחד"
-          action={
-            canEdit && items.length > 0 && (
+          action={canEdit && (
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => setManagerOpen(true)} className="btn-secondary"><Settings2 size={16} /> ניהול קטגוריות ושיוך</button>
+            {items.length > 0 && (
               <button
                 onClick={loadTemplate}
                 className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:w-auto"
@@ -5579,8 +5683,9 @@ function Checklist({ items, setItems }) {
                 <Sparkles size={16} className="text-gold-500" />
                 הוספת הרשימה המומלצת
               </button>
-            )
-          }
+            )}
+            </div>
+          )}
         />
 
         {items.length === 0 ? (
@@ -5614,10 +5719,10 @@ function Checklist({ items, setItems }) {
             <div className="mt-2">
               <ProgressBar value={stats.done} max={stats.total} tone="sage" />
             </div>
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              {ASSIGNEES.map((a) => {
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {assignees.map((a) => {
                 const s = stats.per[a.key];
-                const Icon = a.icon;
+                const Icon = ASSIGNEES.find((option) => option.key === a.key)?.icon || Users;
                 return (
                   <div key={a.key} className="rounded-xl bg-white/60 px-3 py-2 text-center ring-1 ring-slate-200/70">
                     <p className="flex items-center justify-center gap-1 text-[11px] font-medium text-slate-500">
@@ -5638,18 +5743,25 @@ function Checklist({ items, setItems }) {
       {(items.length > 0 || canEdit) && (
         <Card tourId="checklist-workspace">
           {canEdit && (
-            <form data-tour="checklist-add" onSubmit={addItem} className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto_auto]">
+            <CollapsibleAdd tourId="checklist-add" label="הוספה" open={isAddTaskOpen} onToggle={() => { addTaskTouched.current = true; setIsAddTaskOpen((open) => !open); }} panelId="checklist-add-panel" toggleRef={addTaskToggleRef} className="mb-4">
+            <form onSubmit={addItem} className="mt-2.5 grid min-w-0 grid-cols-2 items-end gap-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3 sm:p-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+              <label className="col-span-2 min-w-0 space-y-1 lg:col-span-1">
+                <span className="text-xs font-medium text-slate-500">משימה חדשה</span>
               <input
+                ref={taskNameRef}
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
                 placeholder="משימה חדשה…"
-                className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200"
+                className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200 sm:text-sm"
                 aria-label="שם המשימה החדשה"
               />
+              </label>
+              <label className="min-w-0 space-y-1">
+                <span className="text-xs font-medium text-slate-500">קטגוריה</span>
               <select
-                value={form.category}
+                value={formCategory}
                 onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
-                className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-gold-400"
+                className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:text-sm"
                 aria-label="קטגוריה"
               >
                 {categories.map((c) => (
@@ -5658,30 +5770,39 @@ function Checklist({ items, setItems }) {
                   </option>
                 ))}
               </select>
+              </label>
+              <label className="min-w-0 space-y-1">
+                <span className="text-xs font-medium text-slate-500">שיוך</span>
               <select
-                value={form.assignee}
+                value={formAssignee}
                 onChange={(e) => setForm((f) => ({ ...f, assignee: e.target.value }))}
-                className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-gold-400"
-                aria-label="מי אחראי"
+                className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:text-sm"
+                aria-label="שיוך"
               >
-                {ASSIGNEES.map((a) => (
+                {assignees.map((a) => (
                   <option key={a.key} value={a.key}>
                     {a.label}
                   </option>
                 ))}
               </select>
+              </label>
               <button
                 type="submit"
-                className="btn-primary"
+                className="btn-primary col-span-2 lg:col-span-1"
               >
                 <Plus size={16} />
                 הוספה
               </button>
+              <label className="col-span-2 min-w-0 space-y-1 lg:col-span-4">
+                <span className="text-xs font-medium text-slate-500">הערות</span>
+                <textarea value={form.notes} onChange={(event) => setForm((previous) => ({ ...previous, notes: event.target.value }))} rows={2} aria-label="הערות למשימה החדשה" className="block w-full min-w-0 resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:text-sm" />
+              </label>
             </form>
+            </CollapsibleAdd>
           )}
 
-          <div data-tour="checklist-filters" className="mb-4 flex flex-wrap items-center gap-2">
-            <div className="relative min-w-0 flex-1 sm:max-w-xs">
+          <div data-tour="checklist-filters" className="mb-4 grid grid-cols-2 items-end gap-2 lg:flex lg:flex-wrap">
+            <div className="relative col-span-2 min-w-0 lg:flex-1">
               <Search size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 value={query}
@@ -5691,22 +5812,27 @@ function Checklist({ items, setItems }) {
                 aria-label="חיפוש משימה"
               />
             </div>
-            <button onClick={() => setAssigneeFilter("all")} className={chip(assigneeFilter === "all")}>
-              הכול
-            </button>
-            {ASSIGNEES.map((a) => (
-              <button
-                key={a.key}
-                onClick={() => setAssigneeFilter(a.key)}
-                className={chip(assigneeFilter === a.key)}
-              >
-                {a.label}
-              </button>
-            ))}
+            <label className="min-w-0 space-y-1">
+              <span className="text-xs font-medium text-slate-500">קטגוריה</span>
+              <select aria-label="סינון לפי קטגוריה" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 text-base text-slate-700 lg:w-44 sm:text-sm">
+                <option value="all">כל הקטגוריות</option>
+                {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+              </select>
+            </label>
+            <label className="min-w-0 space-y-1">
+              <span className="text-xs font-medium text-slate-500">שיוך</span>
+              <select aria-label="סינון לפי שיוך" value={assigneeFilter} onChange={(event) => setAssigneeFilter(event.target.value)} className="min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 text-base text-slate-700 lg:w-36 sm:text-sm">
+                <option value="all">כל השיוכים</option>
+                {assignees.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+              </select>
+            </label>
             <button onClick={() => setHideDone((v) => !v)} className={chip(hideDone)}>
               <CheckCheck size={13} className="ml-1 inline" />
               הסתרת שהושלמו
             </button>
+            {(query || categoryFilter !== "all" || assigneeFilter !== "all" || hideDone) && (
+              <button type="button" className="btn-secondary" onClick={() => { setQuery(""); setCategoryFilter("all"); setAssigneeFilter("all"); setHideDone(false); }}><X size={14} /> ניקוי סינונים</button>
+            )}
           </div>
 
           {grouped.length === 0 ? (
@@ -5739,9 +5865,12 @@ function Checklist({ items, setItems }) {
                           key={item.id}
                           item={item}
                           canEdit={canEdit}
+                          categories={categories}
+                          assignees={assignees}
                           onToggle={toggle}
                           onRename={rename}
                           onAssign={assign}
+                          onPatch={patchTask}
                           onDelete={remove}
                         />
                       ))}
@@ -5752,6 +5881,9 @@ function Checklist({ items, setItems }) {
             </div>
           )}
         </Card>
+      )}
+      {canEdit && managerOpen && (
+        <ChecklistOptionsManager categories={categories} assignees={assignees} onAdd={addOption} onRename={renameOption} onDelete={deleteOption} onClose={() => setManagerOpen(false)} />
       )}
     </div>
   );
@@ -6713,6 +6845,37 @@ function moveBefore(list, id, targetId) {
     וסעיף שעודכן ידנית מוצגים באותה עמודה בלי לאבד נתון.  */
 const budgetCostOf = (b) => Number(b?.actual) || Number(b?.expected) || 0;
 
+const BUDGET_PAYMENT_METHODS = ["Bit", "Credit Card", "Cash", "Other"];
+const BUDGET_PAYMENT_LABELS = { Bit: "ביט", "Credit Card": "אשראי", Cash: "מזומן", Other: "אחר" };
+
+function BudgetNotes({ item, canEdit, onChange, label = item.category }) {
+  const [expanded, setExpanded] = useState(false);
+  const notes = item.notes || "";
+  if (!canEdit) {
+    return notes ? (
+      <details className="min-w-0 text-sm text-slate-600" title={notes}>
+        <summary className="cursor-pointer rounded-lg p-2 outline-none focus-visible:ring-2 focus-visible:ring-gold-400" aria-label={`הערות — ${label}`}>
+          <span className="line-clamp-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{notes}</span>
+        </summary>
+        <p className="whitespace-pre-wrap p-2 [overflow-wrap:anywhere]">{notes}</p>
+      </details>
+    ) : <span className="text-sm text-slate-400">אין הערות</span>;
+  }
+  return (
+    <textarea
+      value={notes}
+      onChange={(event) => onChange(item.id, { notes: event.target.value })}
+      onFocus={() => setExpanded(true)}
+      onBlur={() => setExpanded(false)}
+      rows={expanded ? 5 : 2}
+      aria-label={`הערות — ${label}`}
+      title={notes || undefined}
+      placeholder="הערות"
+      className="block min-h-11 w-full min-w-0 resize-y rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base leading-5 text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-100 [overflow-wrap:anywhere] sm:text-sm"
+    />
+  );
+}
+
 function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudgetGoal, financeLabels, setFinanceLabels }) {
   const canEdit = useCanEdit();
   const [form, setForm] = useState({ category: "", cost: "", paid: "" });
@@ -6838,6 +7001,8 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
         expected: cost,
         actual: cost,
         paid: Number(form.paid) || 0,
+        paymentMethod: "",
+        notes: "",
       },
     ]);
     setForm({ category: "", cost: "", paid: "" });
@@ -6855,6 +7020,11 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
     setBudget((prev) =>
       prev.map((b) => (b.id === id ? { ...b, paid: Number(value) || 0 } : b))
     );
+  }
+
+  function updateMetadata(id, patch) {
+    if (!canEdit) return;
+    setBudget((previous) => previous.map((item) => item.id === id ? { ...item, ...patch } : item));
   }
 
   /*  שם הסעיף נערך במקום, בדיוק כמו הסכומים שלצדו. סעיף שנוצר מספק אינו
@@ -7107,7 +7277,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
         )}
 
         <div className="hidden overflow-x-auto lg:block">
-          <table className="w-full min-w-[620px] text-right text-sm">
+          <table className="w-full min-w-[980px] text-right text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-xs uppercase text-slate-400">
                 <th className="w-8 px-2 py-2"></th>
@@ -7135,6 +7305,8 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                     onCommit={(v) => updateLabel("colRemaining", v)}
                   />
                 </th>
+                <th className="px-3 py-2 font-semibold">אמצעי תשלום</th>
+                <th className="w-64 px-3 py-2 font-semibold">הערות</th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
@@ -7149,6 +7321,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                 return (
                   <tr
                     key={b.id}
+                    title={b.notes || undefined}
                     onDragOver={(e) => {
                       if (dragId == null) return;
                       e.preventDefault();
@@ -7243,6 +7416,22 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                       </span>
                     </td>
                     <td className="px-3 py-3 text-left">
+                      <select
+                        value={b.paymentMethod || ""}
+                        onChange={(event) => updateMetadata(b.id, { paymentMethod: event.target.value })}
+                        aria-label={`אמצעי תשלום — ${b.category}`}
+                        className="min-h-11 w-36 rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-700 outline-none focus:border-gold-400 disabled:bg-slate-50"
+                      >
+                        <option value="">לא נבחר</option>
+                        {BUDGET_PAYMENT_METHODS.map((method) => <option key={method} value={method}>{BUDGET_PAYMENT_LABELS[method]}</option>)}
+                      </select>
+                    </td>
+                    <td className="px-3 py-3 align-top">
+                      <div className="w-64">
+                        <BudgetNotes item={b} canEdit={canEdit} onChange={updateMetadata} />
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 text-left">
                       <div className="flex items-center justify-end gap-0.5">
                         <button
                           onClick={() => moveItem(b.id, -1)}
@@ -7275,7 +7464,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
               {budget.length === 0 && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={8}
                     className="px-3 py-10 text-center text-slate-400"
                   >
                     עדיין אין סעיפי תקציב – הוסיפו סעיף חדש בעזרת הטופס למעלה.
@@ -7290,7 +7479,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                 <td className="px-3 py-3 tabular-nums">{fmt(totals.cost)}</td>
                 <td className="px-3 py-3 tabular-nums">{fmt(totals.paid)}</td>
                 <td className="px-3 py-3 tabular-nums">{fmt(totals.remaining)}</td>
-                <td></td>
+                <td colSpan={3}></td>
               </tr>
             </tfoot>
           </table>
@@ -7432,6 +7621,24 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                         ? "שולם במלואו"
                         : fmt(0)}
                   </span>
+                </div>
+                <div className="mt-3 space-y-3">
+                  <label className="block text-xs font-medium text-slate-500">
+                    אמצעי תשלום
+                    <select
+                      value={b.paymentMethod || ""}
+                      onChange={(event) => updateMetadata(b.id, { paymentMethod: event.target.value })}
+                      aria-label={`אמצעי תשלום — ${b.category}`}
+                      className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base text-slate-700 outline-none focus:border-gold-400 disabled:bg-slate-50"
+                    >
+                      <option value="">לא נבחר</option>
+                      {BUDGET_PAYMENT_METHODS.map((method) => <option key={method} value={method}>{BUDGET_PAYMENT_LABELS[method]}</option>)}
+                    </select>
+                  </label>
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-slate-500">הערות</p>
+                    <BudgetNotes item={b} canEdit={canEdit} onChange={updateMetadata} />
+                  </div>
                 </div>
               </div>
             );
@@ -9146,6 +9353,9 @@ function WeddingApp({
   //  הצ׳קליסט מתחיל ריק תמיד, גם ללא ענן: הרשימה המומלצת נטענת
   //  בלחיצה מפורשת במסך ולא נדחפת לאיש לחשבון.
   const [checklist, setChecklist] = usePersistentState("checklist", []);
+  const [storedChecklistOptions, setChecklistOptions] = usePersistentState("checklistOptions", DEFAULT_CHECKLIST_OPTIONS);
+  const checklistOptions = useMemo(() => normalizeChecklistOptions(storedChecklistOptions), [storedChecklistOptions]);
+  const checklistOptionsSavedRef = useRef(null);
   const datasetStateRef = useRef({ guests, tables, vendors, budget, checklist });
   const baselineRowsRef = useRef({
     guests: new Map(),
@@ -9457,6 +9667,11 @@ function WeddingApp({
         //  גם רשימה ריקה היא ערך תקף — משתמש שמחק את כל הקטגוריות שלו
         //  לא אמור לקבל בחזרה את ברירת המחדל בטעינה הבאה.
         if (Array.isArray(s.categories)) setCategories(s.categories);
+        if (s.checklistOptions && mayChecklist) {
+          const loadedOptions = normalizeChecklistOptions(s.checklistOptions);
+          checklistOptionsSavedRef.current = JSON.stringify(loadedOptions);
+          setChecklistOptions(loadedOptions);
+        }
         if (mayGuests) {
           //  מה שבענן הוא מקור האמת. כשאין שם כלום, מי שרשאי לערוך מעלה את מה
           //  שכבר הזין בדפדפן, כדי ששותף שייכנס אחר כך יראה אותו.
@@ -9791,6 +10006,23 @@ function WeddingApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [budgetGoal, categories, countdownBackgroundUrl, financeLabels, syncRetry]);
 
+  useEffect(() => {
+    if (!cloudEnabled || !canEdit || !mayChecklist || !settingsReadyRef.current) return;
+    const json = JSON.stringify(checklistOptions);
+    if (json === checklistOptionsSavedRef.current) return;
+    const timer = setTimeout(async () => {
+      try {
+        await saveWeddingSettings(weddingId, { checklistOptions });
+        checklistOptionsSavedRef.current = json;
+      } catch (error) {
+        console.error("Checklist options sync failed:", error);
+        if (error?.code !== "permission-denied") scheduleSyncRetry();
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checklistOptions, syncRetry]);
+
   //  מחשבון האלכוהול נשמר בנפרד מההגדרות: הוא שייך להיקף „מוזמנים", וגם הוא
   //  מסתנכרן רק אחרי שהטעינה הסתיימה ורק למי שרשאי לערוך.
   useEffect(() => {
@@ -9863,6 +10095,7 @@ function WeddingApp({
           vendors,
           budget,
           checklist,
+          checklistOptions,
           budgetGoal,
           backup: await backupPayload(),
         },
@@ -9915,6 +10148,7 @@ function WeddingApp({
       vendorAttachments,
       settings: {
         budgetGoal,
+        checklistOptions,
         financeLabels,
         categories,
         countdownBackgroundUrl,
@@ -10117,6 +10351,7 @@ function WeddingApp({
       if (s.financeLabels && typeof s.financeLabels === "object")
         setFinanceLabels((prev) => ({ ...prev, ...s.financeLabels }));
       if (Array.isArray(s.categories)) setCategories(s.categories);
+      if (s.checklistOptions && mayChecklist) setChecklistOptions(normalizeChecklistOptions(s.checklistOptions));
       //  שמות בני הזוג והתאריך יושבים על רשומת החתונה עצמה, שרק הבעלים
       //  רשאי לעדכן. לעורך פשוט מדלגים במקום להציג לו כישלון.
       if (isOwner && (s.partnerA != null || s.partnerB != null || s.weddingDate != null)) {
@@ -10625,6 +10860,7 @@ function WeddingApp({
               vendors={vendors}
               budget={budget}
               checklist={checklist}
+              checklistAssignees={checklistOptions.assignees}
               weddingDate={weddingDate}
               couple={couple}
               canEditSettings={cloudEnabled ? isOwner : true}
@@ -10640,7 +10876,7 @@ function WeddingApp({
             />
           )}
           {active === "checklist" && (
-            <Checklist items={checklist} setItems={setChecklist} />
+            <Checklist items={checklist} setItems={setChecklist} options={checklistOptions} setOptions={setChecklistOptions} />
           )}
           {active === "guests" && (
             <CategoriesContext.Provider value={categories}>

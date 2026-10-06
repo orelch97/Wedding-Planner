@@ -53,7 +53,7 @@ export async function expectGuestPresent(page, name) {
   await expect(page.getByRole("textbox", { name: label, exact: true })).toHaveValue(name);
 }
 
-export async function signUp(page, identity, { weddingDate } = {}) {
+export async function signUp(page, identity, { weddingDate, readyTimeout = 30_000 } = {}) {
   await openSignup(page);
   if (weddingDate) await page.locator('[data-tour="auth-date"] input').fill(weddingDate);
   const email = page.getByLabel("מייל", { exact: true });
@@ -63,8 +63,8 @@ export async function signUp(page, identity, { weddingDate } = {}) {
   const submit = page.locator('[data-tour="auth-submit"]');
   await expect(submit).toHaveText("הרשמה");
   await submit.click();
-  await expect(page.getByRole("main")).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("main")).toBeVisible({ timeout: readyTimeout });
+  await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible({ timeout: readyTimeout });
 }
 
 export async function signIn(page, identity) {

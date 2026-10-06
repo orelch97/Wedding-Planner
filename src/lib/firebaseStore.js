@@ -145,6 +145,12 @@ export async function cloudFetchAll(weddingId, { scopes = ["all"], isOwner = fal
   if (isOwner || hasScope("guests")) {
     reads.push(["guests", getDoc(scopedSettingsRef(weddingId, "guests"))]);
   }
+  if (isOwner || hasScope("checklist")) {
+    reads.push(["checklist", getDoc(scopedSettingsRef(weddingId, "checklist")).catch((error) => {
+      if (error?.code === "permission-denied") return null;
+      throw error;
+    })]);
+  }
   // The countdown background is shown on the dashboard, which every full-scope member sees.
   // A denial only costs the picture, so it must not fail the whole load (older rules).
   if (isOwner || isFullScope(scopes)) {
@@ -207,6 +213,9 @@ export async function saveWeddingSettings(weddingId, settings) {
     ),
     guests: Object.fromEntries(
       ["categories", "alcohol"].filter((key) => key in patch).map((key) => [key, patch[key]])
+    ),
+    checklist: Object.fromEntries(
+      ["checklistOptions"].filter((key) => key in patch).map((key) => [key, patch[key]])
     ),
     owner: Object.fromEntries(
       ["countdownBackgroundUrl"].filter((key) => key in patch).map((key) => [key, patch[key]])

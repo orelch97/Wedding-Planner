@@ -155,6 +155,7 @@ service cloud.firestore {
           allow read: if isOwner(weddingId)
                       || (docId == 'owner' && isMember(weddingId))
                       || (docId == 'finance' && hasScope(weddingId, 'finance'))
+                      || (docId == 'checklist' && hasScope(weddingId, 'checklist'))
                       || (docId == 'guests' && hasScope(weddingId, 'guests'));
           allow write: if (docId == 'finance'
                            && hasScope(weddingId, 'finance')
@@ -162,7 +163,10 @@ service cloud.firestore {
                        || (docId == 'guests'
                            && hasScope(weddingId, 'guests')
                            && canWriteRole(weddingId))
-                       || (docId == 'owner' && isOwner(weddingId));
+                         || (docId == 'checklist'
+                           && hasScope(weddingId, 'checklist')
+                           && canWriteRole(weddingId))
+                         || (docId == 'owner' && isOwner(weddingId));
         }
 
         /* ── נתוני המסכים ──────────────────────────────────────────────── */

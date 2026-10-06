@@ -69,7 +69,7 @@ test.describe("shared access: owner, editors and viewers", () => {
     owner.on("pageerror", (error) => ctx.ownerErrors.push(error.message));
     await blockCloudRequests(owner);
     ctx.ownerIdentity = uniqueIdentity("owner");
-    await signUp(owner, ctx.ownerIdentity);
+    await signUp(owner, ctx.ownerIdentity, { readyTimeout: 60_000 });
 
     // Couple names and date live on the wedding itself.
     const settings = await openSettings(owner);
@@ -86,8 +86,9 @@ test.describe("shared access: owner, editors and viewers", () => {
     await owner.getByRole("button", { name: /הוסף לרשימה/ }).click();
 
     await navigateTo(owner, "checklist");
+    await owner.locator('[data-tour="checklist-add"]').getByRole("button", { name: "הוספה", exact: true }).click();
     await owner.getByRole("textbox", { name: "שם המשימה החדשה" }).fill("משימה מהבעלים");
-    await owner.locator('[data-tour="checklist-add"]').getByRole("button", { name: "הוספה" }).click();
+    await owner.locator('[data-tour="checklist-add"] form').getByRole("button", { name: "הוספה" }).click();
 
     await navigateTo(owner, "finance");
     await owner.getByRole("button", { name: "הוספת סעיף", exact: true }).click();
@@ -95,6 +96,8 @@ test.describe("shared access: owner, editors and viewers", () => {
     await owner.getByRole("spinbutton", { name: "עלות" }).fill("5000");
     await owner.getByRole("spinbutton", { name: "שולם" }).fill("1000");
     await owner.locator('[data-tour="finance-add-item"]').getByRole("button", { name: /הוסף/ }).click();
+    await owner.getByRole("combobox", { name: "אמצעי תשלום — סעיף מהבעלים", exact: true }).selectOption("Bit");
+    await owner.getByRole("textbox", { name: "הערות — סעיף מהבעלים", exact: true }).fill("הערה משותפת ארוכה. ".repeat(30));
 
     await navigateTo(owner, "vendors");
     await owner.getByRole("button", { name: /הוספת ספק ראשון/ }).click();
@@ -200,8 +203,9 @@ test.describe("shared access: owner, editors and viewers", () => {
     await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
 
     await navigateTo(page, "checklist");
+    await page.locator('[data-tour="checklist-add"]').getByRole("button", { name: "הוספה", exact: true }).click();
     await page.getByRole("textbox", { name: "שם המשימה החדשה" }).fill("משימה מהשותף");
-    await page.locator('[data-tour="checklist-add"]').getByRole("button", { name: "הוספה" }).click();
+    await page.locator('[data-tour="checklist-add"] form').getByRole("button", { name: "הוספה" }).click();
 
     await navigateTo(page, "finance");
     const financeForm = page.locator('[data-tour="finance-add-item"]');
@@ -274,6 +278,18 @@ test.describe("shared access: owner, editors and viewers", () => {
     await expect(page.getByRole("spinbutton", { name: "אחוז האורחים ששותים אלכוהול" })).toBeDisabled();
     await expect(page.getByRole("spinbutton", { name: "כמה אנשים לבקבוק אחד" })).toBeDisabled();
     await expect(page.getByRole("textbox", { name: "שם המשקה וודקה מהבעלים" })).toBeDisabled();
+  });
+
+  test("reads full budget notes without granting a viewer editing rights", async () => {
+    const page = ctx.viewerAll.page;
+    await reloadToScreen(page, "finance");
+    await expect(page.getByRole("combobox", { name: "אמצעי תשלום — סעיף מהבעלים", exact: true })).toBeDisabled();
+    await expect(page.getByRole("combobox", { name: "אמצעי תשלום — סעיף מהבעלים", exact: true })).toHaveValue("Bit");
+    const notes = page.locator("details").filter({ hasText: "הערה משותפת ארוכה." }).filter({ visible: true });
+    await notes.locator("summary").click();
+    await expect(notes).toHaveAttribute("open", "");
+    await expect(notes.locator("p")).toHaveText("הערה משותפת ארוכה. ".repeat(30));
+    await expect(page.getByRole("textbox", { name: "הערות — סעיף מהבעלים", exact: true })).toHaveCount(0);
   });
 
   test("members with a partial share see only their screens, with matching permissions", async () => {

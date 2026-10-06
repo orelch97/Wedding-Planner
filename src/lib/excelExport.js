@@ -48,6 +48,7 @@ export function buildSheets({
   vendors = [],
   budget = [],
   checklist = [],
+  checklistOptions = {},
   budgetGoal = 0,
 } = {}) {
   const guestById = new Map(guests.map((g) => [g.id, g]));
@@ -234,6 +235,8 @@ export function buildSheets({
       { header: "הוצאה בפועל", key: "actual", width: 14, numFmt: "#,##0" },
       { header: "סה״כ שולם", key: "paid", width: 14, numFmt: "#,##0" },
       { header: "נותר לשלם", key: "remaining", width: 14, numFmt: "#,##0" },
+      { header: "אמצעי תשלום", key: "paymentMethod", width: 18 },
+      { header: "הערות", key: "notes", width: 48, wrap: true },
       { header: "פער", key: "diff", width: 14, numFmt: "#,##0" },
     ],
     rows: budget.map((b) => ({
@@ -244,6 +247,8 @@ export function buildSheets({
       paid: num(b.paid),
       //  אותו חישוב כמו במסך: תשלום יתר אינו "נותר לשלם" שלילי.
       remaining: Math.max(0, num(b.actual) - num(b.paid)),
+      paymentMethod: text(b.paymentMethod),
+      notes: text(b.notes),
       //  אותו חישוב כמו במסך: חיובי = חריגה מהצפוי.
       diff: num(b.actual) - num(b.expected),
     })),
@@ -262,21 +267,23 @@ export function buildSheets({
   /* ── גיליון 5: צ׳קליסט ────────────────────────────── */
   //  המשימות היו עד כה רק בגיליון השחזור, כלומר לא ניתנו
   //  לקריאה בקובץ שהזוג פותח באקסל.
-  const assigneeLabel = { both: "שניהם", bride: "כלה", groom: "חתן" };
+  const assigneeLabel = { both: "שניהם", bride: "כלה", groom: "חתן", ...Object.fromEntries((checklistOptions.assignees || []).map((option) => [option.key, option.label])) };
   const checklistSheet = {
     name: "צ׳קליסט",
     columns: [
       { header: "מס׳", key: "id", width: 8 },
       { header: "משימה", key: "title", width: 44 },
       { header: "קטגוריה", key: "category", width: 20 },
-      { header: "אחראי", key: "assignee", width: 12 },
+      { header: "שיוך", key: "assignee", width: 18 },
+      { header: "הערות", key: "notes", width: 48, wrap: true },
       { header: "הושלם", key: "done", width: 10 },
     ],
     rows: checklist.map((c) => ({
       id: num(c.id),
       title: text(c.title),
       category: text(c.category || "כללי"),
-      assignee: assigneeLabel[c.assignee] || assigneeLabel.both,
+      assignee: assigneeLabel[c.assignee] || text(c.assignee || "both"),
+      notes: text(c.notes),
       done: yesNo(c.done),
     })),
   };

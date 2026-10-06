@@ -275,9 +275,9 @@ check("שורות ללא שיבוץ מכילות שם מוזמן", unassignedRow
 console.log("\n6. גיליון \u201eניהול תקציב\u201d");
 const B = readSheet("ניהול תקציב");
 check(
-  "כל 7 העמודות קיימות ובסדר הנכון",
+  "כל 9 העמודות קיימות ובסדר הנכון",
   JSON.stringify(B.headers) ===
-    JSON.stringify(["מס׳", "סעיף", "הוצאה צפויה", "הוצאה בפועל", "סה״כ שולם", "נותר לשלם", "פער"]),
+    JSON.stringify(["מס׳", "סעיף", "הוצאה צפויה", "הוצאה בפועל", "סה״כ שולם", "נותר לשלם", "אמצעי תשלום", "הערות", "פער"]),
   B.headers.join(" | ")
 );
 
@@ -318,6 +318,14 @@ check("יעד התקציב יורד לקובץ", summary.get("יעד התקצי�
 /* ------------------------------------------------------------ 7. מקרי קצה */
 console.log("\n7. מקרי קצה");
 const empty = buildSheets({ guests: [], tables: [], vendors: [], budget: [], budgetGoal: 0 });
+const metadataNote = "הערות ארוכות\n".repeat(40);
+const metadataBudget = buildSheets({ budget: [{ id: 1, category: "Test", paymentMethod: "Bit", notes: metadataNote }] });
+const taskExport = buildSheets({ checklist: [{ id: 1, title: "Task", assignee: "custom", notes: metadataNote }], checklistOptions: { assignees: [{ key: "custom", label: "מפיק" }] } })[4];
+check("Custom checklist assignment label is exported", taskExport.rows[0].assignee === "מפיק");
+check("Checklist notes are exported in full", taskExport.rows[0].notes === metadataNote);
+check("Checklist assignment and notes headers are correct", taskExport.columns.some((column) => column.header === "שיוך") && taskExport.columns.some((column) => column.header === "הערות"));
+check("Budget payment method is exported", metadataBudget[3].rows[0].paymentMethod === "Bit");
+check("Long budget notes are exported in full", metadataBudget[3].rows[0].notes === metadataNote);
 check("חתונה ריקה מייצרת גיליונות בלי שורות", empty.every((s) => s.rows.length === 0));
 const emptyBuffer = await buildWorkbookBuffer({});
 check("חוברת של חתונה ריקה נכתבת בהצלחה", emptyBuffer.byteLength > 1000);

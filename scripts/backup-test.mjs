@@ -65,7 +65,7 @@ const vendors = [
   },
 ];
 const budget = [
-  { id: 1, category: "אולם", expected: 60000, actual: 10000, vendorId: 1 },
+  { id: 1, category: "אולם", expected: 60000, actual: 10000, vendorId: 1, paymentMethod: "Credit Card", notes: "הערות\n".repeat(40) },
   { id: 2, category: "פרחים", expected: 4000, actual: 0, vendorId: null },
 ];
 const payload = {
@@ -78,12 +78,13 @@ const payload = {
   budget,
   checklist: [
     { id: 1, title: "בחירת מקום", category: "תכנון ראשוני", assignee: "both", done: true },
-    { id: 2, title: "בחירת צלם", category: "ספקים", assignee: "bride", done: false },
+    { id: 2, title: "בחירת צלם", category: "ספקים", assignee: "custom", notes: "הערות למשימה\n".repeat(30), done: false },
   ],
   vendorAttachments: [
     { id: "file-uuid", vendorId: "vendor-uuid", name: "contract.pdf", mime: "application/pdf", size: 2048, createdAt: "2026-09-01T10:00:00.000Z" },
   ],
   settings: {
+    checklistOptions: { categories: ["ספקים", "תכנון ראשוני"], assignees: [{ key: "custom", label: "מפיק" }, { key: "both", label: "שניהם" }] },
     budgetGoal: 180000,
     financeLabels: { income: "הכנסות", expense: "הוצאות" },
     categories: ["משפחה של אמא", "חברים מהצבא"],
@@ -135,6 +136,8 @@ eq("ההגדרות שרדו", restored.settings, payload.settings);
 eq("הצ׳קליסט שרד", restored.checklist, payload.checklist);
 eq("מטא-דאטה של קבצים מצורפים שרדה", restored.vendorAttachments, payload.vendorAttachments);
 eq("הקישור לספק שרד", restored.budget[0].vendorId, 1);
+eq("אמצעי תשלום שרד", restored.budget[0].paymentMethod, "Credit Card");
+eq("הערות ארוכות שרדו", restored.budget[0].notes, budget[0].notes);
 
 const ExcelJS = (await import("exceljs")).default;
 const wb = new ExcelJS.Workbook();

@@ -88,6 +88,8 @@ const LEGACY = {
     expected: Number(r.expected) || 0,
     actual: Number(r.actual) || 0,
     paid: Number(r.paid) || 0,
+    paymentMethod: "",
+    notes: "",
     vendorId: r.vendor_id == null ? null : legacyVendorIds.get(String(r.vendor_id)),
   }),
   checklist: (r) => ({
@@ -95,6 +97,7 @@ const LEGACY = {
     title: r.title ?? "",
     category: r.category ?? "",
     assignee: ["both", "bride", "groom"].includes(r.assignee) ? r.assignee : "both",
+    notes: "",
     done: !!r.done,
     position: Number(r.position) || 0,
   }),
@@ -111,6 +114,28 @@ const PIPELINE = {
 let passed = 0;
 let failed = 0;
 const samples = [];
+const customTask = FS_ENTITIES.checklist.fromDoc(FS_ENTITIES.checklist.toDoc({
+  id: 10, title: "Custom task", assignee: "custom-assignee", notes: "Long task note\n".repeat(20),
+}));
+if (customTask.assignee === "custom-assignee" && customTask.notes === "Long task note\n".repeat(20)) passed++;
+else { failed++; samples.push("custom checklist assignment/notes did not survive roundtrip"); }
+for (const paymentMethod of ["Bit", "Credit Card", "Cash", "Other", ""]) {
+  const notes = "Budget note\n".repeat(30);
+  const restored = FS_ENTITIES.budget.fromDoc(
+    FS_ENTITIES.budget.toDoc({ id: 8, category: "Metadata", paymentMethod, notes })
+  );
+  if (restored.paymentMethod === paymentMethod && restored.notes === notes) passed++;
+  else {
+    failed++;
+    samples.push("budget metadata did not survive roundtrip");
+  }
+}
+const oldBudget = FS_ENTITIES.budget.fromDoc({ id: 9 });
+if (oldBudget.paymentMethod === "" && oldBudget.notes === "") passed++;
+else {
+  failed++;
+  samples.push("legacy budget metadata defaults are incorrect");
+}
 
 const partialAttendance = FS_ENTITIES.guests.fromDoc(
   FS_ENTITIES.guests.toDoc({ id: 7, name: "RSVP", seats: 4, attendingCount: 2 })

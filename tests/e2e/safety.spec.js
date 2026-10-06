@@ -279,17 +279,18 @@ test.describe("emulator isolation and account lifecycle", () => {
     await signUp(page, uniqueIdentity("checklist"));
     await navigateTo(page, "checklist");
     const taskTitle = `E2E task ${Date.now()}`;
+    await page.locator('[data-tour="checklist-add"]').getByRole("button", { name: "הוספה", exact: true }).click();
     await page.getByRole("textbox", { name: "שם המשימה החדשה" }).fill(taskTitle);
-    await page.getByRole("button", { name: "הוספה" }).click();
+    await page.locator('[data-tour="checklist-add"] form').getByRole("button", { name: "הוספה" }).click();
     const task = page.getByRole("checkbox", { name: `סימון "${taskTitle}" כבוצע` });
     await expect(task).toBeVisible();
     const search = page.getByRole("textbox", { name: "חיפוש משימה" });
     await search.fill("no matching task");
     await expect(task).toBeHidden();
     await search.fill("");
-    await page.getByRole("button", { name: "כלה", exact: true }).click();
+    await page.getByRole("combobox", { name: "סינון לפי שיוך" }).selectOption("bride");
     await expect(task).toBeHidden();
-    await page.getByRole("button", { name: "שניהם", exact: true }).click();
+    await page.getByRole("combobox", { name: "סינון לפי שיוך" }).selectOption("both");
     await expect(task).toBeVisible();
     await task.check();
     await expect(task).toBeChecked();
@@ -474,6 +475,7 @@ test.describe("emulator isolation and account lifecycle", () => {
   });
 
   test("adds an isolated budget line", async ({ page }) => {
+    test.setTimeout(120_000);
     await signUp(page, uniqueIdentity("budget"));
     await navigateTo(page, "finance");
     const lineName = `E2E budget ${Date.now()}`;
@@ -495,6 +497,30 @@ test.describe("emulator isolation and account lifecycle", () => {
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await expect(form.getByRole("textbox", { name: "שם הסעיף" })).toHaveCount(0);
+    const payment = page.getByRole("combobox", { name: `אמצעי תשלום — ${lineName}`, exact: true });
+    for (const method of ["Bit", "Credit Card", "Cash", "Other"]) {
+      await payment.selectOption(method);
+      await expect(payment).toHaveValue(method);
+    }
+    const longNote = "הערה ארוכה לתקציב: תשלום מקדמה והשלמה אחרי האירוע. ".repeat(30);
+    const notes = page.getByRole("textbox", { name: `הערות — ${lineName}`, exact: true });
+    await notes.fill(longNote);
+    await expect(notes).toHaveAttribute("rows", "5");
+    await notes.press("Tab");
+    await expect(notes).toHaveAttribute("rows", "2");
+    await expect(notes).toHaveAttribute("title", longNote);
+    await expect.poll(async () => page.evaluate(async (category) => {
+      const store = await import("/src/lib/firebaseStore.js");
+      const [wedding] = await store.listWeddings();
+      const data = await store.cloudFetchAll(wedding.id, { isOwner: true });
+      const item = data.budget.find((row) => row.category === category);
+      return { paymentMethod: item?.paymentMethod, notes: item?.notes };
+    }, lineName), { timeout: 30_000 }).toEqual({ paymentMethod: "Other", notes: longNote });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible({ timeout: 30_000 });
+    await navigateTo(page, "finance");
+    await expect(payment).toHaveValue("Other");
+    await expect(notes).toHaveValue(longNote);
   });
 
   test("creates and edits a synthetic vendor", async ({ page }) => {

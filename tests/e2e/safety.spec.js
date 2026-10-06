@@ -478,10 +478,23 @@ test.describe("emulator isolation and account lifecycle", () => {
     await navigateTo(page, "finance");
     const lineName = `E2E budget ${Date.now()}`;
     const form = page.locator('[data-tour="finance-add-item"]');
+    const toggle = form.getByRole("button", { name: "הוספת סעיף", exact: true });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(form.getByRole("textbox", { name: "שם הסעיף" })).toHaveCount(0);
+    await toggle.click();
     await form.getByRole("textbox", { name: "שם הסעיף" }).fill(lineName);
     await form.getByRole("spinbutton", { name: "עלות", exact: true }).fill("1250");
     await form.getByRole("button", { name: "הוסף" }).click();
     await expect(page.getByRole("button", { name: new RegExp(`עריכת ${lineName}`) })).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(form.getByRole("textbox", { name: "שם הסעיף" })).toHaveValue("");
+    await expect(form.getByRole("textbox", { name: "שם הסעיף" })).toBeFocused();
+    await form.getByRole("textbox", { name: "שם הסעיף" }).fill(`${lineName} second`);
+    await form.getByRole("button", { name: "הוסף" }).click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(form.getByRole("textbox", { name: "שם הסעיף" })).toHaveCount(0);
   });
 
   test("creates and edits a synthetic vendor", async ({ page }) => {

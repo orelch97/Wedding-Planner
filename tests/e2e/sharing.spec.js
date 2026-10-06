@@ -90,6 +90,7 @@ test.describe("shared access: owner, editors and viewers", () => {
     await owner.locator('[data-tour="checklist-add"]').getByRole("button", { name: "הוספה" }).click();
 
     await navigateTo(owner, "finance");
+    await owner.getByRole("button", { name: "הוספת סעיף", exact: true }).click();
     await owner.getByRole("textbox", { name: "שם הסעיף" }).fill("סעיף מהבעלים");
     await owner.getByRole("spinbutton", { name: "עלות" }).fill("5000");
     await owner.getByRole("spinbutton", { name: "שולם" }).fill("1000");
@@ -204,6 +205,7 @@ test.describe("shared access: owner, editors and viewers", () => {
 
     await navigateTo(page, "finance");
     const financeForm = page.locator('[data-tour="finance-add-item"]');
+    await financeForm.getByRole("button", { name: "הוספת סעיף", exact: true }).click();
     await financeForm.getByRole("textbox", { name: "שם הסעיף" }).fill("סעיף מהשותף");
     await financeForm.getByRole("spinbutton", { name: "עלות" }).fill("700");
     await financeForm.getByRole("button", { name: /הוסף/ }).click();

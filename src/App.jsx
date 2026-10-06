@@ -6716,6 +6716,16 @@ const budgetCostOf = (b) => Number(b?.actual) || Number(b?.expected) || 0;
 function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudgetGoal, financeLabels, setFinanceLabels }) {
   const canEdit = useCanEdit();
   const [form, setForm] = useState({ category: "", cost: "", paid: "" });
+  const [isAddBudgetOpen, setIsAddBudgetOpen] = useState(false);
+  const budgetToggleRef = useRef(null);
+  const budgetNameRef = useRef(null);
+  const budgetToggleTouched = useRef(false);
+
+  useEffect(() => {
+    if (!budgetToggleTouched.current) return;
+    (isAddBudgetOpen ? budgetNameRef : budgetToggleRef).current?.focus({ preventScroll: true });
+  }, [isAddBudgetOpen]);
+
   const [goalDraft, setGoalDraft] = useState(budgetGoal);
   const [dragId, setDragId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
@@ -6831,6 +6841,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
       },
     ]);
     setForm({ category: "", cost: "", paid: "" });
+    budgetNameRef.current?.focus({ preventScroll: true });
   }
 
   function updateCost(id, value) {
@@ -7039,14 +7050,26 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
         )}
 
         {canEdit && (
+        <CollapsibleAdd
+          tourId="finance-add-item"
+          label="הוספת סעיף"
+          open={isAddBudgetOpen}
+          onToggle={() => {
+            budgetToggleTouched.current = true;
+            setIsAddBudgetOpen((open) => !open);
+          }}
+          panelId="finance-add-item-panel"
+          toggleRef={budgetToggleRef}
+          className="mb-4 sm:mb-5"
+        >
         <form
-          data-tour="finance-add-item"
           onSubmit={addItem}
-          className="mb-4 grid grid-cols-2 gap-2 rounded-2xl bg-white/50 p-3 ring-1 ring-slate-200/70 sm:mb-5 sm:gap-3 sm:p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
+          className="mt-2.5 grid grid-cols-2 gap-2 rounded-2xl bg-white/50 p-3 ring-1 ring-slate-200/70 sm:gap-3 sm:p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
         >
           <label className="col-span-2 min-w-0 space-y-1 sm:col-span-1">
             <span className="px-1 text-xs font-semibold text-slate-500">שם הסעיף</span>
             <input
+              ref={budgetNameRef}
               value={form.category}
               onChange={(e) => setForm({ ...form, category: e.target.value })}
               aria-label="שם הסעיף"
@@ -7080,6 +7103,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
             <Plus size={18} /> הוסף
           </button>
         </form>
+        </CollapsibleAdd>
         )}
 
         <div className="hidden overflow-x-auto lg:block">
@@ -10953,7 +10977,8 @@ function PasskeyPanel({ currentUserId }) {
       await refresh();
       setMessage("הכניסה המהירה הופעלה במכשיר הזה.");
     } catch (err) {
-      setError(passkeyErrorMessage(err));
+      console.error("Passkey registration failed:", err);
+      setError(passkeyErrorMessage(err, "register"));
     } finally {
       setBusy(false);
     }
@@ -10973,7 +10998,7 @@ function PasskeyPanel({ currentUserId }) {
       await deletePasskey(id);
       await refresh();
     } catch (err) {
-      setError(passkeyErrorMessage(err));
+      setError(passkeyErrorMessage(err, "manage"));
     } finally {
       setBusy(false);
     }

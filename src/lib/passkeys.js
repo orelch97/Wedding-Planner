@@ -228,7 +228,7 @@ export function rememberedPasskeyEmail() {
   }
 }
 
-export function passkeyErrorMessage(err) {
+export function passkeyErrorMessage(err, operation = "login") {
   const name = err?.name || "";
   const code = err?.message || "";
   if (name === "NotAllowedError" || code.includes("cancelled")) {
@@ -236,9 +236,17 @@ export function passkeyErrorMessage(err) {
   }
   if (name === "InvalidStateError") return "המכשיר הזה כבר רשום לכניסה מהירה.";
   if (code.includes("passkey_unsupported")) return "הדפדפן הזה לא תומך בכניסה מהירה.";
+  if (operation !== "login") {
+    if (code.includes("Firebase לא מוגדר")) return "רישום Passkey אינו זמין בתצוגה המקומית ללא חיבור ל-Firebase. פתחו את האתר המחובר למערכת ונסו שוב.";
+    if (code.includes("מקור לא מורשה") || name === "SecurityError") return "לא ניתן לרשום Passkey בכתובת הזו. פתחו את כתובת האתר המאושרת בחיבור מאובטח ונסו שוב.";
+    if (code.includes("האתגר פג")) return "בקשת הרישום פגה. לחצו שוב על הוספת Passkey.";
+    return operation === "register"
+      ? "רישום ה-Passkey נכשל. ודאו שנעילת המסך, Face ID, טביעת אצבע או Windows Hello מוגדרים במכשיר ונסו שוב."
+      : "עדכון ה-Passkey נכשל. בדקו את החיבור ונסו שוב.";
+  }
   if (code.includes("not-found") || code.includes("אינו רשום")) {
-    return "לא נמצאה כניסה מהירה למכשיר הזה. התחברו עם סיסמה והפעילו אותה בהגדרות.";
+    return "לא נמצאה כניסה מהירה למכשיר הזה. התחברו עם מייל וסיסמה, ואז הפעילו בהגדרות את הכניסה המהירה באמצעות Passkey.";
   }
   if (code.includes("האתגר פג")) return "הבקשה פגה. נסו שוב.";
-  return "הכניסה המהירה נכשלה. התחברו עם מייל וסיסמה.";
+  return "לא ניתן להיכנס באמצעות Passkey. התחברו עם מייל וסיסמה. אם עדיין לא הפעלתם כניסה מהירה, הפעילו אותה בהגדרות לאחר ההתחברות.";
 }

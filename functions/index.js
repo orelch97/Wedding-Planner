@@ -586,6 +586,9 @@ const ALLOWED_ORIGINS = {
   "http://localhost:4173": "localhost",
   "http://localhost:5173": "localhost",
   "http://localhost:5174": "localhost",
+  "http://localhost:5175": "localhost",
+  "http://localhost:5176": "localhost",
+  "http://localhost:5177": "localhost",
 };
 
 function resolveRp(origin) {

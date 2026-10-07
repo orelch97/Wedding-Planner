@@ -1814,7 +1814,6 @@ const GUEST_TABLE_COLUMNS = [
   { key: "category", label: "קטגוריה" },
   { key: "mention", label: "אזכור / הערות" },
   { key: "seats", label: "כיסאות" },
-  { key: "source", label: "מקור" },
   { key: "glatt", label: "גלאט" },
   { key: "drinkers", label: "שותים" },
   { key: "probablyComing", label: "כנראה יבוא" },
@@ -1827,7 +1826,6 @@ const DEFAULT_GUEST_TABLE_COLUMNS = {
   category: true,
   mention: false,
   seats: true,
-  source: false,
   glatt: true,
   drinkers: true,
   probablyComing: false,
@@ -2002,9 +2000,6 @@ const GuestRow = memo(function GuestRow({
           title="מספר הכיסאות לרשומה זו"
           className="min-h-11 w-14 rounded-lg border border-slate-200 bg-white px-2 py-1 text-center text-sm font-semibold tabular-nums text-slate-700 outline-none focus:border-gold-400"
         />
-      </td>}
-      {visibleColumns.source && <td className="max-w-36 truncate px-2 py-3 text-sm text-slate-600" title={g.source || ""}>
-        {g.source || <span className="text-slate-300">—</span>}
       </td>}
       {visibleColumns.glatt && <td className="px-2 py-3 text-center">
         <label
@@ -2681,7 +2676,6 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         case "phone": return g.phone || "";
         case "category": return g.category || "";
         case "mention": return g.mention || "";
-        case "source": return g.source || "";
         case "seats": return g.seats || 0;
         case "glatt": return g.glatt ? 1 : 0;
         case "drinkers": return Number(g.drinkers) || 0;
@@ -3156,11 +3150,11 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
 
   function downloadTemplate() {
     const header =
-      "שם,נייד,קטגוריה,אזכור,כיסאות,מקור,גלאט,כנראה יבוא,לשקול,אישור הגעה,כמה אישרו,מתנה";
+      "שם,נייד,קטגוריה,אזכור,כיסאות,גלאט,כנראה יבוא,לשקול,אישור הגעה,כמה אישרו,מתנה";
     const examples = [
-      `ישראל ישראלי,050-1234567,${categories[0] || ""},חבר של אבא,2,צד חתן,,V,,אישרו הגעה,2,0`,
-      `דנה כהן,052-7654321,${categories[0] || ""},,4,צד כלה,כן,,,אישרו הגעה,3,0`,
-      `משפחת לוי,,${categories[0] || ""},,3,,,,,ממתין,,0`,
+      `ישראל ישראלי,050-1234567,${categories[0] || ""},חבר של אבא,2,,V,,אישרו הגעה,2,0`,
+      `דנה כהן,052-7654321,${categories[0] || ""},,4,כן,,,אישרו הגעה,3,0`,
+      `משפחת לוי,,${categories[0] || ""},,3,,,,ממתין,,0`,
     ];
     const blob = new Blob(["\uFEFF" + header + "\n" + examples.join("\n")], {
       type: "text/csv;charset=utf-8;",
@@ -3179,7 +3173,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       return;
     }
     const header =
-      "שם,נייד,קטגוריה,אזכור,כיסאות,מקור,גלאט,שיבוץ,כנראה יבוא,לשקול,אישור הגעה,כמה אישרו,מתנה";
+      "שם,נייד,קטגוריה,אזכור,כיסאות,גלאט,שיבוץ,כנראה יבוא,לשקול,אישור הגעה,כמה אישרו,מתנה";
     const esc = (v) => {
       const s = String(v ?? "");
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -3198,7 +3192,6 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         g.category,
         g.mention,
         seats,
-        g.source || "",
         g.glatt ? "כן" : "",
         guestTableMap[g.id] || "",
         g.probablyComing ? "כן" : "",
@@ -3221,8 +3214,6 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     notify(`יוצאו ${sorted.length} רשומות לקובץ CSV`, { tone: "success" });
   }
-
-  const sourceColor = (s) => (s === "הורים" ? "sage" : "gold");
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -3644,7 +3635,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         <p data-tour="guests-list" className="mb-3 text-xs text-slate-400">
           מציג {filtered.length} מתוך {guests.length} רשומות · עמודות שהמערכת
           מזהה בקובץ Excel או CSV (בכל סדר): שם, נייד, קטגוריה, אזכור, כיסאות,
-          מקור, גלאט, שותים, "כנראה יבוא", "לשקול", "אישור הגעה", "כמה אישרו", מתנה
+          גלאט, שותים, "כנראה יבוא", "לשקול", "אישור הגעה", "כמה אישרו", מתנה
         </p>
 
         {/* Bulk action bar */}
@@ -3735,7 +3726,6 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 {visibleColumns.category && <SortHeader label="קטגוריה" sortKey="category" sort={sort} onSort={toggleSort} />}
                 {visibleColumns.mention && <SortHeader label="אזכור / הערות" sortKey="mention" sort={sort} onSort={toggleSort} />}
                 {visibleColumns.seats && <SortHeader label="כיסאות" sortKey="seats" sort={sort} onSort={toggleSort} />}
-                {visibleColumns.source && <SortHeader label="מקור" sortKey="source" sort={sort} onSort={toggleSort} />}
                 {visibleColumns.glatt && <SortHeader label="גלאט" sortKey="glatt" sort={sort} onSort={toggleSort} center />}
                 {visibleColumns.drinkers && <SortHeader label="שותים" sortKey="drinkers" sort={sort} onSort={toggleSort} center />}
                 <SortHeader label="שיבוץ" sortKey="table" sort={sort} onSort={toggleSort} />
@@ -5343,7 +5333,7 @@ function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename
 
   return (
     <li
-      className={`grid min-w-0 grid-cols-2 items-start gap-2 rounded-2xl border px-3 py-2 transition lg:grid-cols-[minmax(0,1.6fr)_minmax(0,.8fr)_minmax(0,.7fr)_minmax(0,1.2fr)_auto] ${
+      className={`grid min-w-0 grid-cols-2 items-center gap-2 rounded-2xl border px-3 py-2 transition lg:grid-cols-[minmax(0,1.6fr)_minmax(0,.8fr)_minmax(0,.7fr)_minmax(0,1.2fr)_auto] ${
         item.done
           ? "border-sage-200/70 bg-sage-50/50"
           : "border-slate-200/70 bg-white/60"

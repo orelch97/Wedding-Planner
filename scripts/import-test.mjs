@@ -159,6 +159,24 @@ section("5. סדר עמודות שונה וכותרות חלופיות");
   eq("בלי עמודת מאושרים – מניחים את כל הכיסאות", guests[0].attendingCount, 3);
 }
 
+section("Guest template without the retired source column");
+{
+  const sourceIndex = HEADERS.indexOf("מקור");
+  const headers = HEADERS.filter((_, index) => index !== sourceIndex);
+  const rows = ROWS.map((row) => row.filter((_, index) => index !== sourceIndex));
+  const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
+  const { guests, hasHeader } = rowsToGuests(parseDelimited(csv), { categories: [] });
+  eq("Source-free header is recognized", hasHeader, true);
+  eq("Source-free template imports every guest", guests.length, ROWS.length);
+  eq("Glatt stays in its column", guests[0].glatt, true);
+  eq("Probably-coming stays in its column", guests[1].probablyComing, true);
+  eq("Considering stays in its column", guests[2].considering, true);
+  eq("RSVP stays in its column", guests[0].rsvp, "confirmed");
+  eq("Attending count stays in its column", guests[0].attendingCount, 2);
+  eq("Gift stays in its column", guests[0].gift, 500);
+  eq("Removed source is empty", guests[0].source, "");
+}
+
 section("6. קובץ בלי שורת כותרת");
 {
   const rows = [["יוסי לוי", "0501234567", "חברים", "", "2"]];

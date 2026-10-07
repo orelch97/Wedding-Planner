@@ -220,7 +220,7 @@ export function Tour({ steps, onClose }) {
             type="button"
             onClick={onClose}
             aria-label="סגירת ההדרכה"
-            className="-m-1 shrink-0 rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+            className="btn-icon -m-1 h-8 w-8"
           >
             <X size={16} />
           </button>
@@ -241,7 +241,7 @@ export function Tour({ steps, onClose }) {
               <button
                 type="button"
                 onClick={() => setIndex((i) => i - 1)}
-                className="rounded-xl px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                className="btn-secondary px-3 text-xs"
               >
                 הקודם
               </button>
@@ -250,7 +250,7 @@ export function Tour({ steps, onClose }) {
               type="button"
               onClick={next}
               ref={nextButtonRef}
-              className="flex items-center gap-1 rounded-xl bg-gold-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-sm transition hover:bg-gold-600"
+              className="btn-primary px-3 text-xs"
             >
               {isLast ? "סיום" : "הבא"}
               {!isLast && <ChevronLeft size={14} />}

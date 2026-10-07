@@ -88,7 +88,7 @@ export default function AdminDashboard() {
             type="button"
             onClick={refresh}
             disabled={loading}
-            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-semibold text-white ring-1 ring-white/20 transition hover:bg-white/15 disabled:opacity-50 sm:w-auto"
+            className="btn-primary w-full sm:w-auto"
           >
             <RefreshCw size={16} className={loading ? "animate-spin" : ""} /> רענון
           </button>
@@ -124,7 +124,7 @@ export default function AdminDashboard() {
         {error ? (
           <div role="alert" className="flex flex-col items-start gap-3 rounded-2xl bg-rose-50 p-4 text-sm text-rose-800 ring-1 ring-rose-200 sm:flex-row sm:items-center sm:justify-between">
             <span className="flex items-center gap-2"><AlertCircle size={17} />{error}</span>
-            <button type="button" onClick={refresh} className="min-h-11 rounded-xl bg-white px-4 font-semibold ring-1 ring-rose-200">ניסיון חוזר</button>
+            <button type="button" onClick={refresh} className="btn-secondary">ניסיון חוזר</button>
           </div>
         ) : loading ? (
           <div role="status" className="flex min-h-32 items-center justify-center gap-2 text-sm text-slate-500">

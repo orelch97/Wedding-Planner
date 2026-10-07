@@ -404,18 +404,14 @@ function ConfirmHost() {
           <button
             ref={confirmRef}
             onClick={() => close(true)}
-            className={`rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition focus-visible:ring-2 focus-visible:ring-offset-2 ${
-              danger
-                ? "bg-rose-500 hover:bg-rose-600 focus-visible:ring-rose-400"
-                : "bg-gold-500 hover:bg-gold-600 focus-visible:ring-gold-400"
-            }`}
+            className={danger ? "btn-danger" : "btn-primary"}
           >
             {req.confirmLabel || "אישור"}
           </button>
           <button
             ref={cancelRef}
             onClick={() => close(false)}
-            className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-slate-300"
+            className="btn-secondary"
           >
             {req.cancelLabel || "ביטול"}
           </button>
@@ -525,7 +521,7 @@ function PromptHost() {
           <button
             type="button"
             onClick={() => close(null)}
-            className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+            className="btn-secondary"
           >
             {req.cancelLabel || "ביטול"}
           </button>
@@ -1114,7 +1110,7 @@ function Sidebar({
             onClick={() => setOpen(false)}
             aria-label="סגירת תפריט הניווט"
             title="סגירת התפריט"
-            className="mr-auto grid h-11 w-11 shrink-0 place-items-center rounded-xl text-slate-500 transition hover:bg-white hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 lg:hidden"
+            className="btn-icon mr-auto lg:hidden"
           >
             <X size={19} />
           </button>
@@ -1122,7 +1118,7 @@ function Sidebar({
             onClick={() => setCollapsed(true)}
             title="הסתרת התפריט לתצוגה ברוחב מלא"
             aria-label="הסתרת התפריט"
-            className="mr-auto hidden shrink-0 rounded-xl p-2 text-slate-400 transition hover:bg-white hover:text-slate-700 lg:block"
+            className="btn-icon mr-auto hidden lg:inline-grid"
           >
             <PanelRightClose size={18} />
           </button>
@@ -1238,7 +1234,7 @@ function ShareAppPanel() {
     <div className="rounded-2xl bg-gold-50/70 p-3 ring-1 ring-gold-200">
       <p className="mb-2 text-xs font-semibold text-slate-600">שיתוף והתקנה</p>
       <div className="flex gap-2">
-        <button type="button" onClick={shareApp} className="flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-white px-2 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-gold-50">
+        <button type="button" onClick={shareApp} className="btn-secondary flex-1 px-2 text-xs">
           <Share2 size={14} /> שיתוף האפליקציה
         </button>
         {installPrompt && (
@@ -1500,7 +1496,7 @@ function Countdown({
               type="button"
               onClick={() => backgroundInputRef.current?.click()}
               disabled={backgroundBusy}
-              className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs font-semibold text-white ring-1 ring-white/20 transition hover:bg-white/20 disabled:opacity-60"
+              className="btn-secondary text-xs"
             >
               {backgroundBusy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
               {backgroundUrl ? "החלפת תמונת רקע" : "הוספת תמונת רקע"}
@@ -1722,7 +1718,7 @@ function Overview({
                 type="button"
                 onClick={() => onOpenVendor(v.id)}
                 title={`מעבר לכרטיס הספק “${v.name}”`}
-                className="flex w-full items-center justify-between rounded-2xl bg-white/60 p-4 text-right ring-1 ring-slate-200/70 transition hover:bg-white hover:ring-gold-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
+                className="flex w-full items-center justify-between rounded-2xl border border-sage-300 bg-sage-50 p-4 text-right shadow-sm transition hover:border-gold-400 hover:bg-sage-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
               >
                 {content}
               </button>
@@ -1792,7 +1788,7 @@ function DrinkersControl({ guest, canEdit, onChange, compact = false }) {
             disabled={!canEdit || value <= 1}
             onClick={() => onChange(value - 1)}
             aria-label="פחות שותים"
-            className="grid h-11 w-11 place-items-center text-slate-400 transition hover:text-gold-600 disabled:opacity-30"
+            className="btn-icon"
           >
             <Minus size={13} />
           </button>
@@ -1804,7 +1800,7 @@ function DrinkersControl({ guest, canEdit, onChange, compact = false }) {
             disabled={!canEdit || value >= seats}
             onClick={() => onChange(value + 1)}
             aria-label="עוד שותים"
-            className="grid h-11 w-11 place-items-center text-slate-400 transition hover:text-gold-600 disabled:opacity-30"
+            className="btn-icon"
           >
             <Plus size={13} />
           </button>
@@ -2127,7 +2123,7 @@ const GuestRow = memo(function GuestRow({
             onClick={() => removeGuest(g.id)}
             aria-label={`מחיקת ${g.name || "מוזמן"}`}
             title="מחיקת מוזמן"
-            className="grid h-11 w-11 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
+            className="btn-icon-danger"
           >
             <Trash2 size={16} />
           </button>
@@ -2245,14 +2241,14 @@ const GuestCard = memo(function GuestCard({
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           aria-label={`${open ? "סגירת" : "פתיחת"} פרטי ${g.name || "מוזמן"}`}
-          className="grid h-11 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+          className="btn-icon w-8"
         >
           <ChevronDown size={18} className={open ? "rotate-180 transition" : "transition"} />
         </button>
         <button
           onClick={() => removeGuest(g.id)}
           aria-label={`מחיקת ${g.name || "מוזמן"}`}
-          className={`grid h-11 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none ${
+          className={`btn-icon-danger w-8 ${
             canEdit ? "" : "hidden"
           }`}
         >
@@ -3286,8 +3282,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   title={`סינון לפי ${s.label}`}
                   className={`flex min-h-11 min-w-0 flex-col items-center gap-1 rounded-2xl border px-2 py-2 text-sm transition sm:min-w-[150px] sm:flex-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-4 sm:py-2.5 ${
                     active
-                      ? "border-slate-400 bg-slate-50 ring-2 ring-slate-200"
-                      : "border-slate-200 bg-white hover:bg-slate-50"
+                      ? "border-gold-400 bg-gold-50 ring-2 ring-gold-200"
+                      : "border-sage-300 bg-sage-50 shadow-sm hover:border-sage-400 hover:bg-sage-100"
                   }`}
                 >
                   <span className="flex min-w-0 flex-col text-center sm:text-right">
@@ -3325,7 +3321,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 <button
                   onClick={() => setCatManagerOpen(true)}
                   title="הוספה, עריכה ומחיקה של קטגוריות מוזמנים"
-                  className="flex min-h-11 items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                  className="btn-secondary"
                 >
                   <Tag size={17} /> קטגוריות
                 </button>
@@ -3334,7 +3330,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 <button
                   onClick={downloadTemplate}
                   title="הורדת קובץ תבנית לייבוא"
-                  className="flex min-h-11 items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                  className="btn-secondary"
                 >
                   <FileText size={17} /> תבנית
                 </button>
@@ -3342,7 +3338,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               <button
                 onClick={exportGuests}
                 title="ייצוא הרשומות המסוננות לקובץ CSV"
-                className="flex min-h-11 items-center gap-2 rounded-2xl bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                className="btn-secondary"
               >
                 <Download size={17} /> ייצוא
               </button>
@@ -3478,10 +3474,10 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         )}
 
         {/* Search & Filters */}
-        <div data-tour="guests-filters" className="mb-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3 sm:mb-4 sm:p-4">
+        <div data-tour="guests-filters" className="mb-3 border-y border-slate-200 bg-slate-50/80 p-3 sm:mb-4 sm:p-4">
           <div className="mb-2.5 flex items-center gap-2.5 sm:mb-3">
-            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-slate-600 text-white shadow-md shadow-slate-500/20 sm:h-9 sm:w-9">
-              <Search size={16} />
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-sage-100 text-sage-600 sm:h-9 sm:w-9">
+              <Filter size={16} />
             </span>
             <div>
               <p className="text-sm font-bold text-slate-800">חיפוש וסינון מוזמנים</p>
@@ -3509,7 +3505,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               value={filters.category}
               onChange={(e) => setFilters({ ...filters, category: e.target.value })}
               title="סינון לפי קטגוריה"
-              className="min-h-11 min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
+              aria-label="סינון לפי קטגוריה"
+              className={`filter-select sm:w-auto sm:max-w-56 ${filters.category !== "all" ? "filter-select-active" : ""}`}
             >
               <option value="all">כל הקטגוריות</option>
               {categories.map((c) => (
@@ -3522,7 +3519,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               value={filters.rsvp}
               onChange={(e) => setFilters({ ...filters, rsvp: e.target.value })}
               title="סינון לפי אישור הגעה"
-              className="min-h-11 min-w-0 rounded-xl border border-slate-300 bg-white px-2 py-2.5 text-sm font-medium outline-none focus:border-slate-400 sm:px-3"
+              aria-label="סינון לפי אישור הגעה"
+              className={`filter-select sm:w-auto ${filters.rsvp !== "all" ? "filter-select-active" : ""}`}
             >
               <option value="all">כל הסטטוסים</option>
               <option value="confirmed">אישרו הגעה</option>
@@ -3533,11 +3531,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               onClick={() =>
                 setFilters({ ...filters, onlyProbably: !filters.onlyProbably })
               }
-              className={`flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
-                filters.onlyProbably
-                  ? "bg-sage-500 text-white"
-                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-sage-50"
-              }`}
+              aria-pressed={filters.onlyProbably}
+              className={`filter-chip ${filters.onlyProbably ? "filter-chip-active" : ""}`}
             >
               <Star size={15} /> כנראה יבוא
             </button>
@@ -3545,11 +3540,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               onClick={() =>
                 setFilters({ ...filters, onlyConsidering: !filters.onlyConsidering })
               }
-              className={`flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
-                filters.onlyConsidering
-                  ? "bg-rose-500 text-white"
-                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-rose-50"
-              }`}
+              aria-pressed={filters.onlyConsidering}
+              className={`filter-chip ${filters.onlyConsidering ? "filter-chip-active" : ""}`}
             >
               <HelpCircle size={15} /> לשקול
             </button>
@@ -3557,11 +3549,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               onClick={() =>
                 setFilters({ ...filters, onlyGlatt: !filters.onlyGlatt })
               }
-              className={`flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
-                filters.onlyGlatt
-                  ? "bg-gold-500 text-slate-950"
-                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-gold-50"
-              }`}
+              aria-pressed={filters.onlyGlatt}
+              className={`filter-chip ${filters.onlyGlatt ? "filter-chip-active" : ""}`}
             >
               <UtensilsCrossed size={15} /> גלאט
             </button>
@@ -3569,11 +3558,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               onClick={() =>
                 setFilters({ ...filters, onlyDrinkers: !filters.onlyDrinkers })
               }
-              className={`flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
-                filters.onlyDrinkers
-                  ? "bg-gold-600 text-slate-950"
-                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-gold-50"
-              }`}
+              aria-pressed={filters.onlyDrinkers}
+              className={`filter-chip ${filters.onlyDrinkers ? "filter-chip-active" : ""}`}
             >
               <Wine size={15} /> שותים
             </button>
@@ -3581,11 +3567,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               onClick={() =>
                 setFilters({ ...filters, onlyUnassigned: !filters.onlyUnassigned })
               }
-              className={`flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
-                filters.onlyUnassigned
-                  ? "bg-slate-700 text-white"
-                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100"
-              }`}
+              aria-pressed={filters.onlyUnassigned}
+              className={`filter-chip ${filters.onlyUnassigned ? "filter-chip-active" : ""}`}
             >
               <Armchair size={15} /> לא משובץ
             </button>
@@ -3598,10 +3581,10 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 aria-pressed={filters.onlyDuplicatePhones}
                 title="רשומות שמספר הנייד שלהן מופיע ביותר מרשומה אחת"
                 className={
-                  "flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition " +
+                  "filter-chip " +
                   (filters.onlyDuplicatePhones
-                    ? "bg-amber-500 text-slate-950"
-                    : "bg-amber-50 text-amber-800 ring-1 ring-amber-300 hover:bg-amber-100")
+                    ? "border-amber-600 bg-amber-500 text-slate-950 hover:bg-amber-600"
+                    : "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100")
                 }
               >
                 <AlertTriangle size={15} /> נייד כפול ({duplicatePhoneNotes.size})
@@ -3631,7 +3614,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                   })
                 }
                 title="ניקוי כל הסינונים"
-                className="flex min-h-11 items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-500 ring-1 ring-slate-200 transition hover:bg-white"
+                className="btn-secondary"
               >
                 <X size={15} /> נקה
               </button>
@@ -3646,7 +3629,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 aria-expanded={columnsOpen}
                 aria-controls="guest-columns-popover"
                 aria-haspopup="true"
-                className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-gold-300 hover:bg-gold-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
+                className="btn-secondary"
               >
                 <Columns3 size={17} />
                 עמודות
@@ -3675,19 +3658,19 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             <span className="text-xs font-medium text-slate-500">סמן כ:</span>
             <button
               onClick={() => bulkRsvp("confirmed")}
-              className="rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-sage-600 ring-1 ring-sage-200 transition hover:bg-sage-50"
+              className="btn-secondary px-2.5 text-xs"
             >
               אישרו הגעה
             </button>
             <button
               onClick={() => bulkRsvp("pending")}
-              className="rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-gold-600 ring-1 ring-gold-200 transition hover:bg-gold-50"
+              className="btn-secondary px-2.5 text-xs"
             >
               ממתין
             </button>
             <button
               onClick={() => bulkRsvp("declined")}
-              className="rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-500 ring-1 ring-rose-200 transition hover:bg-rose-50"
+              className="btn-secondary px-2.5 text-xs"
             >
               לא מגיעים
             </button>
@@ -3695,26 +3678,26 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             <span className="text-xs font-medium text-slate-500">שותים:</span>
             <button
               onClick={() => bulkDrinkers(true)}
-              className="flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-gold-600 ring-1 ring-gold-200 transition hover:bg-gold-50"
+              className="btn-secondary px-2.5 text-xs"
             >
               <Wine size={14} /> סמן כשותים
             </button>
             <button
               onClick={() => bulkDrinkers(false)}
-              className="rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-500 ring-1 ring-slate-200 transition hover:bg-slate-50"
+              className="btn-secondary px-2.5 text-xs"
             >
               בטל סימון
             </button>
             <div className="mx-1 h-5 w-px bg-gold-200" />
             <button
               onClick={bulkDelete}
-              className="flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-500 ring-1 ring-rose-200 transition hover:bg-rose-50"
+              className="btn-danger px-2.5 text-xs"
             >
               <Trash2 size={14} /> מחק
             </button>
             <button
               onClick={clearSelection}
-              className="mr-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 transition hover:bg-white"
+              className="btn-ghost mr-auto px-2.5 text-xs"
             >
               <X size={14} /> ביטול בחירה
             </button>
@@ -3838,7 +3821,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           {sorted.length > mobileLimit && (
             <button
               onClick={() => setMobileLimit((n) => n + 30)}
-              className="w-full rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-600 transition hover:border-gold-400 hover:bg-gold-50 hover:text-gold-600"
+              className="btn-secondary w-full"
             >
               הצג עוד ({sorted.length - mobileLimit} נותרו)
             </button>
@@ -4006,7 +3989,7 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
             type="button"
             onClick={requestClose}
             aria-label="סגירה"
-            className="rounded-xl p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            className="btn-icon"
           >
             <X size={20} />
           </button>
@@ -4345,8 +4328,6 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
     "flex min-h-11 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 transition";
   const suffixInput =
     "num-plain w-full min-w-0 bg-transparent py-2 text-center text-sm font-semibold tabular-nums text-slate-700 outline-none";
-  const pill =
-    "inline-flex min-h-9 items-center gap-1.5 rounded-full px-3 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:opacity-50";
 
   return (
     <div className="space-y-4">
@@ -4383,8 +4364,8 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
                   aria-pressed={source === option.key}
                   className={`min-h-12 rounded-xl px-2 py-1.5 text-center transition disabled:cursor-default ${
                     source === option.key
-                      ? "bg-white text-slate-800 shadow-sm ring-1 ring-slate-200"
-                      : "text-slate-500 hover:bg-white/60"
+                      ? "bg-gold-500 text-slate-950 shadow-sm ring-1 ring-gold-600"
+                      : "bg-sage-50 text-slate-600 ring-1 ring-sage-200 hover:bg-sage-100"
                   }`}
                 >
                   <span className="block text-sm font-semibold leading-tight">{option.label}</span>
@@ -4507,7 +4488,7 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
                   className={`min-h-16 rounded-xl px-2 py-2 transition ${
                     Number(peoplePerBottle) === p.perBottle
                       ? "bg-gold-500 text-slate-950 shadow-md shadow-gold-500/30"
-                      : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+                      : "bg-sage-100 text-slate-700 shadow-sm ring-1 ring-sage-300 hover:bg-sage-200"
                   }`}
                 >
                   <span className="block text-sm font-bold leading-tight">{p.label}</span>
@@ -4684,7 +4665,7 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
                 type="button"
                 onClick={() => createDrink(suggestion)}
                 disabled={!canEdit}
-                className={`${pill} bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-gold-50 hover:text-gold-700 hover:ring-gold-200`}
+                className="btn-secondary px-3 text-xs"
               >
                 <Plus size={12} /> {suggestion.label}
               </button>
@@ -4797,7 +4778,7 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
                         onClick={() => patchDrink(l.id, { units: l.units - 1 })}
                         disabled={!canEdit || l.units <= 0}
                         aria-label={`הפחתת כמות ${l.label}`}
-                        className="grid w-9 shrink-0 place-items-center text-slate-500 transition hover:bg-slate-50 disabled:opacity-30"
+                        className="grid w-9 shrink-0 place-items-center border-y border-sage-200 bg-sage-100 text-slate-700 transition hover:bg-sage-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:opacity-40"
                       >
                         <Minus size={15} />
                       </button>
@@ -4815,7 +4796,7 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
                         onClick={() => patchDrink(l.id, { units: l.units + 1 })}
                         disabled={!canEdit}
                         aria-label={`הוספת כמות ${l.label}`}
-                        className="grid w-9 shrink-0 place-items-center text-slate-500 transition hover:bg-slate-50 disabled:opacity-30"
+                        className="grid w-9 shrink-0 place-items-center border-y border-sage-200 bg-sage-100 text-slate-700 transition hover:bg-sage-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:opacity-40"
                       >
                         <Plus size={15} />
                       </button>
@@ -4857,7 +4838,7 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
                         disabled={!canEdit}
                         aria-label={`מחיקת ${l.label} מהרשימה`}
                         title={`מחיקת ${l.label}`}
-                        className="grid h-11 w-9 shrink-0 place-items-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+                        className="btn-icon-danger w-9"
                       >
                         <Trash2 size={16} />
                       </button>
@@ -5039,7 +5020,7 @@ function Seating({ guests, tables, setTables }) {
               value={newTable.type}
               onChange={(e) => setNewTable({ ...newTable, type: e.target.value })}
               aria-label="סוג השולחן החדש"
-              className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
+              className="filter-select w-auto"
             >
               <option value="standard">רגיל · 12</option>
               <option value="knight">אבירים · 24</option>
@@ -5107,7 +5088,7 @@ function Seating({ guests, tables, setTables }) {
                     onClick={() => removeTable(t.id)}
                     aria-label={`מחיקת השולחן ${t.name}`}
                     title="מחיקת שולחן"
-                    className="-m-1.5 grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none"
+                    className="btn-icon-danger -m-1.5"
                   >
                     <X size={16} />
                   </button>
@@ -5173,7 +5154,7 @@ function Seating({ guests, tables, setTables }) {
                 <button
                   onClick={() => openPicker(t.id)}
                   disabled={left <= 0}
-                  className="mt-3 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-500 transition hover:border-gold-400 hover:bg-gold-50 hover:text-gold-600 disabled:opacity-50"
+                  className="btn-secondary mt-3 w-full px-3"
                 >
                   <Plus size={16} /> {left <= 0 ? "השולחן מלא" : "שבץ מוזמן"}
                 </button>
@@ -5221,13 +5202,13 @@ function Seating({ guests, tables, setTables }) {
                 onClick={closePicker}
                 title="סגירה"
                 aria-label="סגירת חלון השיבוץ"
-                className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                className="btn-icon"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <div className="mb-3 flex flex-wrap gap-2">
+            <div className="mb-3 flex flex-wrap gap-2 border-y border-slate-200 bg-slate-50/80 px-2 py-3">
               <div className="relative min-w-[160px] flex-1">
                 <Search
                   size={16}
@@ -5238,13 +5219,14 @@ function Seating({ guests, tables, setTables }) {
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="חיפוש לפי שם..."
-                  className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pr-9 pl-3 text-sm outline-none focus:border-gold-400"
+                  className="filter-select bg-white pr-9 pl-3"
                 />
               </div>
               <select
                 value={catFilter}
                 onChange={(e) => setCatFilter(e.target.value)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-gold-400"
+                aria-label="סינון לפי קטגוריה"
+                className={`filter-select sm:w-auto sm:max-w-56 ${catFilter !== "all" ? "filter-select-active" : ""}`}
               >
                 <option value="all">כל הקטגוריות</option>
                 {categories.map((c) => (
@@ -5261,7 +5243,7 @@ function Seating({ guests, tables, setTables }) {
                   <li key={g.id}>
                     <button
                       onClick={() => assign(pickerTable.id, g.id)}
-                      className="flex w-full items-center justify-between gap-2 rounded-xl bg-white/70 px-3 py-2.5 text-right text-sm ring-1 ring-slate-200/70 transition hover:bg-gold-50 hover:ring-gold-300"
+                      className="flex min-h-12 w-full items-center justify-between gap-2 rounded-lg border border-sage-300 bg-sage-50 px-3 py-2.5 text-right text-sm shadow-sm transition hover:border-gold-400 hover:bg-gold-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
                     >
                       <span className="flex items-center gap-2">
                         <span className="font-semibold text-slate-800">{g.name}</span>
@@ -5442,7 +5424,7 @@ function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename
               onClick={() => setEditing(true)}
               title="שינוי שם המשימה"
               aria-label={`שינוי שם המשימה "${item.title}"`}
-              className="grid h-11 w-11 place-items-center rounded-lg text-slate-400 transition hover:bg-white hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
+              className="btn-icon"
             >
               <Pencil size={14} />
             </button>
@@ -5450,7 +5432,7 @@ function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename
               onClick={() => onDelete(item.id)}
               title="מחיקת המשימה"
               aria-label={`מחיקת המשימה "${item.title}"`}
-              className="grid h-11 w-11 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
+              className="btn-icon-danger"
             >
               <Trash2 size={14} />
             </button>
@@ -5658,12 +5640,13 @@ function Checklist({ items, setItems, options, setOptions }) {
   }
 
   const pct = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
-  const chip = (on) =>
-    `min-h-11 rounded-xl px-3 py-2 text-xs font-semibold transition ${
-      on
-        ? "bg-gold-500 text-slate-950 shadow-sm shadow-gold-500/25"
-        : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+  const filterSelect = (active) =>
+    `min-h-12 w-full min-w-0 appearance-none rounded-lg border-2 py-2 ps-3 pe-9 text-base font-medium text-slate-700 outline-none transition focus:border-gold-500 focus:ring-2 focus:ring-gold-200 sm:text-sm ${
+      active ? "border-gold-400 bg-gold-50" : "border-sage-200 bg-sage-50 hover:border-sage-400"
     }`;
+  const activeFilterCount = Number(Boolean(query.trim())) + Number(categoryFilter !== "all") + Number(assigneeFilter !== "all") + Number(hideDone);
+  const chip = (on) =>
+    `filter-chip text-xs ${on ? "filter-chip-active" : ""}`;
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -5673,14 +5656,14 @@ function Checklist({ items, setItems, options, setOptions }) {
           title="הצ׳קליסט של החתונה"
           subtitle="כל מה שצריך לסגור עד היום הגדול, במקום אחד"
           action={canEdit && (
-            <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={() => setManagerOpen(true)} className="btn-secondary"><Settings2 size={16} /> ניהול קטגוריות ושיוך</button>
+            <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
+              <button type="button" onClick={() => setManagerOpen(true)} className="btn-primary"><Settings2 size={17} className="shrink-0" /> ניהול קטגוריות ושיוך</button>
             {items.length > 0 && (
               <button
                 onClick={loadTemplate}
-                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:w-auto"
+                className="btn-secondary"
               >
-                <Sparkles size={16} className="text-gold-500" />
+                <Sparkles size={17} className="shrink-0 text-sage-600" />
                 הוספת הרשימה המומלצת
               </button>
             )}
@@ -5801,7 +5784,12 @@ function Checklist({ items, setItems, options, setOptions }) {
             </CollapsibleAdd>
           )}
 
-          <div data-tour="checklist-filters" className="mb-4 grid grid-cols-2 items-end gap-2 lg:flex lg:flex-wrap">
+          <div data-tour="checklist-filters" className="mb-4 border-y border-slate-200 bg-slate-50/80 px-3 py-3">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="flex items-center gap-2 text-sm font-bold text-slate-700"><Filter size={16} className="text-sage-600" /> חיפוש וסינון</p>
+              {activeFilterCount > 0 && <span className="rounded-full bg-gold-100 px-2.5 py-1 text-xs font-semibold text-gold-700">{activeFilterCount === 1 ? "מסנן פעיל" : `${activeFilterCount} מסננים פעילים`}</span>}
+            </div>
+            <div className="grid grid-cols-2 items-end gap-2 lg:flex lg:flex-wrap">
             <div className="relative col-span-2 min-w-0 lg:flex-1">
               <Search size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
@@ -5813,26 +5801,33 @@ function Checklist({ items, setItems, options, setOptions }) {
               />
             </div>
             <label className="min-w-0 space-y-1">
-              <span className="text-xs font-medium text-slate-500">קטגוריה</span>
-              <select aria-label="סינון לפי קטגוריה" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 text-base text-slate-700 lg:w-44 sm:text-sm">
+              <span className="text-xs font-semibold text-slate-600">קטגוריה</span>
+              <span className="relative block lg:w-44">
+              <select aria-label="סינון לפי קטגוריה" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className={filterSelect(categoryFilter !== "all")}>
                 <option value="all">כל הקטגוריות</option>
                 {categories.map((category) => <option key={category} value={category}>{category}</option>)}
               </select>
+              <ChevronDown size={17} className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 ${categoryFilter !== "all" ? "text-gold-700" : "text-sage-600"}`} />
+              </span>
             </label>
             <label className="min-w-0 space-y-1">
-              <span className="text-xs font-medium text-slate-500">שיוך</span>
-              <select aria-label="סינון לפי שיוך" value={assigneeFilter} onChange={(event) => setAssigneeFilter(event.target.value)} className="min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 text-base text-slate-700 lg:w-36 sm:text-sm">
+              <span className="text-xs font-semibold text-slate-600">שיוך</span>
+              <span className="relative block lg:w-36">
+              <select aria-label="סינון לפי שיוך" value={assigneeFilter} onChange={(event) => setAssigneeFilter(event.target.value)} className={filterSelect(assigneeFilter !== "all")}>
                 <option value="all">כל השיוכים</option>
                 {assignees.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
               </select>
+              <ChevronDown size={17} className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 ${assigneeFilter !== "all" ? "text-gold-700" : "text-sage-600"}`} />
+              </span>
             </label>
-            <button onClick={() => setHideDone((v) => !v)} className={chip(hideDone)}>
+            <button onClick={() => setHideDone((v) => !v)} aria-pressed={hideDone} className={chip(hideDone)}>
               <CheckCheck size={13} className="ml-1 inline" />
               הסתרת שהושלמו
             </button>
             {(query || categoryFilter !== "all" || assigneeFilter !== "all" || hideDone) && (
               <button type="button" className="btn-secondary" onClick={() => { setQuery(""); setCategoryFilter("all"); setAssigneeFilter("all"); setHideDone(false); }}><X size={14} /> ניקוי סינונים</button>
             )}
+            </div>
           </div>
 
           {grouped.length === 0 ? (
@@ -6170,10 +6165,11 @@ function Vendors({
             <button
               key={v.id}
               onClick={() => setOpenId(v.id)}
-              className={`min-h-11 rounded-2xl px-4 py-2 text-sm font-semibold transition sm:min-h-0 ${
+              aria-pressed={openId === v.id}
+              className={`filter-chip ${
                 openId === v.id
-                  ? "bg-slate-800 text-white shadow-lg"
-                  : "bg-white/70 text-slate-600 ring-1 ring-slate-200 hover:bg-white"
+                  ? "filter-chip-active"
+                  : ""
               }`}
             >
               {v.name}
@@ -6234,7 +6230,7 @@ function Vendors({
                       onClick={() => removeVendor(v.id)}
                       aria-label="מחיקת ספק"
                       title="מחיקת ספק"
-                      className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-300"
+                      className="btn-icon-danger"
                     >
                       <Trash2 size={18} />
                     </button>
@@ -6405,7 +6401,7 @@ function Vendors({
                                     onClick={() => removeTask(v.id, t.id)}
                                     title="מחיקת משימה"
                                     aria-label={`מחיקת המשימה ${t.title}`}
-                                    className="-m-1 grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-300 opacity-60 transition group-hover:opacity-100 focus-visible:opacity-100 hover:text-rose-500"
+                                    className="btn-icon-danger -m-1"
                                   >
                                     <X size={16} />
                                   </button>
@@ -6682,7 +6678,7 @@ function VendorFiles({
       {filesStatus === "error" && files.length > 0 && (
         <div role="status" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-200">
           <span>רענון רשימת הקבצים נכשל. הקבצים שכבר הוצגו נשארים זמינים.</span>
-          <button type="button" onClick={onChanged} className="min-h-11 rounded-lg bg-white px-3 font-semibold ring-1 ring-amber-300 transition hover:bg-amber-100">
+          <button type="button" onClick={onChanged} className="btn-secondary">
             ניסיון חוזר
           </button>
         </div>
@@ -6753,7 +6749,7 @@ function VendorFiles({
                     rel="noopener noreferrer"
                     title="פתיחה בכרטיסייה חדשה"
                     aria-label={`פתיחת ${f.name}`}
-                    className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                    className="btn-icon"
                   >
                     <ExternalLink size={16} />
                   </a>
@@ -6763,7 +6759,7 @@ function VendorFiles({
                   disabled={downloading === f.id}
                   title="הורדה"
                   aria-label={`הורדת ${f.name}`}
-                  className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-gold-600 disabled:opacity-60"
+                  className="btn-icon"
                 >
                   {downloading === f.id ? (
                     <Loader2 size={16} className="animate-spin" />
@@ -6776,7 +6772,7 @@ function VendorFiles({
                     onClick={() => remove(f)}
                     title="מחיקת הקובץ"
                     aria-label={`מחיקת ${f.name}`}
-                    className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                    className="btn-icon-danger"
                   >
                     <Trash2 size={16} />
                   </button>
@@ -6797,7 +6793,7 @@ function VendorFiles({
                 <FileText size={16} className="shrink-0 text-slate-400" />
                 <span className="min-w-0 flex-1 truncate text-xs text-slate-700" title={file.name}>{file.name}</span>
                 {canEdit && (
-                  <button type="button" onClick={() => restore(file)} className="min-h-11 shrink-0 rounded-lg bg-sage-50 px-3 text-xs font-semibold text-sage-700 transition hover:bg-sage-100">
+                  <button type="button" onClick={() => restore(file)} className="btn-secondary shrink-0 px-3 text-xs">
                     שחזור
                   </button>
                 )}
@@ -7376,7 +7372,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                             <button
                               type="button"
                               onClick={() => matchVendor(b.id, cost)}
-                              className="rounded-lg bg-white px-2 py-0.5 font-semibold text-rose-600 ring-1 ring-rose-200 transition hover:bg-rose-50"
+                              className="btn-secondary px-2 text-xs"
                             >
                               עדכון לפי הספק
                             </button>
@@ -7437,7 +7433,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                           onClick={() => moveItem(b.id, -1)}
                           disabled={idx === 0}
                           title="העברה למעלה"
-                          className="rounded-lg p-1.5 text-slate-400 transition hover:bg-gold-50 hover:text-gold-600 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                          className="btn-icon"
                         >
                           <ChevronUp size={16} />
                         </button>
@@ -7445,14 +7441,14 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                           onClick={() => moveItem(b.id, 1)}
                           disabled={idx === budget.length - 1}
                           title="העברה למטה"
-                          className="rounded-lg p-1.5 text-slate-400 transition hover:bg-gold-50 hover:text-gold-600 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                          className="btn-icon"
                         >
                           <ChevronDown size={16} />
                         </button>
                         <button
                           onClick={() => removeItem(b.id)}
                           title="מחיקת סעיף"
-                          className="rounded-lg p-2 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500"
+                          className="btn-icon-danger"
                         >
                           <Trash2 size={16} />
                         </button>
@@ -7535,7 +7531,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                           <button
                             type="button"
                             onClick={() => matchVendor(b.id, cost)}
-                            className="rounded-lg bg-white px-2 py-1 font-semibold text-rose-600 ring-1 ring-rose-200 transition hover:bg-rose-50"
+                            className="btn-secondary px-2 text-xs"
                           >
                             עדכון לפי הספק
                           </button>
@@ -7560,7 +7556,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                       }}
                       title="גררו כדי לשנות את סדר הסעיפים"
                       aria-label={`שינוי מיקום של ${b.category} — גררו, או השתמשו בחצים למעלה ולמטה`}
-                      className="grid h-11 w-11 cursor-grab touch-none place-items-center rounded-lg text-slate-400 transition hover:bg-gold-50 hover:text-gold-600 active:cursor-grabbing"
+                      className="btn-icon cursor-grab touch-none active:cursor-grabbing"
                     >
                       <GripVertical size={18} />
                     </button>
@@ -7568,7 +7564,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                       onClick={() => removeItem(b.id)}
                       title="מחיקת סעיף"
                       aria-label={`מחיקת ${b.category}`}
-                      className="grid h-11 w-11 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-500"
+                      className="btn-icon-danger"
                     >
                       <Trash2 size={18} />
                     </button>
@@ -7724,7 +7720,8 @@ function VendorPortal({ vendors, setVendors, weddingName = "", coupleTitle = "" 
                 setSelectedId(selected?.id ?? e.target.value);
               }}
               disabled={vendors.length === 0}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold outline-none focus:border-gold-400"
+              aria-label="בחירת ספק"
+              className="filter-select"
             >
               {vendors.map((v) => (
                 <option key={v.id} value={v.id}>
@@ -7752,7 +7749,7 @@ function VendorPortal({ vendors, setVendors, weddingName = "", coupleTitle = "" 
             }}
             title="העתקת הקישור"
             aria-label="העתקת הקישור"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-white hover:text-gold-600 focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:outline-none"
+            className="btn-icon"
           >
             <FileText size={16} />
           </button>
@@ -8616,7 +8613,7 @@ function LoginScreen() {
           type="button"
           onClick={loginWithPasskey}
           disabled={busy || passkeyBusy}
-          className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:opacity-60"
+          className="btn-secondary w-full"
         >
           {passkeyBusy ? <Loader2 size={16} className="animate-spin" /> : <Fingerprint size={17} />}
           {/*  לחיצה לפני שהאתגר מוכן ממתינה לרשת. "מתחמם" אומר למשתמש
@@ -8631,7 +8628,7 @@ function LoginScreen() {
           type="button"
           onClick={() => switchMode(signup || forgot ? "signin" : "signup")}
           data-tour="auth-toggle"
-          className="flex min-h-11 w-full items-center justify-center text-center text-xs font-medium text-slate-500 underline-offset-4 transition hover:text-gold-600 hover:underline"
+          className="btn-secondary w-full text-xs"
         >
           {signup || forgot ? "יש לי כבר חשבון – להתחברות" : "אין לי חשבון – להרשמה"}
         </button>
@@ -8640,7 +8637,7 @@ function LoginScreen() {
           <button
             type="button"
             onClick={() => switchMode("forgot")}
-            className="flex min-h-11 w-full items-center justify-center text-center text-xs font-medium text-slate-400 underline-offset-4 transition hover:text-gold-600 hover:underline"
+            className="btn-ghost w-full text-xs"
           >
             שכחתי סיסמה
           </button>
@@ -8651,7 +8648,7 @@ function LoginScreen() {
         <button
           type="button"
           onClick={() => setTourOn(true)}
-          className="flex min-h-11 w-full items-center justify-center gap-1.5 text-xs font-medium text-gold-600 underline-offset-4 transition hover:underline"
+          className="btn-ghost w-full text-xs"
         >
           <HelpCircle size={14} />
           הדרכה: איך פותחים חשבון
@@ -10568,7 +10565,7 @@ function WeddingApp({
                 onClick={() => setSidebarCollapsed(false)}
                 title="הצגת תפריט הניווט"
                 aria-label="הצגת תפריט הניווט"
-                className="hidden shrink-0 rounded-xl bg-white p-2.5 text-slate-600 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 lg:block"
+                className="btn-icon hidden lg:inline-grid"
               >
                 <PanelRightOpen size={20} />
               </button>
@@ -10589,7 +10586,7 @@ function WeddingApp({
               onClick={startTour}
               title="סיור מודרך במערכת"
               aria-label="פתיחת הסיור המודרך"
-              className="grid h-11 w-11 place-items-center rounded-xl bg-white text-gold-500 shadow-sm ring-1 ring-slate-200 transition hover:bg-gold-50 sm:h-9 sm:w-9"
+              className="btn-icon"
             >
               <HelpCircle size={19} />
             </button>
@@ -10747,7 +10744,7 @@ function WeddingApp({
               <button
                 onClick={() => backupInputRef.current?.click()}
                 title="שחזור נתונים מקובץ גיבוי (JSON) או מקובץ אקסל שיצא מהמערכת"
-                className="hidden items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:flex"
+                className="btn-secondary hidden px-3 text-xs sm:inline-flex"
               >
                 <Upload size={16} /> <span className="hidden sm:inline">שחזור</span>
               </button>
@@ -10756,7 +10753,7 @@ function WeddingApp({
               <button
                 onClick={signOutAndWipe}
                 title="התנתקות (מנקה את הנתונים השמורים בדפדפן)"
-                className="hidden items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 sm:flex"
+                className="btn-secondary hidden px-3 text-xs sm:inline-flex"
               >
                 <LogOut size={16} /> <span className="hidden sm:inline">יציאה</span>
               </button>
@@ -10776,7 +10773,7 @@ function WeddingApp({
                 type="button"
                 onClick={resendVerificationEmail}
                 disabled={verificationBusy}
-                className="min-h-10 shrink-0 rounded-xl bg-white px-3 font-semibold text-amber-900 ring-1 ring-amber-300 transition hover:bg-amber-100 disabled:opacity-60"
+                className="btn-secondary shrink-0"
               >
                 {verificationBusy ? "שולח…" : "שליחת קישור אימות"}
               </button>
@@ -10814,7 +10811,7 @@ function WeddingApp({
                 setCloudReady(false);
                 setInitialLoadAttempt((attempt) => attempt >= 3 ? 0 : attempt + 1);
               }}
-              className="min-h-11 rounded-full bg-white px-3 py-1 font-semibold text-rose-700 ring-1 ring-rose-300 transition hover:bg-rose-100"
+              className="btn-secondary"
             >
               ניסיון חוזר
             </button>
@@ -11055,7 +11052,7 @@ function WeddingSwitcher({ weddings, activeWedding, onSwitch, onCreate, onOpenMe
             ושתי השורות האלה היו 28–31px — קטן מדי לפתיחת מסך שלם.  */}
         <button
           onClick={onOpenMembers}
-          className="mt-1 flex min-h-11 w-full items-center gap-2 rounded-xl px-2 py-1.5 text-right text-xs font-medium text-slate-500 transition hover:bg-slate-50 hover:text-gold-600 lg:min-h-0"
+          className="btn-secondary mt-2 w-full justify-start px-2 text-xs"
         >
           <Share2 size={14} /> שיתוף וחברים
           <RoleBadge role={activeWedding.role} />
@@ -11065,7 +11062,7 @@ function WeddingSwitcher({ weddings, activeWedding, onSwitch, onCreate, onOpenMe
             התקציב. כאן ולא בתוך מסכי העבודה, כי אלה נתונים חד-פעמיים.  */}
         <button
           onClick={onOpenSettings}
-          className="flex min-h-11 w-full items-center gap-2 rounded-xl px-2 py-1.5 text-right text-xs font-medium text-slate-500 transition hover:bg-slate-50 hover:text-gold-600 lg:min-h-0"
+          className="btn-secondary mt-2 w-full justify-start px-2 text-xs"
         >
           <Settings2 size={14} /> הגדרות החתונה
         </button>
@@ -11119,22 +11116,16 @@ function ScopePicker({ scopes, onChange, idPrefix }) {
         <button
           type="button"
           onClick={() => onChange(["all"])}
-          className={`flex-1 rounded-xl px-3 py-2 text-xs font-semibold transition ${
-            full
-              ? "bg-gold-500 text-slate-950 shadow-sm"
-              : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
-          }`}
+          aria-pressed={full}
+          className={`filter-chip min-w-0 flex-1 text-xs ${full ? "filter-chip-active" : ""}`}
         >
           כל המערכת
         </button>
         <button
           type="button"
           onClick={() => onChange(full ? ["guests"] : scopes)}
-          className={`flex-1 rounded-xl px-3 py-2 text-xs font-semibold transition ${
-            !full
-              ? "bg-gold-500 text-slate-950 shadow-sm"
-              : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
-          }`}
+          aria-pressed={!full}
+          className={`filter-chip min-w-0 flex-1 text-xs ${!full ? "filter-chip-active" : ""}`}
         >
           מסכים נבחרים
         </button>
@@ -11254,12 +11245,12 @@ function PasskeyPanel({ currentUserId }) {
       {keys.map((key) => (
         <div key={key.id || key.credentialId} className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
           <span className="min-w-0 truncate text-xs font-medium text-slate-700">{key.label || "מכשיר רשום"}</span>
-          <button type="button" onClick={() => remove(key.id || key.credentialId)} disabled={busy} className="min-h-11 shrink-0 rounded-lg px-3 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-50">
+          <button type="button" onClick={() => remove(key.id || key.credentialId)} disabled={busy} className="btn-danger shrink-0 px-3 text-xs">
             הסרה
           </button>
         </div>
       ))}
-      <button type="button" onClick={enable} disabled={busy} className="flex min-h-10 items-center justify-center gap-2 rounded-xl bg-white px-3 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-gold-50 disabled:opacity-50">
+      <button type="button" onClick={enable} disabled={busy} className="btn-secondary px-3 text-xs">
         {busy ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
         הוספת Passkey למכשיר הזה
       </button>
@@ -11487,7 +11478,7 @@ function WeddingSettingsModal({
           disabled={busy || deleteBusy || partnerBusy}
           aria-label="סגירה"
           title="סגירה"
-          className="absolute left-4 top-4 rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:opacity-40"
+          className="btn-icon absolute left-4 top-4"
         >
           <X size={18} />
         </button>
@@ -11696,7 +11687,7 @@ function WeddingSettingsModal({
             type="button"
             onClick={requestClose}
             disabled={busy || deleteBusy || partnerBusy}
-            className="rounded-xl px-4 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-slate-100 disabled:opacity-40"
+            className="btn-secondary"
           >
             ביטול
           </button>
@@ -11934,7 +11925,7 @@ function MembersModal({
           disabled={busy || savingMember}
           aria-label="סגירה"
           title="סגירה"
-          className="absolute left-5 top-5 rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+          className="btn-icon absolute left-5 top-5"
         >
           <X size={18} />
         </button>
@@ -12065,14 +12056,14 @@ function MembersModal({
                         shareSubject
                       )}&body=${encodeURIComponent(shareMessage)}`;
                     }}
-                    className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+                    className="btn-secondary px-3 text-xs"
                   >
                     <Mail size={13} /> שליחה באימייל
                   </button>
                   <button
                     type="button"
                     onClick={copyLink}
-                    className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-[11px] font-semibold text-sage-700 ring-1 ring-sage-200 transition hover:bg-sage-100"
+                    className="btn-secondary px-3 text-xs"
                   >
                     <Copy size={13} /> העתקת הקישור
                   </button>
@@ -12136,7 +12127,7 @@ function MembersModal({
                       onClick={() => setEditing(editing === m.userId ? null : m.userId)}
                       title="עריכת הרשאות"
                       aria-label="עריכת הרשאות"
-                      className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-white hover:text-gold-600"
+                      className="btn-icon"
                     >
                       <Pencil size={15} />
                     </button>
@@ -12146,7 +12137,7 @@ function MembersModal({
                       onClick={() => revoke(m)}
                       title="הסרה"
                       aria-label="הסרת חבר"
-                      className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                      className="btn-icon-danger"
                     >
                       <Trash2 size={15} />
                     </button>
@@ -12231,7 +12222,7 @@ function MemberPermissionEditor({ member, onCancel, onSave }) {
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50"
+          className="btn-secondary px-3 text-xs"
         >
           ביטול
         </button>

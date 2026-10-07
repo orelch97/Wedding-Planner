@@ -39,6 +39,80 @@ test.afterEach(async ({ page }) => {
 });
 
 test.describe("emulator isolation and account lifecycle", () => {
+  test("shared controls keep actions and filters visible across screens", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signUp(page, uniqueIdentity("controls"), { readyTimeout: 60_000 });
+    for (const key of ["overview", "checklist", "guests", "alcohol", "seating", "vendors", "finance"]) {
+      await navigateTo(page, key);
+      await expectAppHealthy(page);
+      const escaping = await page.getByRole("main").evaluate((main) => [...main.querySelectorAll("button,select")].filter((element) => {
+        const rect = element.getBoundingClientRect();
+        if (!rect.width || !rect.height || element.closest("[inert]")) return false;
+        for (let parent = element.parentElement; parent && parent !== main; parent = parent.parentElement) {
+          if (/auto|scroll/.test(getComputedStyle(parent).overflowX)) return false;
+        }
+        return rect.left < -1 || rect.right > innerWidth + 1;
+      }).map((element) => element.getAttribute("aria-label") || element.textContent));
+      expect(escaping, `${key} controls must fit`).toEqual([]);
+    }
+    await navigateTo(page, "guests");
+    const exportButton = page.getByRole("button", { name: "ייצוא", exact: true });
+    const exportColor = await exportButton.evaluate((element) => getComputedStyle(element).backgroundColor);
+    expect(exportColor).not.toBe("rgb(255, 255, 255)");
+    const filters = page.locator('[data-tour="guests-filters"]');
+    const status = filters.getByRole("combobox", { name: "סינון לפי אישור הגעה", exact: true });
+    await status.selectOption("confirmed");
+    await expect(status).toHaveClass(/filter-select-active/);
+    await filters.getByRole("button", { name: "כנראה יבוא", exact: true }).click();
+    await expect(filters.getByRole("button", { name: "כנראה יבוא", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await filters.getByRole("button", { name: "נקה", exact: true }).click();
+    await expect(status).toHaveValue("all");
+    await page.getByRole("button", { name: "קטגוריות", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "ניהול קטגוריות מוזמנים" })).toBeVisible();
+    await page.getByRole("dialog", { name: "ניהול קטגוריות מוזמנים" }).getByRole("button", { name: "סגירה", exact: true }).click();
+  });
+
+  test("shared controls style admin refresh without breaking admin access", async ({ page }) => {
+    test.setTimeout(120_000);
+    const { initializeApp, getApps } = await import("firebase-admin/app");
+    const { getAuth } = await import("firebase-admin/auth");
+    const app = getApps().find((candidate) => candidate.name === "controls-admin") || initializeApp({ projectId: "demo-wedding-planner-e2e" }, "controls-admin");
+    const auth = getAuth(app);
+    const identity = { email: "orelch97@gmail.com", password: "E2E-only-Password-938!" };
+    const user = await auth.getUserByEmail(identity.email).catch((error) => {
+      if (error.code !== "auth/user-not-found") throw error;
+      return auth.createUser({ ...identity, emailVerified: true }).catch((createError) => {
+        if (createError.code === "auth/email-already-exists") return auth.getUserByEmail(identity.email);
+        throw createError;
+      });
+    });
+    if (!user.emailVerified) await auth.updateUser(user.uid, { emailVerified: true });
+    await signIn(page, identity);
+    await navigateTo(page, "admin");
+    await expect(page.locator('[data-tour="admin-stats"]')).toBeVisible();
+    const refresh = page.getByRole("button", { name: "רענון", exact: true });
+    await expect(refresh).toBeEnabled({ timeout: 30_000 });
+    expect(await refresh.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(201, 168, 106)");
+    await refresh.click();
+    await expect(refresh).toBeEnabled({ timeout: 30_000 });
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await openNavigationMenu(page);
+    await page.getByRole("button", { name: /שיתוף וחברים/ }).click();
+    const sharing = page.getByRole("dialog", { name: "שיתוף החתונה" });
+    await sharing.getByRole("button", { name: "מסכים נבחרים", exact: true }).click();
+    await expect(sharing.getByRole("button", { name: "מסכים נבחרים", exact: true })).toHaveAttribute("aria-pressed", "true");
+    const dialogOverflow = await sharing.evaluate((dialog) => {
+      const frame = dialog.getBoundingClientRect();
+      return [...dialog.querySelectorAll("button,input,select")].some((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && (rect.left < frame.left - 1 || rect.right > frame.right + 1);
+      });
+    });
+    expect(dialogOverflow).toBe(false);
+    await sharing.getByRole("button", { name: "כל המערכת", exact: true }).click();
+    await sharing.getByRole("button", { name: "סגירה", exact: true }).click();
+  });
+
   test("rejects non-local or non-demo configuration before browser actions", async () => {
     expect(process.env.VITE_USE_FIREBASE_EMULATORS).toBe("true");
     expect(process.env.VITE_FIREBASE_ENV).toBe("test");

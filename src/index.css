@@ -181,41 +181,83 @@ select,
     min-height 2.75rem = 44px, מינימום יעד המגע המומלץ. הכפתורים במערכת
     נלחצים בעיקר מהטלפון, ביד אחת, לעיתים בעמידה באולם.  */
 @layer components {
+  button {
+    @apply cursor-pointer;
+  }
+
+  button:disabled {
+    @apply cursor-not-allowed;
+  }
   /*  הבסיס חוזר בכל וריאנט ולא נגזר מ-.btn: ב-Tailwind 4 אי-אפשר
       @apply על מחלקה מותאמת שמוגדרת באותה שכבה.  */
   .btn-primary {
-    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5
-           text-sm font-semibold transition focus-visible:outline-none
-           focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2
+        @apply inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border border-gold-600 px-4 py-2.5
+          text-sm font-bold transition focus-visible:outline-none
+          focus-visible:ring-2 focus-visible:ring-gold-500 focus-visible:ring-offset-2
            disabled:cursor-not-allowed disabled:opacity-60
            bg-gold-500 text-slate-950
-           shadow-lg shadow-gold-500/30 hover:bg-gold-600 active:bg-gold-700;
+           shadow-sm shadow-gold-500/30 hover:bg-gold-600 hover:shadow-md active:bg-gold-700 active:translate-y-px;
   }
 
   .btn-secondary {
-    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5
-           text-sm font-semibold transition focus-visible:outline-none
-           focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2
+        @apply inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border border-sage-400 px-4 py-2.5
+          text-sm font-bold transition focus-visible:outline-none
+          focus-visible:ring-2 focus-visible:ring-sage-500 focus-visible:ring-offset-2
            disabled:cursor-not-allowed disabled:opacity-60
-           bg-white text-slate-700 ring-1 ring-slate-200
-           hover:bg-slate-50 hover:ring-slate-300 active:bg-slate-100;
+           bg-sage-100 text-slate-800 shadow-sm shadow-sage-500/20
+           hover:bg-sage-200 hover:shadow-md active:bg-sage-200 active:translate-y-px;
   }
 
   .btn-ghost {
-    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-sage-200 px-4 py-2.5
            text-sm font-semibold transition focus-visible:outline-none
            focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2
            disabled:cursor-not-allowed disabled:opacity-60
-           text-slate-500 hover:bg-slate-100 hover:text-slate-700 active:bg-slate-200;
+           bg-sage-50 text-slate-600 hover:bg-sage-100 hover:text-slate-800 active:bg-sage-200;
+  }
+
+  .btn-icon {
+    @apply inline-grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-sage-300
+           bg-sage-50 text-slate-600 shadow-sm transition hover:border-sage-400 hover:bg-sage-100
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sage-500 focus-visible:ring-offset-2
+           active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-icon-danger {
+    @apply inline-grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-rose-200
+           bg-rose-50 text-rose-600 shadow-sm transition hover:border-rose-400 hover:bg-rose-100
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:ring-offset-2
+           active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .filter-select {
+    @apply min-h-12 w-full min-w-0 cursor-pointer rounded-lg border-2 border-sage-200 bg-sage-50 px-3 py-2
+           text-base font-medium text-slate-700 outline-none transition hover:border-sage-400
+           focus:border-gold-500 focus:ring-2 focus:ring-gold-200 disabled:opacity-60 sm:text-sm;
+  }
+
+  .filter-select-active {
+    @apply border-gold-400 bg-gold-50 hover:border-gold-500;
+  }
+
+  .filter-chip {
+    @apply inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-sage-300
+           bg-sage-100 px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition
+           hover:border-sage-400 hover:bg-sage-200 focus-visible:outline-none
+           focus-visible:ring-2 focus-visible:ring-sage-500 focus-visible:ring-offset-2;
+  }
+
+  .filter-chip-active {
+    @apply border-gold-600 bg-gold-500 text-slate-950 shadow-gold-500/25 hover:bg-gold-600;
   }
 
   .btn-danger {
-    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5
-           text-sm font-semibold transition focus-visible:outline-none
+      @apply inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border border-rose-700 px-4 py-2.5
+        text-sm font-bold transition focus-visible:outline-none
            focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:ring-offset-2
            disabled:cursor-not-allowed disabled:opacity-60
-           bg-rose-500 text-white shadow-lg shadow-rose-500/25
-           hover:bg-rose-600 active:bg-rose-700;
+           bg-rose-600 text-white shadow-sm shadow-rose-500/25
+           hover:bg-rose-700 hover:shadow-md active:bg-rose-800 active:translate-y-px;
   }
 }
 

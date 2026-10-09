@@ -43,7 +43,7 @@ function sameBox(a, b) {
   );
 }
 
-export function Tour({ steps, onClose }) {
+export function Tour({ steps, onClose, onComplete }) {
   const [index, setIndex] = useState(0);
   const [spot, setSpot] = useState(null);
   const [card, setCard] = useState(null);
@@ -134,9 +134,12 @@ export function Tour({ steps, onClose }) {
   }, [place]);
 
   const next = useCallback(() => {
-    if (isLast) onClose();
+    if (isLast) {
+      onComplete?.();
+      onClose();
+    }
     else setIndex((i) => i + 1);
-  }, [isLast, onClose]);
+  }, [isLast, onClose, onComplete]);
 
   useEffect(() => {
     function onKey(e) {

@@ -82,6 +82,8 @@ import {
   authTourSteps,
   appTourSteps,
   markGuideSeen,
+  readTourProgress,
+  saveTourProgress,
 } from "./data/guide";
 import { Tour } from "./components/Guide";
 import { firebaseConfigured as isCloudConfigured } from "./lib/firebase";
@@ -155,7 +157,7 @@ import {
   validateEncryptedBackup,
   isCryptoAvailable,
 } from "./lib/backupCrypto";
-import { exportWeddingWorkbook, readWorkbookBackup } from "./lib/excelExport";
+import { exportWeddingWorkbook, readWorkbookBackup, validateBackupPayload } from "./lib/excelExport";
 import { ENTITIES } from "./lib/entityMap";
 import { summarizeDrinkPurchase } from "./lib/alcoholCalculator";
 import { readGuestRows, rowsToGuests, ImportError } from "./lib/guestImport";
@@ -9207,12 +9209,23 @@ function WeddingApp({
     media.addEventListener?.("change", update);
     return () => media.removeEventListener?.("change", update);
   }, []);
-  //  הדרכה: הסיור עולה לבד פעם אחת בחשבון, וההסבר בראש המסך נשאר עד
-  //  שמסתירים אותו — לכל מסך בנפרד, כי כל מסך נלמד בזמן אחר.
   const [tourOn, setTourOn] = useState(false);
-  const [tourInviteDismissed, setTourInviteDismissed] = usePersistentState("tourInviteDismissed", false);
+  const tourUserId = session?.user?.id;
+  const tourStoragePrefix = useContext(StoragePrefixContext);
+  const [tourProgress, setTourProgress] = useState(() => readTourProgress(
+    tourUserId,
+    loadStored(tourStoragePrefix, "tourInviteDismissed", false) === true
+  ));
+  const tourStatus = tourProgress[active];
+  useEffect(() => {
+    saveTourProgress(tourUserId, tourProgress);
+  }, [tourUserId, tourProgress]);
+  function recordTourStatus(status) {
+    const next = { ...tourProgress, [active]: status };
+    saveTourProgress(tourUserId, next);
+    setTourProgress(next);
+  }
   function startTour() {
-    setTourInviteDismissed(true);
     setTourOn(true);
   }
 
@@ -10084,6 +10097,7 @@ function WeddingApp({
           checklist,
           checklistOptions,
           budgetGoal,
+          alcohol,
           backup: await backupPayload(),
         },
         coupleTitle || activeWedding?.name
@@ -10136,6 +10150,7 @@ function WeddingApp({
       settings: {
         budgetGoal,
         checklistOptions,
+        alcohol,
         financeLabels,
         categories,
         countdownBackgroundUrl,
@@ -10207,7 +10222,7 @@ function WeddingApp({
   }
 
   function applyBackup(data) {
-    if (data.app && data.app !== "wedding-planner") {
+    if (!validateBackupPayload(data)) {
       notify("קובץ הגיבוי אינו תקין. ודא שזהו קובץ שיוצא מהמערכת.", {
         tone: "error",
       });
@@ -10224,6 +10239,7 @@ function WeddingApp({
         ? `${data.vendorAttachments.length} פרטי קבצים מצורפים`
         : null,
       data.settings ? "הגדרות החתונה" : null,
+      s.alcohol ? "חישוב אלכוהול" : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -10247,10 +10263,6 @@ function WeddingApp({
       tone: "danger",
     }).then(async (ok) => {
       if (!ok) return;
-      restoreIntentRef.current = new Set(
-        ["guests", "tables", "vendors", "budget", "checklist"]
-          .filter((key) => Array.isArray(data[key]))
-      );
       //  רשת ביטחון: שחזור הוא פעולה בלתי הפיכה שדורסת גם עבודה של שותפים.
       //  הקובץ יורד לא מוצפן בכוונה — הוא נוצר בלי אינטראקציה ואי אפשר
       //  לבקש סיסמה באמצע, ומטרתו לשמש דקה אחורה ולא ארכיון ארוך טווח.
@@ -10258,7 +10270,26 @@ function WeddingApp({
         downloadJson(await backupPayload(), "-before-restore");
       } catch (err) {
         console.error("Safety backup failed:", err);
+        notify("לא ניתן ליצור גיבוי בטיחות. השחזור בוטל ולא שונו נתונים.", { tone: "error" });
+        return;
       }
+      if (isOwner && ["partnerA", "partnerB", "weddingDate"].some((key) => Object.hasOwn(s, key))) {
+        try {
+          await saveWeddingBasics({
+            partnerA: s.partnerA ?? couple.partnerA,
+            partnerB: s.partnerB ?? couple.partnerB,
+            date: Object.hasOwn(s, "weddingDate") ? s.weddingDate : activeWedding?.weddingDate ?? null,
+          });
+        } catch (err) {
+          console.error("Restore of wedding basics failed:", err);
+          notify("שחזור פרטי החתונה נכשל. יתר הנתונים לא שונו.", { tone: "error" });
+          return;
+        }
+      }
+      restoreIntentRef.current = new Set(
+        ["guests", "tables", "vendors", "budget", "checklist"]
+          .filter((key) => Array.isArray(data[key]))
+      );
       //  קובץ גיבוי הוא קלט חיצוני: שדה חסר או בטיפוס לא צפוי היה מפיל
       //  את כל המסך (למשל v.tasks.map על undefined). מנרמלים בגבול המערכת.
       if (Array.isArray(data.guests))
@@ -10322,7 +10353,7 @@ function WeddingApp({
             ...item,
             title: String(item.title || ""),
             category: String(item.category || "כללי"),
-            assignee: ["both", "bride", "groom"].includes(item.assignee)
+            assignee: typeof item.assignee === "string" && item.assignee
               ? item.assignee
               : "both",
             done: Boolean(item.done),
@@ -10333,21 +10364,16 @@ function WeddingApp({
       //  הגדרות: גיבויים בגרסה 1 לא הכילו אותן, ולכן כל שדה מוחל רק אם קיים
       //  בפועל — אחרת שחזור מקובץ ישן היה מאפס את יעד התקציב והתוויות.
       if (typeof s.budgetGoal === "number") setBudgetGoal(s.budgetGoal);
+      if (s.alcohol && typeof s.alcohol === "object" && !Array.isArray(s.alcohol))
+        setAlcohol(normalizeAlcohol(s.alcohol));
       if (typeof s.countdownBackgroundUrl === "string")
         setCountdownBackgroundUrl(s.countdownBackgroundUrl);
       if (s.financeLabels && typeof s.financeLabels === "object")
-        setFinanceLabels((prev) => ({ ...prev, ...s.financeLabels }));
+        setFinanceLabels(s.financeLabels);
       if (Array.isArray(s.categories)) setCategories(s.categories);
       if (s.checklistOptions && mayChecklist) setChecklistOptions(normalizeChecklistOptions(s.checklistOptions));
       //  שמות בני הזוג והתאריך יושבים על רשומת החתונה עצמה, שרק הבעלים
       //  רשאי לעדכן. לעורך פשוט מדלגים במקום להציג לו כישלון.
-      if (isOwner && (s.partnerA != null || s.partnerB != null || s.weddingDate != null)) {
-        saveWeddingBasics({
-          partnerA: s.partnerA ?? couple.partnerA,
-          partnerB: s.partnerB ?? couple.partnerB,
-          date: s.weddingDate ?? activeWedding?.weddingDate ?? null,
-        }).catch((err) => console.error("Restore of wedding basics failed:", err));
-      }
       notify("הגיבוי שוחזר בהצלחה", { tone: "success" });
     });
   }
@@ -10572,13 +10598,15 @@ function WeddingApp({
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             {/*  כפתור העזרה פותח ישירות את הסיור המודרך.  */}
             <button
+              key={active}
               data-tour="help"
               onClick={startTour}
-              title="סיור מודרך במערכת"
+              title={tourStatus ? "סיור מודרך במסך זה" : "סיור חדש במסך זה"}
               aria-label="פתיחת הסיור המודרך"
-              className="btn-icon"
+              className={`btn-icon relative ${!tourStatus ? "border-gold-500 bg-gold-50 text-gold-700 ring-2 ring-gold-200 motion-safe:animate-[pulse_1.4s_ease-in-out_3]" : ""}`}
             >
               <HelpCircle size={19} />
+              {!tourStatus && <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-gold-600 ring-2 ring-white" />}
             </button>
             {/* במצב ענן מחוון הענן כבר מספר את סיפור השמירה; שני מחוונים זה
                 רעש ודוחק את כותרת המסך. מציגים "נשמר" רק במצב מקומי. */}
@@ -10809,16 +10837,16 @@ function WeddingApp({
         )}
 
         <div key={active} className="animate-fade-in-up p-3 sm:p-5 lg:p-8">
-          {!tourInviteDismissed && (
-            <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-gold-200 bg-gold-50/80 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          {!tourStatus && (
+            <div data-tour="invitation" className="mb-4 flex flex-col gap-3 rounded-2xl border border-gold-200 bg-gold-50/80 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 items-start gap-3">
                 <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-gold-600 shadow-sm ring-1 ring-gold-100">
                   <Sparkles size={18} />
                 </span>
                 <div>
-                  <p className="text-sm font-bold text-slate-800">רוצים סיור קצר במערכת?</p>
+                  <p className="text-sm font-bold text-slate-800">רוצים סיור קצר במסך הזה?</p>
                   <p className="mt-0.5 text-xs leading-5 text-slate-600">
-                    נציג את המסכים והפעולות העיקריות. הסיור לא יתחיל בלי שתבחרו בו.
+                    נציג את הפעולות העיקריות במסך. הסיור לא יתחיל בלי שתבחרו בו.
                   </p>
                 </div>
               </div>
@@ -10828,7 +10856,7 @@ function WeddingApp({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setTourInviteDismissed(true)}
+                  onClick={() => recordTourStatus("dismissed")}
                   className="btn-secondary min-h-11"
                 >
                   לא עכשיו
@@ -10935,6 +10963,7 @@ function WeddingApp({
         <Tour
           key={active}
           steps={tourSteps}
+          onComplete={() => recordTourStatus("completed")}
           onClose={() => {
             setTourOn(false);
             //  הסיור פותח את מגירת הניווט בשלבים שמדברים על הלשוניות.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { appTourSteps } from "../src/data/guide.js";
+import { appTourSteps, readTourProgress, saveTourProgress } from "../src/data/guide.js";
 
 const app = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 const admin = readFileSync(new URL("../src/components/AdminDashboard.jsx", import.meta.url), "utf8");
@@ -47,3 +47,39 @@ const alcoholWithoutFinance = appTourSteps({ ...context, currentScreen: "alcohol
 assert.ok(!alcoholWithoutFinance.some((step) => step.target === '[data-tour="alcohol-budget-transfer"]'));
 
 console.log(`Page-specific tour targets: ${checked} verified; no global/cross-screen steps; responsive and permission variants passed.`);
+
+const originalStorage = globalThis.localStorage;
+const stored = new Map();
+globalThis.localStorage = {
+  getItem: (key) => stored.get(key) ?? null,
+  setItem: (key, value) => stored.set(key, value),
+};
+try {
+  assert.deepEqual(readTourProgress("first-user"), {});
+  saveTourProgress("first-user", { guests: "dismissed", overview: "completed" });
+  assert.deepEqual(readTourProgress("first-user"), { guests: "dismissed", overview: "completed" });
+  assert.deepEqual(readTourProgress("second-user"), {});
+  assert.deepEqual(readTourProgress(), {});
+  saveTourProgress("first-user", { guests: "dismissed", overview: "completed", finance: "completed" });
+  assert.equal(readTourProgress("first-user").guests, "dismissed");
+  assert.equal(readTourProgress("first-user").finance, "completed");
+  assert.equal(readTourProgress("legacy-user", true).guests, "dismissed");
+  saveTourProgress("legacy-user", readTourProgress("legacy-user", true));
+  assert.equal(readTourProgress("legacy-user").guests, "dismissed");
+  saveTourProgress("first-user", { guests: "invalid", overview: "completed", unknown: "completed" });
+  assert.deepEqual(readTourProgress("first-user"), { overview: "completed" });
+  stored.set("wp:guide:user:broken:tourProgress", "not-json");
+  assert.deepEqual(readTourProgress("broken"), {});
+  stored.set("wp:guide:user:broken:tourProgress", "[]");
+  assert.deepEqual(readTourProgress("broken"), {});
+  globalThis.localStorage = {
+    getItem: () => { throw new Error("Storage unavailable"); },
+    setItem: () => { throw new Error("Storage unavailable"); },
+  };
+  assert.deepEqual(readTourProgress("blocked"), {});
+  assert.doesNotThrow(() => saveTourProgress("blocked", { guests: "dismissed" }));
+  console.log("Tour preferences: per-user isolation, per-screen status, legacy dismissal, malformed/blocked storage passed.");
+} finally {
+  if (originalStorage === undefined) delete globalThis.localStorage;
+  else globalThis.localStorage = originalStorage;
+}

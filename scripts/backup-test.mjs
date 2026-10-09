@@ -15,6 +15,7 @@ import {
   encodeBackupChunks,
   decodeBackupChunks,
   BACKUP_SHEET_NAME,
+  validateBackupPayload,
 } from "../src/lib/excelExport.js";
 import {
   encryptBackup,
@@ -84,6 +85,7 @@ const payload = {
     { id: "file-uuid", vendorId: "vendor-uuid", name: "contract.pdf", mime: "application/pdf", size: 2048, createdAt: "2026-09-01T10:00:00.000Z" },
   ],
   settings: {
+    alcohol: { source: "percent", percent: 65, headcount: "240", peoplePerBottle: 4, drinks: [{ id: "drink-1", label: "Wine", packKind: "bottle", packUnits: 1, unitLiters: 0.75, qty: 3, price: 19.95 }] },
     checklistOptions: { categories: ["ספקים", "תכנון ראשוני"], assignees: [{ key: "custom", label: "מפיק" }, { key: "both", label: "שניהם" }] },
     budgetGoal: 180000,
     financeLabels: { income: "הכנסות", expense: "הוצאות" },
@@ -130,6 +132,17 @@ const buffer = await buildWorkbookBuffer({
   backup: payload,
 });
 const restored = await readWorkbookBackup({ arrayBuffer: async () => buffer });
+eq("Full payload passes restore validation", validateBackupPayload(restored), true);
+eq("Plain JSON round trip preserves all fields", JSON.parse(JSON.stringify(payload)), payload);
+eq("Alcohol settings and fractional values survive Excel", restored.settings.alcohol, payload.settings.alcohol);
+for (const invalid of [null, [], { guests: [null] }, { ...payload, version: 999 }, { ...payload, settings: { alcohol: { drinks: [null] } } }]) {
+  eq("Malformed backup rejected before restore", validateBackupPayload(invalid), false);
+}
+const alcoholBuffer = await buildWorkbookBuffer({ alcohol: payload.settings.alcohol, backup: payload });
+const alcoholWorkbook = new (await import("exceljs")).default.Workbook();
+await alcoholWorkbook.xlsx.load(alcoholBuffer);
+eq("Alcohol settings visible in workbook", alcoholWorkbook.getWorksheet("חישוב אלכוהול").getCell(2, 2).value, 65);
+eq("Alcohol shopping list preserves decimal liters", alcoholWorkbook.getWorksheet("רשימת קניית אלכוהול").getCell(2, 5).value, 0.75);
 eq("מסלול מלא: קובץ → payload זהה", restored, payload);
 eq("המוזמן ה-400 שרד", restored.guests[399].name, guests[399].name);
 eq("ההגדרות שרדו", restored.settings, payload.settings);

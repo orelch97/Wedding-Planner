@@ -39,6 +39,136 @@ test.afterEach(async ({ page }) => {
 });
 
 test.describe("emulator isolation and account lifecycle", () => {
+  test("tour preferences track completion, dismissal and manual replay per screen", async ({ page }, testInfo) => {
+    test.setTimeout(180_000);
+    await signUp(page, uniqueIdentity("tour-progress"), { readyTimeout: 60_000 });
+    const invitation = page.locator('[data-tour="invitation"]');
+    const help = page.locator('[data-tour="help"]');
+    const tour = page.getByRole("dialog");
+    const indicator = help.locator('span[aria-hidden="true"]');
+    await expect(invitation).toBeVisible();
+    await expect(indicator).toBeVisible();
+    const animation = await help.evaluate((button) => {
+      const style = getComputedStyle(button);
+      return { name: style.animationName, count: style.animationIterationCount };
+    });
+    expect(animation).toEqual({ name: "pulse", count: "3" });
+    await help.evaluate(async (button) => {
+      await Promise.all(button.getAnimations().map((animation) => animation.finished));
+    });
+    expect(await help.evaluate((button) => button.getAnimations().length)).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath("tour-unseen.png"), animations: "disabled" });
+
+    await invitation.getByRole("button", { name: "התחלת הסיור", exact: true }).click();
+    await expect(tour).toBeVisible();
+    const dialogFits = await tour.evaluate((dialog) => {
+      const rect = dialog.getBoundingClientRect();
+      return rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight;
+    });
+    expect(dialogFits).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("tour-dialog.png"), animations: "disabled" });
+    await page.keyboard.press("Escape");
+    await expect(tour).toHaveCount(0);
+    await expect(invitation).toBeVisible();
+
+    await help.click();
+    for (let step = 0; step < 15; step++) {
+      const finish = tour.getByRole("button", { name: "סיום", exact: true });
+      if (await finish.count()) {
+        await finish.click();
+        break;
+      }
+      await tour.getByRole("button", { name: "הבא", exact: true }).click();
+    }
+    await expect(tour).toHaveCount(0);
+    await expect(invitation).toHaveCount(0);
+    await expect(indicator).toHaveCount(0);
+    await expect(help).toBeFocused();
+    await page.reload();
+    await expectAppHealthy(page);
+    await expect(invitation).toHaveCount(0);
+    await help.click();
+    await expect(tour).toBeVisible();
+    await tour.getByRole("button", { name: "סגירת ההדרכה", exact: true }).click();
+    await expect(invitation).toHaveCount(0);
+
+    await navigateTo(page, "guests");
+    await expect(invitation).toBeVisible();
+    await expect(indicator).toBeVisible();
+    await help.click();
+    await tour.getByRole("button", { name: "דילוג על ההדרכה", exact: true }).click();
+    await expect(invitation).toBeVisible();
+    await invitation.getByRole("button", { name: "לא עכשיו", exact: true }).click();
+    await expect(invitation).toHaveCount(0);
+    await expect(indicator).toHaveCount(0);
+    await page.reload();
+    await expectAppHealthy(page);
+    await navigateTo(page, "guests");
+    await expect(invitation).toHaveCount(0);
+    await help.click();
+    await expect(tour).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(invitation).toHaveCount(0);
+
+    await navigateTo(page, "checklist");
+    await expect(invitation).toBeVisible();
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    expect(await help.evaluate((button) => getComputedStyle(button).animationName)).toBe("none");
+    await help.focus();
+    await page.keyboard.press("Enter");
+    await expect(tour).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(help).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expectAppHealthy(page);
+  });
+
+  test("tour preferences survive sign-out without leaking to another user", async ({ page }) => {
+    test.setTimeout(180_000);
+    const first = uniqueIdentity("tour-first");
+    const second = uniqueIdentity("tour-second");
+    const invitation = page.locator('[data-tour="invitation"]');
+    async function logout() {
+      const desktopLogout = page.getByRole("button", { name: "יציאה", exact: true });
+      if (await desktopLogout.isVisible()) await desktopLogout.click();
+      else {
+        await page.getByRole("button", { name: "פעולות נוספות" }).click();
+        await page.getByRole("menuitem", { name: "יציאה מהחשבון" }).click();
+      }
+      await expect(page.getByLabel("מייל", { exact: true })).toBeVisible();
+    }
+    await page.goto("/");
+    const authHelp = page.getByRole("button", { name: "הדרכה: איך פותחים חשבון", exact: true });
+    await authHelp.click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await authHelp.click();
+    const authTour = page.getByRole("dialog");
+    for (let step = 0; step < 20; step++) {
+      const finish = authTour.getByRole("button", { name: "סיום", exact: true });
+      if (await finish.count()) {
+        await finish.click();
+        break;
+      }
+      await authTour.getByRole("button", { name: "הבא", exact: true }).click();
+    }
+    await expect(authTour).toHaveCount(0);
+    await signUp(page, first, { readyTimeout: 60_000 });
+    await invitation.getByRole("button", { name: "לא עכשיו", exact: true }).click();
+    await expect(invitation).toHaveCount(0);
+    await logout();
+    await signUp(page, second, { readyTimeout: 60_000 });
+    await expect(invitation).toBeVisible();
+    await logout();
+    await signIn(page, first);
+    await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible({ timeout: 30_000 });
+    await expect(invitation).toHaveCount(0);
+    await navigateTo(page, "guests");
+    await expect(invitation).toBeVisible();
+    await expectAppHealthy(page);
+  });
+
   test("shared controls keep actions and filters visible across screens", async ({ page }) => {
     test.setTimeout(120_000);
     await signUp(page, uniqueIdentity("controls"), { readyTimeout: 60_000 });
@@ -241,6 +371,78 @@ test.describe("emulator isolation and account lifecycle", () => {
     const download = page.waitForEvent("download");
     await page.getByRole("button", { name: /ייצוא/ }).click();
     expect((await download).suggestedFilename()).toMatch(/\.csv$/i);
+  });
+
+  test("backup complete JSON and Excel round trips preserve planning data", async ({ page }) => {
+    test.setTimeout(180_000);
+    await signUp(page, uniqueIdentity("backup-complete"), { readyTimeout: 60_000 });
+    const vendorId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const payload = {
+      app: "wedding-planner", version: 3,
+      guests: [{ id: 71, name: "Backup guest", phone: "0501234567", category: "Backup category", seats: 3, drinkers: 2, rsvp: "confirmed", attendingCount: 2, probablyComing: true, considering: true, glatt: true, gift: 123.5, mention: "Guest notes" }],
+      tables: [{ id: 81, name: "Backup table", type: "knight", guestIds: [71] }],
+      vendors: [{ id: vendorId, name: "Backup vendor", type: "DJ", phone: "0521234567", email: "vendor@example.test", contractCost: 1234.5, deposit: 234.5, notes: "Vendor notes", tasks: [{ id: 1, title: "Vendor task", status: "inprogress" }] }],
+      budget: [{ id: 91, category: "Backup budget", expected: 1234.5, actual: 234.5, vendorId, paymentMethod: "Credit Card", notes: "Budget notes" }],
+      checklist: [{ id: 101, title: "Backup task", category: "Custom category", assignee: "custom", notes: "Checklist notes", done: true }],
+      vendorAttachments: [],
+      settings: {
+        budgetGoal: 98765, categories: ["Backup category"], partnerA: "Backup A", partnerB: "Backup B", weddingDate: "2027-06-01", countdownBackgroundUrl: "https://example.test/background.jpg",
+        financeLabels: { income: "Custom income", expense: "Custom expense" },
+        checklistOptions: { categories: ["Custom category"], assignees: [{ key: "custom", label: "Custom assignee" }] },
+        alcohol: { source: "percent", percent: 65, headcount: "240", peoplePerBottle: 4, drinks: [{ id: "drink-1", label: "Wine", packKind: "bottle", packUnits: 1, unitLiters: 0.75, qty: 3, price: 19.95 }] },
+      },
+    };
+    const input = page.locator('input[type="file"]').first();
+    async function restore(file) {
+      await input.setInputFiles(file);
+      const safety = page.waitForEvent("download");
+      await page.getByRole("alertdialog", { name: "שחזור גיבוי יחליף את כל הנתונים" }).getByRole("button", { name: "שחזר נתונים" }).click();
+      expect((await safety).suggestedFilename()).toContain("before-restore");
+      await expect(page.getByText("הגיבוי שוחזר בהצלחה", { exact: true })).toBeVisible();
+      await expect.poll(async () => page.evaluate(async () => {
+        const store = await import("/src/lib/firebaseStore.js");
+        const [wedding] = await store.listWeddings();
+        const data = await store.cloudFetchAll(wedding.id, { scopes: ["all"] });
+        return { guests: data.guests, tables: data.tables, vendors: data.vendors, budget: data.budget, checklist: data.checklist, settings: data.settings };
+      }), { timeout: 45_000 }).toMatchObject({ guests: payload.guests, tables: payload.tables, vendors: payload.vendors, budget: payload.budget, checklist: payload.checklist, settings: { alcohol: payload.settings.alcohol, budgetGoal: payload.settings.budgetGoal, categories: payload.settings.categories, checklistOptions: { assignees: expect.arrayContaining(payload.settings.checklistOptions.assignees) } } });
+    }
+    await restore({ name: "complete.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(payload)) });
+    for (const format of ["json", "xlsx"]) {
+      await page.getByRole("button", { name: "פעולות נוספות" }).click();
+      const downloaded = page.waitForEvent("download");
+      if (format === "json") {
+        await page.getByRole("menuitem", { name: /^קובץ גיבוי \(JSON\)/ }).click();
+        await page.getByRole("alertdialog", { name: "להצפין את קובץ הגיבוי?" }).getByRole("button", { name: "הורד ללא הצפנה" }).click();
+      } else await page.getByRole("menuitem", { name: /ייצוא לאקסל/ }).click();
+      const file = await downloaded;
+      const filePath = await file.path();
+      const { readWorkbookBackup } = await import("../../src/lib/excelExport.js");
+      const bytes = await readFile(filePath);
+      const exported = format === "json" ? JSON.parse(bytes.toString("utf8")) : await readWorkbookBackup({ arrayBuffer: async () => bytes });
+      for (const key of ["guests", "tables", "vendors", "budget", "checklist"]) expect(exported[key]).toMatchObject(payload[key]);
+      expect(exported.settings).toMatchObject({ ...payload.settings, checklistOptions: { assignees: expect.arrayContaining(payload.settings.checklistOptions.assignees), categories: expect.arrayContaining(payload.settings.checklistOptions.categories) } });
+      await restore({ name: file.suggestedFilename(), mimeType: format === "json" ? "application/json" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: bytes });
+      await page.reload();
+      await expectAppHealthy(page);
+      await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible({ timeout: 30_000 });
+    }
+    await input.setInputFiles({ name: "invalid.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ app: "wedding-planner", guests: [null] })) });
+    await expect(page.getByText("קובץ הגיבוי אינו תקין. ודא שזהו קובץ שיוצא מהמערכת.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    await page.evaluate(() => {
+      const original = URL.createObjectURL;
+      URL.createObjectURL = (...args) => {
+        URL.createObjectURL = original;
+        throw new Error(`Simulated safety download failure (${args.length})`);
+      };
+    });
+    await input.setInputFiles({ name: "complete.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ ...payload, guests: [] })) });
+    await page.getByRole("alertdialog", { name: "שחזור גיבוי יחליף את כל הנתונים" }).getByRole("button", { name: "שחזר נתונים" }).click();
+    await expect(page.getByText("לא ניתן ליצור גיבוי בטיחות. השחזור בוטל ולא שונו נתונים.", { exact: true })).toBeVisible();
+    await page.reload();
+    await expectAppHealthy(page);
+    await navigateTo(page, "guests");
+    await expectGuestPresent(page, "Backup guest");
   });
 
   test("downloads guest and workbook exports, then restores an encrypted backup", async ({ page }) => {

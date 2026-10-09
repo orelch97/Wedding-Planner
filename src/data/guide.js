@@ -15,6 +15,37 @@
  */
 const FLAG_PREFIX = "wp:guide:";
 
+function tourProgressKey(userId) {
+  return `${FLAG_PREFIX}${userId ? `user:${encodeURIComponent(userId)}` : "local"}:tourProgress`;
+}
+
+function normalizeTourProgress(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([screen, status]) =>
+    Object.hasOwn(SCREEN_GUIDE, screen) && (status === "completed" || status === "dismissed")
+  ));
+}
+
+export function readTourProgress(userId, legacyDismissed = false) {
+  try {
+    const raw = localStorage.getItem(tourProgressKey(userId));
+    if (raw !== null) return normalizeTourProgress(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+  return legacyDismissed
+    ? Object.fromEntries(Object.keys(SCREEN_GUIDE).map((screen) => [screen, "dismissed"]))
+    : {};
+}
+
+export function saveTourProgress(userId, progress) {
+  try {
+    localStorage.setItem(tourProgressKey(userId), JSON.stringify(normalizeTourProgress(progress)));
+  } catch {
+    /* ignore */
+  }
+}
+
 export function guideSeen(key) {
   try {
     return localStorage.getItem(FLAG_PREFIX + key) === "1";

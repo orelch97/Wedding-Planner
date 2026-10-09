@@ -50,6 +50,7 @@ export function buildSheets({
   checklist = [],
   checklistOptions = {},
   budgetGoal = 0,
+  alcohol,
 } = {}) {
   const guestById = new Map(guests.map((g) => [g.id, g]));
 
@@ -288,7 +289,49 @@ export function buildSheets({
     })),
   };
 
-  return [guestsSheet, vendorsSheet, seatingSheet, budgetSheet, checklistSheet];
+  const sheets = [guestsSheet, vendorsSheet, seatingSheet, budgetSheet, checklistSheet];
+  if (alcohol) {
+    sheets.push({
+      name: "חישוב אלכוהול",
+      columns: [
+        { header: "מקור ההערכה", key: "source", width: 20 },
+        { header: "אחוז שותים", key: "percent", width: 14 },
+        { header: "מספר אורחים משוער", key: "headcount", width: 22 },
+        { header: "אנשים לבקבוק", key: "peoplePerBottle", width: 18 },
+      ],
+      rows: [{ ...alcohol, source: alcohol.source === "marked" ? "מסומנים במוזמנים" : "הערכה באחוזים" }],
+    });
+    const drinks = Array.isArray(alcohol.drinks) ? alcohol.drinks : [];
+    const keys = [...new Set(drinks.flatMap((drink) => Object.keys(drink)))];
+    const labels = { id: "מזהה", label: "משקה", packKind: "סוג אריזה", packUnits: "יחידות באריזה", unitLiters: "ליטרים ליחידה", qty: "כמות", price: "מחיר" };
+    sheets.push({
+      name: "רשימת קניית אלכוהול",
+      columns: (keys.length ? keys : Object.keys(labels)).map((key) => ({ header: labels[key] || key, key, width: 22 })),
+      rows: drinks.map((drink) => ({ ...drink })),
+    });
+  }
+  return sheets;
+}
+
+export function validateBackupPayload(data) {
+  const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  if (!record(data) || (data.app && data.app !== "wedding-planner")) return false;
+  if (data.version != null && (!Number.isInteger(data.version) || data.version < 1 || data.version > 3)) return false;
+  const collections = ["guests", "tables", "vendors", "budget", "checklist", "vendorAttachments"];
+  if (!collections.slice(0, 5).some((key) => Array.isArray(data[key]))) return false;
+  if (collections.some((key) => Object.hasOwn(data, key) && (!Array.isArray(data[key]) || !data[key].every(record)))) return false;
+  if (Object.hasOwn(data, "settings")) {
+    const settings = data.settings;
+    if (!record(settings)) return false;
+    if (Object.hasOwn(settings, "budgetGoal") && !Number.isFinite(settings.budgetGoal)) return false;
+    if (settings.categories != null && (!Array.isArray(settings.categories) || !settings.categories.every((value) => typeof value === "string"))) return false;
+    if (settings.financeLabels != null && (!record(settings.financeLabels) || !Object.values(settings.financeLabels).every((value) => typeof value === "string"))) return false;
+    if (settings.alcohol != null && (!record(settings.alcohol) || !Array.isArray(settings.alcohol.drinks) || !settings.alcohol.drinks.every(record))) return false;
+    for (const key of ["partnerA", "partnerB", "countdownBackgroundUrl", "weddingDate"]) {
+      if (settings[key] != null && typeof settings[key] !== "string") return false;
+    }
+  }
+  return true;
 }
 
 /** שם קובץ בטוח: בלי תווים שאסורים במערכות קבצים ובלי רווחים כפולים. */

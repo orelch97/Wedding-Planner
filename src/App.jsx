@@ -1427,17 +1427,15 @@ function Countdown({
   const incomplete = !date || !couple?.partnerA || !couple?.partnerB;
   return (
     <Card
-      className="relative overflow-hidden bg-gradient-to-br from-slate-800 via-slate-700 to-slate-800 text-white"
+      className={`relative overflow-hidden bg-gradient-to-br from-slate-800 via-slate-700 to-slate-800 text-white ${backgroundUrl ? "countdown-background lg:min-h-[32rem]" : ""}`}
       style={backgroundUrl ? {
         // Quoted and escaped: the URL comes from the database and carries a ?alt=media&token= query.
         backgroundImage: `linear-gradient(rgba(15, 23, 42, 0.68), rgba(15, 23, 42, 0.78)), url("${backgroundUrl.replace(/["\\]/g, "\\$&")}")`,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
       } : undefined}
     >
       <div className="pointer-events-none absolute -left-10 -top-10 h-40 w-40 rounded-full bg-gold-500/30 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-10 -right-10 h-40 w-40 rounded-full bg-sage-400/30 blur-3xl" />
-      <div className="relative flex flex-col items-center gap-5 py-4 text-center">
+      <div className={`relative flex flex-col items-center gap-5 py-4 text-center ${backgroundUrl ? "lg:min-h-[30rem] lg:justify-end lg:pb-6" : ""}`}>
         <Badge color="gold" className="!bg-white/15 !text-gold-200 !ring-white/20">
           <Calendar size={14} />{" "}
           {date ? "הספירה לאחור לרגע הגדול" : "עוד לא נקבע תאריך"}
@@ -5440,7 +5438,7 @@ function Checklist({ items, setItems, options, setOptions }) {
   const [query, setQuery] = useState("");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
-  const [hideDone, setHideDone] = useState(false);
+  const [hideDone, setHideDone] = useState(true);
   const [form, setForm] = useState({ title: "", category: options.categories[0], assignee: options.assignees[0].key, notes: "" });
   const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);

@@ -8,6 +8,34 @@ test.beforeEach(async ({ page }) => { attemptsByPage.set(page, await blockCloudR
 test.afterEach(async ({ page }) => { expect(attemptsByPage.get(page)).toEqual([]); });
 const taskRow = (page, title) => page.locator('[data-tour="checklist-items"] li').filter({ has: page.getByRole("checkbox", { name: `סימון "${title}" כבוצע`, exact: true }) });
 
+test("checklist-default-filter hides completed tasks on entry and remains toggleable", async ({ page }) => {
+  test.setTimeout(120_000);
+  await signUp(page, uniqueIdentity("checklist-default-filter"), { readyTimeout: 60_000 });
+  await navigateTo(page, "checklist");
+  await expect(page.getByRole("button", { name: "הסתרת שהושלמו", exact: true })).toHaveAttribute("aria-pressed", "true");
+
+  await addTask(page, "משימה פתוחה");
+  await addTask(page, "משימה שהושלמה");
+  const completed = taskRow(page, "משימה שהושלמה");
+  await page.getByRole("button", { name: "הסתרת שהושלמו", exact: true }).click();
+  await expect(page.getByRole("button", { name: "הסתרת שהושלמו", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await completed.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "הסתרת שהושלמו", exact: true }).click();
+  await expect(page.getByRole("button", { name: "הסתרת שהושלמו", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(completed).toHaveCount(0);
+  await expect(taskRow(page, "משימה פתוחה")).toBeVisible();
+
+  await page.getByRole("button", { name: "הסתרת שהושלמו", exact: true }).click();
+  await expect(page.getByRole("button", { name: "הסתרת שהושלמו", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await expect(completed).toBeVisible();
+
+  await navigateTo(page, "guests");
+  await navigateTo(page, "checklist");
+  await expect(page.getByRole("button", { name: "הסתרת שהושלמו", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(completed).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 async function openEntry(page) {
   const entry = page.locator('[data-tour="checklist-add"]');
   const toggle = entry.locator("button[aria-expanded]");
@@ -114,6 +142,7 @@ test("checklist editor manages options, notes, collapse, filters and persistence
   await expect(row).toBeVisible();
   await expect(row.getByRole("combobox", { name: "שיוך — ארגון הסעות", exact: true })).not.toHaveValue(customKey);
   await expect(row.getByRole("textbox", { name: "הערות — ארגון הסעות", exact: true })).toHaveValue(longNotes);
+  await page.getByRole("button", { name: "הסתרת שהושלמו", exact: true }).click();
   await row.getByRole("checkbox").check();
   await page.getByRole("button", { name: "הסתרת שהושלמו", exact: true }).click();
   await expect(row).toHaveCount(0);

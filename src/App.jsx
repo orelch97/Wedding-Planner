@@ -149,7 +149,7 @@ import {
 import AdminDashboard from "./components/AdminDashboard.jsx";
 import ChecklistOptionsManager from "./components/ChecklistOptionsManager.jsx";
 import { isAdminEmail } from "./lib/adminConfig.js";
-import { findDuplicatePhones, describeDuplicates } from "./lib/guestDuplicates.js";
+import { findDuplicatePhones, describeDuplicates, phoneDigits } from "./lib/guestDuplicates.js";
 import {
   encryptBackup,
   decryptBackup,
@@ -2478,6 +2478,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     onlyDrinkers: false,
     onlyUnassigned: false,
     onlyDuplicatePhones: false,
+    onlyMissingPhones: false,
   });
 
   const [sort, setSort] = useState({ key: null, dir: "asc" });
@@ -2638,6 +2639,10 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     for (const [id, others] of findDuplicatePhones(guests)) notes.set(id, describeDuplicates(others));
     return notes;
   }, [guests]);
+  const missingPhoneIds = useMemo(
+    () => new Set(guests.filter((guest) => !phoneDigits(guest.phone)).map((guest) => guest.id)),
+    [guests]
+  );
 
   const filtered = useMemo(() => {
     const q = filters.search.trim().toLowerCase();
@@ -2656,10 +2661,11 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       if (filters.onlyGlatt && !g.glatt) return false;
       if (filters.onlyDrinkers && !(g.drinkers > 0)) return false;
       if (filters.onlyDuplicatePhones && !duplicatePhoneNotes.has(g.id)) return false;
+      if (filters.onlyMissingPhones && !missingPhoneIds.has(g.id)) return false;
       if (assigned && assigned.has(g.id)) return false;
       return true;
     });
-  }, [guests, filters, tables, duplicatePhoneNotes]);
+  }, [guests, filters, tables, duplicatePhoneNotes, missingPhoneIds]);
 
   const guestTableMap = useMemo(() => {
     const m = {};
@@ -2704,7 +2710,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     filters.onlyGlatt ||
     filters.onlyDrinkers ||
     filters.onlyUnassigned ||
-    filters.onlyDuplicatePhones
+    filters.onlyDuplicatePhones ||
+    filters.onlyMissingPhones
   );
 
   const guestEmptyState = dataLoading ? (
@@ -2759,7 +2766,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           onClick={() => setFilters({
             search: "", category: "all", rsvp: "all", onlyProbably: false,
             onlyConsidering: false, onlyGlatt: false, onlyDrinkers: false, onlyUnassigned: false,
-            onlyDuplicatePhones: false,
+            onlyDuplicatePhones: false, onlyMissingPhones: false,
           })}
           className="btn-secondary mt-3"
         >
@@ -3215,9 +3222,21 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     notify(`יוצאו ${sorted.length} רשומות לקובץ CSV`, { tone: "success" });
   }
 
+  const guestSummaryCount =
+    2 +
+    Number(totals.probablySeats > 0) +
+    Number(totals.glattSeats > 0) +
+    Number(totals.consideringCount > 0);
+  const guestSummaryGrid = {
+    2: "xl:grid-cols-2",
+    3: "xl:grid-cols-3",
+    4: "xl:grid-cols-4",
+    5: "xl:grid-cols-5",
+  }[guestSummaryCount];
+
   return (
     <div className="space-y-4 sm:space-y-6">
-      <div data-tour="guests-summary" className="grid grid-cols-2 gap-2.5 sm:gap-4 xl:grid-cols-5">
+      <div data-tour="guests-summary" className={`grid grid-cols-2 gap-2.5 sm:gap-4 ${guestSummaryGrid}`}>
         <StatCard icon={Users} label="סה״כ רשומות" value={totals.count} tone="gold" />
         <StatCard
           icon={UserCheck}
@@ -3225,27 +3244,33 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           value={totals.seatsTotal}
           tone="sage"
         />
-        <StatCard
-          icon={Star}
-          label="כנראה יבואו"
-          value={totals.probablySeats}
-          sub={`${totals.probablyCount} רשומות מסומנות`}
-          tone="sage"
-        />
-        <StatCard
-          icon={UtensilsCrossed}
-          label="מנות גלאט להזמין"
-          value={totals.glattSeats}
-          sub={`${totals.glattCount} רשומות מסומנות`}
-          tone="gold"
-        />
-        <StatCard
-          icon={HelpCircle}
-          label="לשקול הזמנה"
-          value={totals.consideringCount}
-          sub="עדיין לא הוחלט"
-          tone="rose"
-        />
+        {totals.probablySeats > 0 && (
+          <StatCard
+            icon={Star}
+            label="כנראה יבואו"
+            value={totals.probablySeats}
+            sub={`${totals.probablyCount} רשומות מסומנות`}
+            tone="sage"
+          />
+        )}
+        {totals.glattSeats > 0 && (
+          <StatCard
+            icon={UtensilsCrossed}
+            label="מנות גלאט להזמין"
+            value={totals.glattSeats}
+            sub={`${totals.glattCount} רשומות מסומנות`}
+            tone="gold"
+          />
+        )}
+        {totals.consideringCount > 0 && (
+          <StatCard
+            icon={HelpCircle}
+            label="לשקול הזמנה"
+            value={totals.consideringCount}
+            sub="עדיין לא הוחלט"
+            tone="rose"
+          />
+        )}
       </div>
 
       {/* RSVP summary */}
@@ -3311,10 +3336,10 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               {canEdit && (
                 <button
                   onClick={() => setCatManagerOpen(true)}
-                  title="הוספה, עריכה ומחיקה של קטגוריות מוזמנים"
+                  title="ניהול קטגוריות מוזמנים"
                   className="btn-secondary"
                 >
-                  <Tag size={17} /> קטגוריות
+                  <Tag size={17} /> ניהול קטגוריות
                 </button>
               )}
               {canEdit && (
@@ -3581,6 +3606,23 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 <AlertTriangle size={15} /> נייד כפול ({duplicatePhoneNotes.size})
               </button>
             )}
+            {(missingPhoneIds.size > 0 || filters.onlyMissingPhones) && (
+              <button
+                onClick={() =>
+                  setFilters({ ...filters, onlyMissingPhones: !filters.onlyMissingPhones })
+                }
+                aria-pressed={filters.onlyMissingPhones}
+                title="רשומות שאין בהן מספר נייד"
+                className={
+                  "filter-chip " +
+                  (filters.onlyMissingPhones
+                    ? "border-amber-600 bg-amber-500 text-slate-950 hover:bg-amber-600"
+                    : "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100")
+                }
+              >
+                <Phone size={15} /> חסר נייד ({missingPhoneIds.size})
+              </button>
+            )}
             {(filters.search ||
               filters.category !== "all" ||
               filters.rsvp !== "all" ||
@@ -3589,7 +3631,8 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               filters.onlyGlatt ||
               filters.onlyDrinkers ||
               filters.onlyUnassigned ||
-              filters.onlyDuplicatePhones) && (
+              filters.onlyDuplicatePhones ||
+              filters.onlyMissingPhones) && (
               <button
                 onClick={() =>
                   setFilters({
@@ -3602,6 +3645,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                     onlyDrinkers: false,
                     onlyUnassigned: false,
                     onlyDuplicatePhones: false,
+                    onlyMissingPhones: false,
                   })
                 }
                 title="ניקוי כל הסינונים"

@@ -731,6 +731,92 @@ test.describe("emulator isolation and account lifecycle", () => {
     await expect(chip).toHaveCount(0);
   });
 
+  test("invitee missing-mobile count filters and hides when resolved", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signUp(page, uniqueIdentity("missing-mobile"), { readyTimeout: 60_000 });
+    await navigateTo(page, "guests");
+
+    const chip = page.getByRole("button", { name: /חסר נייד/ });
+    const guest = (name) => page.locator(`input[value="${name}"]:visible`).first();
+    const add = async (name, phone) => {
+      await openAddGuestForm(page);
+      await page.getByRole("textbox", { name: "שם האורח או המשפחה" }).fill(name);
+      await page.getByRole("textbox", { name: "מספר נייד" }).fill(phone);
+      await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
+      await expect(guest(name)).toBeVisible();
+    };
+
+    await add("עם נייד", "050-1234567");
+    await expect(chip).toHaveCount(0);
+
+    await add("בלי נייד", "");
+    await add("מפרידים בלבד", "- ()");
+    await expect(chip).toContainText("(2)");
+    await chip.click();
+    await expect(chip).toHaveAttribute("aria-pressed", "true");
+    await expect(guest("בלי נייד")).toBeVisible();
+    await expect(guest("מפרידים בלבד")).toBeVisible();
+    await expect(guest("עם נייד")).toHaveCount(0);
+
+    await chip.click();
+    await expect(chip).toHaveAttribute("aria-pressed", "false");
+    const addMobile = async (name, number) => {
+      let phoneField;
+      if ((page.viewportSize()?.width ?? 1365) < 1280) {
+        await page.getByRole("button", { name: `פתיחת פרטי ${name}`, exact: true }).click();
+        const card = page.locator("div.rounded-2xl.border.p-3.transition").filter({ has: guest(name) });
+        phoneField = card.locator('input[placeholder="נייד"]');
+      } else {
+        const row = page.locator("tbody tr").filter({ has: guest(name) });
+        phoneField = row.locator('input[placeholder="נייד"]');
+      }
+      await phoneField.fill(number);
+      await phoneField.blur();
+    };
+    await addMobile("בלי נייד", "052-1111111");
+    await expect(chip).toContainText("(1)");
+    await addMobile("מפרידים בלבד", "052-2222222");
+    await expect(chip).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+
+  test("zero invitee summary cards stay hidden and return when their values become positive", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signUp(page, uniqueIdentity("guest-summary-zero"), { readyTimeout: 60_000 });
+    await navigateTo(page, "guests");
+
+    const summary = page.locator('[data-tour="guests-summary"]');
+    const likely = summary.getByText("כנראה יבואו", { exact: true });
+    const glatt = summary.getByText("מנות גלאט להזמין", { exact: true });
+    const considering = summary.getByText("לשקול הזמנה", { exact: true });
+    await expect(likely).toHaveCount(0);
+    await expect(glatt).toHaveCount(0);
+    await expect(considering).toHaveCount(0);
+
+    const csv = [
+      "שם,נייד,כיסאות,גלאט,כנראה יבוא,לשקול",
+      "Guest likely,0501111111,2,,כן,",
+      "Guest glatt,0502222222,3,כן,,",
+      "Guest considering,0503333333,1,,,כן",
+    ].join("\n");
+    await page.locator('[data-tour="guests-management"] input[type="file"]').setInputFiles({
+      name: "guest-summary-flags.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from(`\uFEFF${csv}`, "utf8"),
+    });
+
+    await expect(likely).toBeVisible();
+    await expect(likely.locator("xpath=.." )).toContainText("2");
+    await expect(glatt).toBeVisible();
+    await expect(glatt.locator("xpath=.." )).toContainText("3");
+    await expect(considering).toBeVisible();
+    await expect(considering.locator("xpath=.." )).toContainText("1");
+    if ((page.viewportSize()?.width ?? 1365) >= 1280) {
+      await expect(summary).toHaveClass(/xl:grid-cols-5/);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+
   test("creates a guest and table, then assigns the guest to the table", async ({ page }) => {
     await signUp(page, uniqueIdentity("seating"));
     await navigateTo(page, "guests");

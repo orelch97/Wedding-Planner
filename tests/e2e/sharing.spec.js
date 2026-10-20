@@ -241,6 +241,23 @@ test.describe("shared access: owner, editors and viewers", () => {
     }
   });
 
+  test("budget-search lets a viewer filter but not edit budget data", async () => {
+    const page = ctx.viewerFinance.page;
+    await reloadToScreen(page, "finance");
+    const search = page.getByRole("textbox", { name: "חיפוש סעיפי תקציב", exact: true });
+    await expect(search).toBeEnabled();
+    await expect(page.getByRole("spinbutton", { name: "עלות — סעיף מהבעלים", exact: true })).toBeDisabled();
+    await expect(page.getByRole("combobox", { name: "אמצעי תשלום — סעיף מהבעלים", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "הוספת סעיף", exact: true })).toHaveCount(0);
+    await search.fill("no-matching-budget-item");
+    await expect(page.getByText("לא נמצאו סעיפים התואמים לחיפוש.", { exact: true }).filter({ visible: true })).toBeVisible();
+    await page.getByRole("button", { name: "ניקוי חיפוש תקציב", exact: true }).click();
+    await expect(shownText(page, "סעיף מהבעלים")).toBeVisible();
+    const probe = await probeScreen(page);
+    expect(probe.editable.filter((label) => !VIEW_ONLY_FIELDS.test(label))).toEqual([]);
+    expect(ctx.viewerFinance.cloudAttempts).toEqual([]);
+  });
+
   test("a viewer sees every screen but cannot change anything", async () => {
     const page = ctx.viewerAll.page;
     const forbiddenButtons = /הוספת|הוסף|מחיקת|ייבוא|תבנית|שחזור|צירוף קובץ|העבר לסעיף|עריכת|קטגוריות$/;

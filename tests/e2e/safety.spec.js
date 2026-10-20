@@ -836,6 +836,50 @@ test.describe("emulator isolation and account lifecycle", () => {
     await expect(page.locator('[data-tour="seating-table-cards"]')).toContainText(guestName);
   });
 
+  test("budget-search filters both layouts without changing totals or stored items", async ({ page }, testInfo) => {
+    test.setTimeout(150_000);
+    await signUp(page, uniqueIdentity("budget-search"), { readyTimeout: 60_000 });
+    await navigateTo(page, "finance");
+    const entry = page.locator('[data-tour="finance-add-item"]');
+    const toggle = entry.getByRole("button", { name: "הוספת סעיף", exact: true });
+    await toggle.click();
+    for (const [name, cost] of [["Hall booking", "1000"], ["Flowers", "250"]]) {
+      await entry.getByRole("textbox", { name: "שם הסעיף", exact: true }).fill(name);
+      await entry.getByRole("spinbutton", { name: "עלות", exact: true }).fill(cost);
+      await entry.getByRole("button", { name: "הוסף", exact: true }).click();
+    }
+    await toggle.click();
+    const hall = page.getByRole("button", { name: "עריכת Hall booking", exact: true });
+    const flowers = page.getByRole("button", { name: "עריכת Flowers", exact: true });
+    await page.getByRole("textbox", { name: "הערות — Hall booking", exact: true }).fill("Deposit NOVEMBER");
+    await page.getByRole("combobox", { name: "אמצעי תשלום — Hall booking", exact: true }).selectOption("Bit");
+    const totals = await page.locator('[data-tour="finance-goal"]').textContent();
+    const search = page.getByRole("textbox", { name: "חיפוש סעיפי תקציב", exact: true });
+    const searchBox = await search.boundingBox();
+    const addBox = await toggle.boundingBox();
+    expect(searchBox.y).toBeGreaterThan(addBox.y + addBox.height);
+    await search.fill("  HALL  ");
+    await expect(hall).toBeVisible();
+    await expect(flowers).toHaveCount(0);
+    await expect(page.locator('[data-tour="finance-goal"]')).toHaveText(totals);
+    await search.fill("november");
+    await expect(hall).toBeVisible();
+    await expect(flowers).toHaveCount(0);
+    await search.fill("Bit");
+    await expect(hall).toBeVisible();
+    await expect(flowers).toHaveCount(0);
+    await search.fill("no-matching-budget-item");
+    await expect(hall).toHaveCount(0);
+    await expect(flowers).toHaveCount(0);
+    await expect(page.getByText("לא נמצאו סעיפים התואמים לחיפוש.", { exact: true }).filter({ visible: true })).toBeVisible();
+    await page.getByRole("button", { name: "ניקוי חיפוש תקציב", exact: true }).click();
+    await expect(search).toHaveValue("");
+    await expect(hall).toBeVisible();
+    await expect(flowers).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("budget-search.png"), fullPage: true });
+  });
+
   test("adds an isolated budget line", async ({ page }) => {
     test.setTimeout(120_000);
     await signUp(page, uniqueIdentity("budget"));

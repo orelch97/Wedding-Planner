@@ -6908,6 +6908,7 @@ function BudgetNotes({ item, canEdit, onChange, label = item.category }) {
 
 function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudgetGoal, financeLabels, setFinanceLabels }) {
   const canEdit = useCanEdit();
+  const [search, setSearch] = useState("");
   const [form, setForm] = useState({ category: "", cost: "", paid: "" });
   const [isAddBudgetOpen, setIsAddBudgetOpen] = useState(false);
   const budgetToggleRef = useRef(null);
@@ -6984,6 +6985,12 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
   //  ללשונית ספקים) מוצג כסעיף רגיל במקום להפיל את המסך.
   const vendorOf = (b) =>
     b.vendorId == null ? null : vendorById.get(b.vendorId) ?? null;
+
+  const searchTerm = search.trim().toLowerCase();
+  const visibleBudget = budget.filter((item) => !searchTerm ||
+    [item.category, vendorOf(item)?.name, item.notes, item.paymentMethod, BUDGET_PAYMENT_LABELS[item.paymentMethod]]
+      .some((value) => String(value ?? "").toLowerCase().includes(searchTerm))
+  );
 
   const contractOf = (v) => Number(v.contractCost) || 0;
 
@@ -7116,10 +7123,8 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
   }
 
   return (
-    /*  מסך התקציב כולו הוא עריכה — אין בו חיפוש, סינון או מיון —
-        ולכן הניטרול הגורף לצופה אינו פוגע בשום פעולת צפייה.  */
-    <fieldset disabled={!canEdit} className="contents">
     <div className="space-y-4 sm:space-y-6">
+      <fieldset disabled={!canEdit} className="min-w-0">
       <Card tourId="finance-goal">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
@@ -7221,8 +7226,10 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
           )}
         </div>
       </Card>
+      </fieldset>
 
       <Card tourId="finance-items">
+        <fieldset disabled={!canEdit} className="min-w-0">
         <SectionTitle
           icon={PiggyBank}
           title={
@@ -7238,6 +7245,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
             />
           }
         />
+        </fieldset>
 
         {budget.some((b) => vendorOf(b)) && (
           <p className="mb-3 flex items-start gap-2 rounded-xl bg-sage-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-sage-200 sm:mb-4">
@@ -7306,6 +7314,23 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
         </CollapsibleAdd>
         )}
 
+        <div data-tour="finance-search" className="mb-4 border-y border-slate-200 bg-slate-50/80 p-3 sm:mb-5 sm:p-4">
+          <label className="mb-2 block text-sm font-bold text-slate-700" htmlFor="budget-search">חיפוש</label>
+          <div className="relative">
+            <Search size={18} aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              id="budget-search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              aria-label="חיפוש סעיפי תקציב"
+              placeholder="חיפוש סעיף תקציב..."
+              className="min-h-11 w-full rounded-xl border border-slate-200 bg-white py-2.5 pr-10 pl-12 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+            />
+            {search && <button type="button" onClick={() => setSearch("")} aria-label="ניקוי חיפוש תקציב" title="ניקוי חיפוש" className="btn-icon absolute left-1 top-1/2 h-9 w-9 -translate-y-1/2"><X size={16} /></button>}
+          </div>
+        </div>
+
+        <fieldset disabled={!canEdit} className="min-w-0">
         <div className="hidden overflow-x-auto lg:block">
           <table className="w-full min-w-[980px] text-right text-sm">
             <thead>
@@ -7341,7 +7366,8 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
               </tr>
             </thead>
             <tbody>
-              {budget.map((b, idx) => {
+              {visibleBudget.map((b) => {
+                const idx = budget.indexOf(b);
                 const rowCost = budgetCostOf(b);
                 const remaining = Math.max(0, rowCost - (b.paid || 0));
                 const vendor = vendorOf(b);
@@ -7491,13 +7517,13 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                   </tr>
                 );
               })}
-              {budget.length === 0 && (
+              {visibleBudget.length === 0 && (
                 <tr>
                   <td
                     colSpan={8}
                     className="px-3 py-10 text-center text-slate-400"
                   >
-                    עדיין אין סעיפי תקציב – הוסיפו סעיף חדש בעזרת הטופס למעלה.
+                    {budget.length === 0 ? "עדיין אין סעיפי תקציב – הוסיפו סעיף חדש בעזרת הטופס למעלה." : "לא נמצאו סעיפים התואמים לחיפוש."}
                   </td>
                 </tr>
               )}
@@ -7517,7 +7543,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
 
         {/* Mobile card view – same data & actions without horizontal scrolling */}
         <div className="space-y-3 lg:hidden">
-          {budget.map((b) => {
+          {visibleBudget.map((b) => {
             const rowCost = budgetCostOf(b);
             const remaining = Math.max(0, rowCost - (b.paid || 0));
             const vendor = vendorOf(b);
@@ -7674,12 +7700,13 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
             );
           })}
 
-          {budget.length === 0 && (
+          {visibleBudget.length === 0 && (
             <div className="rounded-2xl border border-slate-200 bg-white/60 px-4 py-10 text-center text-sm text-slate-400">
-              עדיין אין סעיפי תקציב – הוסיפו סעיף חדש בעזרת הטופס למעלה.
+              {budget.length === 0 ? "עדיין אין סעיפי תקציב – הוסיפו סעיף חדש בעזרת הטופס למעלה." : "לא נמצאו סעיפים התואמים לחיפוש."}
             </div>
           )}
         </div>
+        </fieldset>
       </Card>
 
       <div aria-hidden="true" className="h-28 lg:hidden" />
@@ -7705,7 +7732,6 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
         </div>
       </aside>
     </div>
-    </fieldset>
   );
 }
 

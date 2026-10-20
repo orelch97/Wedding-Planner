@@ -228,6 +228,16 @@ service cloud.firestore {
           allow update: if hasScope(weddingId, 'checklist') && canWriteRole(weddingId) && advancesRevision();
           allow delete: if false;
         }
+
+        match /activity/{activityId} {
+          allow read: if hasScope(weddingId, 'guests');
+          allow write: if false;
+        }
+
+        match /iplan/{docId} {
+          allow read: if hasScope(weddingId, 'guests') && docId == 'snapshot';
+          allow write: if false;
+        }
       }
 
       /* ── הזמנות ──────────────────────────────────────────────────────── */

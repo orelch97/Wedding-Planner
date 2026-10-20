@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "Wedding Planner — סנכרון אישורי הגעה מ-iPlan",
+  "version": "1.0.0",
+  "description": "סנכרון אוטומטי של סטטוס אישורי הגעה מ-iPlan אל מערכת תכנון החתונה (לתצוגה מקדימה ואישור מבוקר).",
+  "permissions": [
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://app.iplan.co.il/*",
+    "https://iplan.co.il/*",
+    "https://*.cloudfunctions.net/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "סנכרון iPlan לחתונה"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://app.iplan.co.il/*",
+        "https://iplan.co.il/*"
+      ],
+      "js": [
+        "content-iplan.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "https://*.onrender.com/*",
+        "https://*.web.app/*"
+      ],
+      "js": [
+        "content-planner.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
+

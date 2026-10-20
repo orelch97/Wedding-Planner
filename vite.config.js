@@ -6,6 +6,9 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    watch: {
+      ignored: ['**/tmp/**'],
+    },
     // מאותו origin כמו האפליקציה, כדי שעוגיית SameSite=Strict תישלח בפיתוח.
     proxy: {
       '/api': {

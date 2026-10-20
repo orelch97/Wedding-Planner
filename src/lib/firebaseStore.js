@@ -1,4 +1,4 @@
-﻿/* =========================================================================
+/* =========================================================================
  *  firebaseStore.js — שכבת הנתונים מול Firestore
  *  ------------------------------------------------------------------------
  *  מחליף את cloudStore.js ומייצא **בדיוק את אותם שמות**, כדי ש-App.jsx
@@ -1019,3 +1019,106 @@ export async function vendorFileUrl(weddingId, fileId) {
   if (!snap.exists()) throw new Error("file_not_found");
   return getDownloadURL(ref(storage, snap.data().storagePath));
 }
+
+
+/* =========================================================================
+ *  סנכרון אישורי הגעה מ-iPlan ויומן פעילות (Activity)
+ * ====================================================================== */
+
+export async function fetchIplanSnapshot(weddingId) {
+  requireWeddingId(weddingId);
+  requireAuth();
+  const snap = await getDoc(doc(weddingCol(weddingId, "iplan"), "snapshot"));
+  if (!snap.exists()) return null;
+  const data = snap.data() || {};
+  return {
+    rows: Array.isArray(data.rows) ? data.rows : [],
+    rowCount: Number(data.rowCount) || 0,
+    eventId: data.eventId || "284821",
+    source: data.source || "extension",
+    syncedAt: toIso(data.syncedAt),
+  };
+}
+
+export function subscribeIplanSnapshot(weddingId, onChange, onError) {
+  requireWeddingId(weddingId);
+  requireAuth();
+  return onSnapshot(
+    doc(weddingCol(weddingId, "iplan"), "snapshot"),
+    (snap) => {
+      if (!snap.exists()) {
+        onChange(null);
+        return;
+      }
+      const data = snap.data() || {};
+      onChange({
+        rows: Array.isArray(data.rows) ? data.rows : [],
+        rowCount: Number(data.rowCount) || 0,
+        eventId: data.eventId || "284821",
+        source: data.source || "extension",
+        syncedAt: toIso(data.syncedAt),
+      });
+    },
+    (err) => {
+      console.error("Realtime subscription failed (iplan/snapshot):", err);
+      onError?.(err);
+    }
+  );
+}
+
+export function subscribeActivity(weddingId, onChange, onError) {
+  requireWeddingId(weddingId);
+  requireAuth();
+  return onSnapshot(
+    weddingCol(weddingId, "activity"),
+    (snap) => {
+      const items = snap.docs
+        .map((d) => {
+          const data = d.data() || {};
+          return {
+            id: d.id,
+            batchId: data.batchId || d.id,
+            at: toIso(data.at) || new Date(0).toISOString(),
+            source: data.source || "iplan",
+            byUid: data.byUid || null,
+            updatedCount: Number(data.updatedCount) || 0,
+            changes: Array.isArray(data.changes) ? data.changes : [],
+          };
+        })
+        .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+        .slice(0, 50);
+      onChange(items);
+    },
+    (err) => {
+      console.error("Realtime subscription failed (activity):", err);
+      onError?.(err);
+    }
+  );
+}
+
+export async function issueIplanSyncToken(weddingId) {
+  requireWeddingId(weddingId);
+  requireAuth();
+  const call = httpsCallable(functions, "issueIplanSyncToken");
+  const { data } = await call({ env: FIREBASE_ENV, weddingId });
+  return data;
+}
+
+export async function commitIplanRsvpUpdates(
+  weddingId,
+  changes,
+  { source = "iplan", applyToGuests = false } = {}
+) {
+  requireWeddingId(weddingId);
+  requireAuth();
+  const call = httpsCallable(functions, "commitIplanRsvpUpdates");
+  const { data } = await call({
+    env: FIREBASE_ENV,
+    weddingId,
+    changes,
+    source,
+    applyToGuests,
+  });
+  return data;
+}
+

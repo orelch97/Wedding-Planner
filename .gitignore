@@ -44,3 +44,6 @@ tmp/
 *.njsproj
 *.sln
 *.sw?
+
+# הגדרות מקומיות של תוסף הכרום (מכיל טוקן סנכרון לחתונה)
+iplan-extension/local-config.js

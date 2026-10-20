@@ -19,7 +19,7 @@
  *    כל פונקציה כאן בודקת בעלות במפורש מול Firestore.
  * ========================================================================== */
 
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
@@ -964,3 +964,213 @@ exports.acceptInvite = onCall({ region: REGION }, async (request) => {
   await refreshWeddingClaims(env, uid);
   return acceptance;
 });
+
+
+/* =============================================================================
+ *  סנכרון אישורי הגעה מ-iPlan — תוסף כרום + תצוגה מקדימה ואישור מבוקר
+ * -----------------------------------------------------------------------------
+ *  1. issueIplanSyncToken — מנפיק טוקן לתוסף הכרום (שומר רק SHA-256 ב-iplan/auth).
+ *  2. iplanExtensionSync  — נקודת קצה (HTTPS) לתוסף הכרום ששומרת את תמונת המצב
+ *                           העדכנית מ-iPlan תחת iplan/snapshot (ללא דריסה אוטומטית
+ *                           של מוזמנים, כדי שהמשתמש יאשר בפופ-אפ במערכת).
+ *  3. commitIplanRsvpUpdates — מתעד ביומן הפעילות (activity) את העדכונים שהמשתמש
+ *                              אישר, ואופציונלית מעדכן טרנזקציונית רק את שדה
+ *                              אישור ההגעה (rsvp + attendingCount) של המוזמנים.
+ * ========================================================================== */
+
+async function requireGuestEditor(env, weddingId, uid) {
+  const [weddingSnap, memberSnap] = await Promise.all([
+    weddingRef(env, weddingId).get(),
+    weddingRef(env, weddingId).collection("members").doc(uid).get(),
+  ]);
+  if (!weddingSnap.exists) {
+    throw new HttpsError("not-found", "החתונה לא נמצאה.");
+  }
+  if (weddingSnap.data().ownerId === uid) {
+    return weddingSnap.data();
+  }
+  if (!memberSnap.exists) {
+    throw new HttpsError("permission-denied", "אינכם חברים בחתונה זו.");
+  }
+  const member = memberSnap.data();
+  if (member.role !== "owner" && member.role !== "editor") {
+    throw new HttpsError("permission-denied", "הרשאת צפייה בלבד אינה מאפשרת עדכון אישורי הגעה.");
+  }
+  if (!hasScope(member.scopes, "guests")) {
+    throw new HttpsError("permission-denied", "חסרה הרשאה למסך המוזמנים.");
+  }
+  return weddingSnap.data();
+}
+
+function sanitizeIplanRow(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const name = String(raw.name || "").trim().slice(0, 200);
+  const phone = String(raw.phone || "").trim().slice(0, 40);
+  const landline = String(raw.landline || "").trim().slice(0, 40);
+  if (!name && !phone && !landline) return null;
+  const invited = Math.max(1, Math.min(100, Math.round(Number(raw.invited) || 1)));
+  const rsvp = ["confirmed", "declined", "pending"].includes(raw.rsvp) ? raw.rsvp : "pending";
+  const attendingCount =
+    rsvp === "confirmed"
+      ? Math.max(1, Math.min(100, Math.round(Number(raw.attendingCount) || invited)))
+      : 0;
+  const hasResponse = Boolean(raw.hasResponse);
+  const rawStatus = String(raw.rawStatus || rsvp).slice(0, 40);
+  return { name, phone, landline, invited, rsvp, attendingCount, hasResponse, rawStatus };
+}
+
+exports.issueIplanSyncToken = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+  const data = request.data || {};
+  const env = envOf(data);
+  const weddingId = String(data.weddingId || "").trim();
+  if (!weddingId) throw new HttpsError("invalid-argument", "חסר מזהה חתונה.");
+
+  await requireOwner(env, weddingId, uid);
+
+  const token = randomBytes(32).toString("base64url");
+  await weddingRef(env, weddingId)
+    .collection("iplan")
+    .doc("auth")
+    .set({
+      tokenHash: hashToken(token),
+      updatedBy: uid,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+  return { token, weddingId, env };
+});
+
+exports.iplanExtensionSync = onRequest({ region: REGION, cors: true }, async (req, res) => {
+  if (req.method === "OPTIONS") {
+    res.status(204).send("");
+    return;
+  }
+  if (req.method !== "POST") {
+    res.status(405).json({ ok: false, error: "Method Not Allowed" });
+    return;
+  }
+
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const env = body.env === "prod" ? "prod" : "test";
+    const weddingId = String(body.weddingId || "").trim();
+    const token = String(body.token || "").trim();
+    const rawRows = Array.isArray(body.rows) ? body.rows : [];
+    const eventId = String(body.eventId || "284821").trim().slice(0, 32);
+
+    if (!weddingId || !token) {
+      res.status(400).json({ ok: false, error: "חסר מזהה חתונה או טוקן סנכרון." });
+      return;
+    }
+
+    const authDoc = await weddingRef(env, weddingId).collection("iplan").doc("auth").get();
+    if (!authDoc.exists || authDoc.get("tokenHash") !== hashToken(token)) {
+      res.status(403).json({ ok: false, error: "טוקן הסנכרון אינו תקף." });
+      return;
+    }
+
+    if (rawRows.length > 5000) {
+      res.status(400).json({ ok: false, error: "מספר השורות חורג מהמקסימום המותר (5000)." });
+      return;
+    }
+
+    const rows = rawRows.map(sanitizeIplanRow).filter(Boolean);
+    await weddingRef(env, weddingId)
+      .collection("iplan")
+      .doc("snapshot")
+      .set({
+        rows,
+        rowCount: rows.length,
+        eventId,
+        source: "extension",
+        syncedAt: FieldValue.serverTimestamp(),
+      });
+
+    res.status(200).json({ ok: true, rowCount: rows.length });
+  } catch (err) {
+    console.error("iplanExtensionSync error:", err);
+    res.status(500).json({ ok: false, error: "שגיאת שרת בסנכרון iPlan." });
+  }
+});
+
+exports.commitIplanRsvpUpdates = onCall({ region: REGION }, async (request) => {
+  const uid = requireAuth(request);
+  const data = request.data || {};
+  const env = envOf(data);
+  const weddingId = String(data.weddingId || "").trim();
+  if (!weddingId) throw new HttpsError("invalid-argument", "חסר מזהה חתונה.");
+
+  await requireGuestEditor(env, weddingId, uid);
+
+  const rawChanges = Array.isArray(data.changes) ? data.changes : [];
+  if (!rawChanges.length) {
+    return { updatedCount: 0, batchId: null };
+  }
+  if (rawChanges.length > 2000) {
+    throw new HttpsError("invalid-argument", "מספר העדכונים באצווה חורג מהמותר.");
+  }
+
+  const cleanChanges = rawChanges
+    .map((c) => {
+      if (!c || c.guestId == null) return null;
+      const toRsvp = ["confirmed", "declined", "pending"].includes(c.toRsvp) ? c.toRsvp : null;
+      if (!toRsvp) return null;
+      const fromRsvp = ["confirmed", "declined", "pending"].includes(c.fromRsvp) ? c.fromRsvp : "pending";
+      return {
+        guestId: Number(c.guestId),
+        guestName: String(c.guestName || "").trim().slice(0, 200),
+        fromRsvp,
+        fromAttendingCount: Math.max(0, Math.round(Number(c.fromAttendingCount) || 0)),
+        toRsvp,
+        toAttendingCount:
+          toRsvp === "confirmed" ? Math.max(1, Math.round(Number(c.toAttendingCount) || 1)) : 0,
+      };
+    })
+    .filter(Boolean);
+
+  if (!cleanChanges.length) {
+    return { updatedCount: 0, batchId: null };
+  }
+
+  const applyToGuests = Boolean(data.applyToGuests);
+  const wRef = weddingRef(env, weddingId);
+
+  if (applyToGuests) {
+    for (const change of cleanChanges) {
+      const gRef = wRef.collection("guests").doc(String(change.guestId));
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(gRef);
+        if (!snap.exists || snap.get("deletedAt")) return;
+        const currentRev = Number(snap.get("revision")) || 0;
+        const seats = Math.max(1, Number(snap.get("seats")) || 1);
+        const attendingCount =
+          change.toRsvp === "confirmed"
+            ? Math.max(1, Math.min(seats, change.toAttendingCount))
+            : 0;
+        // עדכון אך ורק של rsvp ו-attendingCount + קידום revision ו-updatedAt
+        tx.update(gRef, {
+          rsvp: change.toRsvp,
+          attendingCount,
+          revision: currentRev + 1,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      });
+    }
+  }
+
+  const batchId = randomUUID();
+  const actRef = wRef.collection("activity").doc(batchId);
+  await actRef.set({
+    id: batchId,
+    batchId,
+    at: FieldValue.serverTimestamp(),
+    source: String(data.source || "iplan").slice(0, 40),
+    byUid: uid,
+    updatedCount: cleanChanges.length,
+    changes: cleanChanges.slice(0, 300),
+  });
+
+  return { updatedCount: cleanChanges.length, batchId };
+});
+

@@ -142,12 +142,14 @@ import {
   deleteWedding,
   ensureMyWedding,
   migrateVendorIds,
-  subscribeCollection,
+  subscribeCollection, subscribeIplanSnapshot, subscribeActivity, issueIplanSyncToken, commitIplanRsvpUpdates,
   touchMembership,
   MAX_FILE_BYTES,
 } from "./lib/firebaseStore";
 import AdminDashboard from "./components/AdminDashboard.jsx";
 import ChecklistOptionsManager from "./components/ChecklistOptionsManager.jsx";
+import { IplanSyncModal, ActivityBell } from "./components/IplanSyncModal.jsx";
+import { reconcileIplan } from "./lib/iplanSync.js";
 import { isAdminEmail } from "./lib/adminConfig.js";
 import { findDuplicatePhones, describeDuplicates, phoneDigits } from "./lib/guestDuplicates.js";
 import {
@@ -2428,7 +2430,7 @@ const GuestCard = memo(function GuestCard({
   );
 });
 
-function Guests({ guests, setGuests, tables, setTables, categories, setCategories, dataLoading = false, dataUnavailable = false }) {
+function Guests({ guests, setGuests, tables, setTables, categories, setCategories, dataLoading = false, dataUnavailable = false, onOpenIplanSync = null, pendingIplanCount = 0 }) {
   const canEdit = useCanEdit();
   const fileRef = useRef(null);
   const addGuestFormRef = useRef(null);
@@ -3373,6 +3375,23 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                     <>
                       <Upload size={18} /> ייבוא Excel / CSV
                     </>
+                  )}
+                </button>
+              )}
+              {canEdit && onOpenIplanSync && (
+                <button
+                  type="button"
+                  data-testid="open-iplan-sync-btn"
+                  onClick={onOpenIplanSync}
+                  title="עדכון אישורי הגעה מ-iPlan (תצוגה מקדימה ואישור)"
+                  className="btn-secondary relative border-gold-300 bg-gold-50/70 text-gold-900 hover:bg-gold-100/80"
+                >
+                  <CheckCheck size={17} className="text-gold-700" />
+                  <span>עדכון אישורי הגעה</span>
+                  {pendingIplanCount > 0 && (
+                    <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gold-600 px-1.5 text-[11px] font-bold text-white">
+                      {pendingIplanCount}
+                    </span>
                   )}
                 </button>
               )}
@@ -9475,6 +9494,48 @@ function WeddingApp({
     : localCouple;
   const coupleTitle = coupleToTitle(couple);
   const [countdownBackgroundUrl, setCountdownBackgroundUrl] = useState("");
+  const [iplanModalOpen, setIplanModalOpen] = useState(false);
+  const [iplanSnapshot, setIplanSnapshot] = useState(null);
+  const [iplanActivity, setIplanActivity] = usePersistentState("iplanActivity", []);
+
+  useEffect(() => {
+    if (!cloudEnabled || !weddingId || !mayGuests) return undefined;
+    const unsubSnap = subscribeIplanSnapshot(weddingId, (snap) => setIplanSnapshot(snap));
+    const unsubAct = subscribeActivity(weddingId, (items) => setIplanActivity(items));
+    return () => {
+      unsubSnap?.();
+      unsubAct?.();
+    };
+  }, [cloudEnabled, weddingId, mayGuests, setIplanActivity]);
+
+  const pendingIplanCount = useMemo(() => {
+    if (!iplanSnapshot?.rows?.length) return 0;
+    return reconcileIplan({ guests, rows: iplanSnapshot.rows }).updates.length;
+  }, [guests, iplanSnapshot]);
+
+  const handleCommitIplanActivity = useCallback(
+    async (changes, source = "iplan") => {
+      if (!changes?.length) return;
+      if (cloudEnabled && weddingId) {
+        try {
+          await commitIplanRsvpUpdates(weddingId, changes, { source, applyToGuests: false });
+          return;
+        } catch (err) {
+          console.error("Failed to record iPlan activity in cloud:", err);
+        }
+      }
+      const localBatch = {
+        id: `local-${Date.now()}`,
+        batchId: `local-${Date.now()}`,
+        at: new Date().toISOString(),
+        source,
+        updatedCount: changes.length,
+        changes,
+      };
+      setIplanActivity((prev) => [localBatch, ...(Array.isArray(prev) ? prev : [])].slice(0, 50));
+    },
+    [cloudEnabled, weddingId, setIplanActivity]
+  );
 
   const handleCountdownBackgroundChange = useCallback(
     async (file) => {
@@ -10578,6 +10639,18 @@ function WeddingApp({
       <ToastHost />
       <ConfirmHost />
       <PromptHost />
+      <IplanSyncModal
+        open={iplanModalOpen}
+        onClose={() => setIplanModalOpen(false)}
+        guests={guests}
+        setGuests={setGuests}
+        cloudSnapshot={iplanSnapshot}
+        weddingId={cloudEnabled ? weddingId : null}
+        isOwner={isOwner}
+        onIssueToken={cloudEnabled && isOwner ? issueIplanSyncToken : null}
+        onCommitActivity={handleCommitIplanActivity}
+        onNotify={notify}
+      />
       {membersOpen && (
         <MembersModal
           weddingId={weddingId}
@@ -10676,6 +10749,15 @@ function WeddingApp({
               <HelpCircle size={19} />
               {!tourStatus && <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-gold-600 ring-2 ring-white" />}
             </button>
+            {mayGuests && (
+              <ActivityBell
+                activity={iplanActivity}
+                userId={session?.user?.id ?? "local"}
+                weddingId={weddingId || "local"}
+                pendingIplanCount={canEdit ? pendingIplanCount : 0}
+                onOpenIplanModal={canEdit ? () => setIplanModalOpen(true) : null}
+              />
+            )}
             {/* במצב ענן מחוון הענן כבר מספר את סיפור השמירה; שני מחוונים זה
                 רעש ודוחק את כותרת המסך. מציגים "נשמר" רק במצב מקומי. */}
             {isCloudConfigured ? (
@@ -10964,6 +11046,8 @@ function WeddingApp({
           {active === "guests" && (
             <CategoriesContext.Provider value={categories}>
               <Guests
+                onOpenIplanSync={canEdit ? () => setIplanModalOpen(true) : null}
+                pendingIplanCount={pendingIplanCount}
                 guests={guests}
                 setGuests={setGuests}
                 tables={tables}

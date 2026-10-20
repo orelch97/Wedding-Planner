@@ -149,7 +149,7 @@ await check("reconcileIplan flags duplicate phones as ambiguous and never auto-u
 await check("reconcileIplan flags missing phones and guests not in our list as unmatched", () => {
   const guests = [{ id: 1, name: "ישראל ישראלי", phone: "050-1111111", seats: 2, rsvp: "pending" }];
   const rows = [
-    { name: "ישראל ישראלי", phone: "", invited: 2, confirmed: "2" },
+    { name: "אורח ללא נייד שאינו ברשימה", phone: "", invited: 2, confirmed: "2" },
     { name: "אורח חדש מ-iPlan", phone: "052-9999999", invited: 1, confirmed: "1" },
   ];
 
@@ -158,6 +158,21 @@ await check("reconcileIplan flags missing phones and guests not in our list as u
   assert.equal(result.unmatched.length, 2);
   assert.equal(result.unmatched[0].reason, "missing_phone");
   assert.equal(result.unmatched[1].reason, "not_in_guest_list");
+});
+
+await check("reconcileIplan matches unique guest by exact name when phone is missing in Wedding Planner", () => {
+  const guests = [
+    { id: 77, name: "נריה ושילת בחור", phone: "", seats: 2, category: "צד חתן - חברים", rsvp: "pending" },
+  ];
+  const rows = [
+    { name: "נריה ושילת בחור", phone: "052-279-8717", invited: 2, confirmed: "2 מגיעים" },
+  ];
+
+  const result = reconcileIplan({ guests, rows });
+  assert.equal(result.updates.length, 1);
+  assert.equal(result.updates[0].guestId, 77);
+  assert.equal(result.updates[0].toRsvp, "confirmed");
+  assert.equal(result.updates[0].toAttendingCount, 2);
 });
 
 await check("reconcileIplan protects manual local confirmations when iPlan row is unanswered unless requested", () => {

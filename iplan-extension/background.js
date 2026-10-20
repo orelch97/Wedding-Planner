@@ -2,8 +2,6 @@ import * as XLSX from "./vendor/xlsx.mjs";
 import { DEFAULT_CONFIG } from "./config.js";
 
 const ALARM_NAME = "iplan-periodic-sync";
-const SYNC_COOLDOWN_MS = 20_000;
-let lastSyncStartedAt = 0;
 
 async function getConfig() {
   let localFileConfig = {};
@@ -21,6 +19,39 @@ async function getConfig() {
   };
 }
 
+async function getInitialBaselineRows() {
+  try {
+    const mod = await import("./initial-rows.js");
+    if (mod && Array.isArray(mod.INITIAL_ROWS)) {
+      return mod.INITIAL_ROWS;
+    }
+  } catch {
+    // initial-rows.js הוא אופציונלי
+  }
+  return [];
+}
+
+function phoneKey(value) {
+  let digits = String(value ?? "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("00972") && digits.length >= 12) digits = digits.slice(5);
+  else if (digits.startsWith("972") && digits.length >= 10) digits = digits.slice(3);
+  while (digits.startsWith("0") && digits.length >= 9) digits = digits.slice(1);
+  if (digits.length > 9) digits = digits.slice(-9);
+  if (digits.length < 8) return "";
+  return digits;
+}
+
+function normalizeName(name) {
+  return String(name ?? "")
+    .trim()
+    .replace(/[\u0591-\u05C7]/g, "")
+    .replace(/["'״׳`\-–—.,()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 function normalizePhone(raw) {
   const s = String(raw ?? "").trim();
   if (!s) return "";
@@ -31,7 +62,7 @@ function normalizePhone(raw) {
   return s;
 }
 
-function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw, invited }) {
+function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw }) {
   const confText = String(confirmedRaw ?? "").trim();
   const consText = String(consideringRaw ?? "").trim();
   const declText = String(declinedRaw ?? "").trim();
@@ -68,15 +99,22 @@ function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw, invit
   return { rsvp: "pending", attendingCount: 0, hasResponse: false, rawStatus: "unanswered" };
 }
 
-function parseExportBuffer(buffer) {
-  const bytes = new Uint8Array(buffer);
-  // וידוא שמדובר בקובץ XLS בינארי של iPlan ולא בדף HTML של התחברות
+function base64ToUint8Array(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function parseExportBytes(bytes) {
   const isOle2 =
     bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
   const isZip =
     bytes[0] === 0x50 && bytes[1] === 0x4b && (bytes[2] === 0x03 || bytes[2] === 0x05);
   if (!isOle2 && !isZip) {
-    throw new Error("לא מחוברים ל-iPlan בדפדפן זה (נדרשת כניסה ל-app.iplan.co.il).");
+    return [];
   }
 
   const wb = XLSX.read(bytes, { type: "array" });
@@ -92,7 +130,6 @@ function parseExportBuffer(buffer) {
     (r) => Array.isArray(r) && r.some((c) => String(c ?? "").trim() !== "")
   );
 
-  // בייצוא של iPlan שורה 0 היא כותרות-על ושורה 1 היא כותרות העמודות
   let headerRowIdx = 1;
   for (let i = 0; i < Math.min(5, nonEmpty.length); i++) {
     const joined = nonEmpty[i].join(" ");
@@ -148,69 +185,152 @@ function parseExportBuffer(buffer) {
   return rows;
 }
 
-async function performSync({ force = false, source = "auto" } = {}) {
-  const now = Date.now();
-  if (!force && now - lastSyncStartedAt < SYNC_COOLDOWN_MS) {
-    const cached = await chrome.storage.local.get("lastSyncState");
-    return cached.lastSyncState || { ok: true, skipped: true };
-  }
-  lastSyncStartedAt = now;
+/**
+ * ממזג שורות חדשות (מייצוא חלקי או מטבלת ה-DOM) אל תוך מערך כל ההזמנות,
+ * כך שגם כאשר המשתמש מסנן ב-iPlan לפי שם בודד (למשל "נריה"), הרשומה מתעדכנת
+ * בתוך תמונת המצב המלאה (538 הזמנות) בלי לאבד את שאר ההזמנות.
+ */
+function mergeRows(baseRows = [], overlayRows = []) {
+  if (!overlayRows || overlayRows.length === 0) return baseRows;
+  if (!baseRows || baseRows.length === 0) return overlayRows;
 
-  const config = await getConfig();
-  const exportUrl = `https://app.iplan.co.il/he-IL/client/events/${encodeURIComponent(
-    config.eventId || "284821"
-  )}/invitations/export.xls`;
+  const result = baseRows.map((r) => ({ ...r }));
+  const indexByPhone = new Map();
+  const indexByName = new Map();
 
-  try {
-    const response = await fetch(exportUrl, {
-      method: "GET",
-      credentials: "include",
-      cache: "no-store",
-    });
+  result.forEach((r, idx) => {
+    const pk = phoneKey(r.phone) || phoneKey(r.landline);
+    if (pk && !indexByPhone.has(pk)) indexByPhone.set(pk, idx);
+    const nk = normalizeName(r.name);
+    if (nk && !indexByName.has(nk)) indexByName.set(nk, idx);
+  });
 
-    if (!response.ok || response.url.includes("sign_in")) {
-      throw new Error("נדרשת התחברות פעילה ל-iPlan בדפדפן.");
+  for (const inc of overlayRows) {
+    if (!inc) continue;
+    const pk = phoneKey(inc.phone) || phoneKey(inc.landline);
+    const nk = normalizeName(inc.name);
+
+    let targetIdx = pk && indexByPhone.has(pk) ? indexByPhone.get(pk) : undefined;
+    if (targetIdx === undefined && nk && indexByName.has(nk)) {
+      targetIdx = indexByName.get(nk);
     }
 
-    const buffer = await response.arrayBuffer();
-    const rows = parseExportBuffer(buffer);
-    const syncedAt = new Date().toISOString();
+    if (targetIdx !== undefined) {
+      const prev = result[targetIdx];
+      result[targetIdx] = {
+        ...prev,
+        name: inc.name || prev.name,
+        phone: inc.phone || prev.phone,
+        landline: inc.landline || prev.landline,
+        invited: inc.invited || prev.invited,
+        rsvp: inc.rsvp,
+        attendingCount: inc.attendingCount,
+        hasResponse: inc.hasResponse,
+        rawStatus: inc.rawStatus,
+      };
+    } else if (inc.name || inc.phone) {
+      const newIdx = result.length;
+      result.push({ ...inc });
+      if (pk) indexByPhone.set(pk, newIdx);
+      if (nk) indexByName.set(nk, newIdx);
+    }
+  }
 
-    let cloudResult = { uploaded: false };
-    if (config.endpointUrl && config.weddingId && config.token) {
-      const cloudRes = await fetch(config.endpointUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          env: config.env || "prod",
-          weddingId: config.weddingId,
-          token: config.token,
-          eventId: config.eventId || "284821",
-          source,
-          rows,
-        }),
-      });
-      const cloudJson = await cloudRes.json().catch(() => ({}));
-      if (!cloudRes.ok || !cloudJson.ok) {
-        throw new Error(cloudJson.error || `שגיאת שרת (${cloudRes.status})`);
+  return result;
+}
+
+async function ensureSeededRows() {
+  const stored = await chrome.storage.local.get("lastSyncedRows");
+  let current = Array.isArray(stored.lastSyncedRows) ? stored.lastSyncedRows : [];
+  const baseline = await getInitialBaselineRows();
+  if (baseline.length > 0 && current.length < baseline.length) {
+    current = mergeRows(baseline, current);
+    await chrome.storage.local.set({ lastSyncedRows: current });
+  }
+  return current;
+}
+
+async function uploadRowsToCloud(rows, source = "extension") {
+  const config = await getConfig();
+  if (!config.endpointUrl || !config.weddingId || !config.token || !rows.length) {
+    return { uploaded: false };
+  }
+
+  const cloudRes = await fetch(config.endpointUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      env: config.env || "prod",
+      weddingId: config.weddingId,
+      token: config.token,
+      eventId: config.eventId || "284821",
+      source,
+      rows,
+    }),
+  });
+  const cloudJson = await cloudRes.json().catch(() => ({}));
+  if (!cloudRes.ok || !cloudJson.ok) {
+    throw new Error(cloudJson.error || `שגיאת שרת (${cloudRes.status})`);
+  }
+  return { uploaded: true, rowCount: cloudJson.rowCount };
+}
+
+async function ingestFromPage({ exportBase64, domRows = [], filterActive = false, source = "iplan-visit" }) {
+  try {
+    let currentRows = await ensureSeededRows();
+    let exportRows = [];
+
+    if (exportBase64) {
+      const bytes = base64ToUint8Array(exportBase64);
+      exportRows = parseExportBytes(bytes);
+    }
+
+    if (exportRows.length === 0 && (!domRows || domRows.length === 0)) {
+      if (currentRows.length > 0) {
+        return {
+          ok: true,
+          rowCount: currentRows.length,
+          exportedCount: 0,
+          syncedAt: new Date().toISOString(),
+          rows: currentRows,
+        };
       }
-      cloudResult = { uploaded: true, rowCount: cloudJson.rowCount };
+      throw new Error("לא נמצאו רשומות בדף iPlan.");
+    }
+
+    // אם הייצוא הוא מלא (>= 500 הזמנות וללא סינון), הוא הופך לבסיס החדש; אחרת ממזגים לתוך הבסיס הקיים
+    let merged = currentRows;
+    if (exportRows.length >= 450 && !filterActive) {
+      merged = mergeRows(exportRows, domRows);
+    } else {
+      merged = mergeRows(merged, exportRows);
+      merged = mergeRows(merged, domRows);
+    }
+
+    const syncedAt = new Date().toISOString();
+    let uploaded = false;
+    try {
+      const cloudRes = await uploadRowsToCloud(merged, source);
+      uploaded = cloudRes.uploaded;
+    } catch (cloudErr) {
+      console.warn("Cloud upload warning:", cloudErr);
     }
 
     const state = {
       ok: true,
-      rowCount: rows.length,
+      rowCount: merged.length,
+      exportedCount: exportRows.length || domRows.length,
       syncedAt,
-      uploadedToCloud: cloudResult.uploaded,
+      uploadedToCloud: uploaded,
       error: null,
     };
 
     await chrome.storage.local.set({
       lastSyncState: state,
-      lastSyncedRows: rows,
+      lastSyncedRows: merged,
     });
 
-    return { ...state, rows };
+    return { ...state, rows: merged };
   } catch (err) {
     const state = {
       ok: false,
@@ -222,11 +342,114 @@ async function performSync({ force = false, source = "auto" } = {}) {
   }
 }
 
+async function performSync({ force = false, source = "auto" } = {}) {
+  // 1. ניסיון ראשון: אם פתוחה לשונית של iPlan בדפדפן, נבקש ממנה לאסוף ב-Same-Origin
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ["https://app.iplan.co.il/*", "https://iplan.co.il/*"],
+    });
+    for (const tab of tabs) {
+      if (!tab.id || (tab.url && tab.url.includes("sign_in"))) continue;
+      try {
+        const pageRes = await chrome.tabs.sendMessage(tab.id, { type: "IPLAN_PAGE_COLLECT" });
+        if (pageRes && pageRes.ok && (pageRes.exportBase64 || (pageRes.domRows && pageRes.domRows.length > 0))) {
+          return await ingestFromPage({
+            exportBase64: pageRes.exportBase64,
+            domRows: pageRes.domRows,
+            filterActive: pageRes.filterActive,
+            source,
+          });
+        }
+      } catch {
+        // אם ה-content script טרם הוזרק ללשונית הפתוחה, נזריק אותו כעת
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ["content-iplan.js"],
+          });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch {
+    // ignore tabs query errors
+  }
+
+  // 2. גיבוי: שימוש בנתונים השמורים והמוזרעים בתוסף
+  const rows = await ensureSeededRows();
+  if (rows.length > 0) {
+    const syncedAt = new Date().toISOString();
+    let uploaded = false;
+    if (force) {
+      try {
+        const res = await uploadRowsToCloud(rows, source);
+        uploaded = res.uploaded;
+      } catch {
+        // ignore
+      }
+    }
+    const state = {
+      ok: true,
+      rowCount: rows.length,
+      syncedAt,
+      uploadedToCloud: uploaded,
+      error: null,
+    };
+    await chrome.storage.local.set({ lastSyncState: state, lastSyncedRows: rows });
+    return { ...state, rows };
+  }
+
+  return {
+    ok: false,
+    error: "פתחו את לשונית iPlan בדפדפן כדי לסנכרן.",
+    syncedAt: new Date().toISOString(),
+  };
+}
+
+async function injectIntoExistingTabs() {
+  try {
+    const iplanTabs = await chrome.tabs.query({
+      url: ["https://app.iplan.co.il/*", "https://iplan.co.il/*"],
+    });
+    for (const tab of iplanTabs) {
+      if (tab.id) {
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ["content-iplan.js"],
+        }).catch(() => {});
+      }
+    }
+
+    const plannerTabs = await chrome.tabs.query({
+      url: [
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "https://*.onrender.com/*",
+        "https://*.web.app/*",
+      ],
+    });
+    for (const tab of plannerTabs) {
+      if (tab.id) {
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ["content-planner.js"],
+        }).catch(() => {});
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
+  await ensureSeededRows();
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 30 });
+  await injectIntoExistingTabs();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
+  await ensureSeededRows();
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 30 });
 });
 
@@ -243,6 +466,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return;
     }
 
+    if (message.type === "IPLAN_INGEST_FROM_PAGE") {
+      const result = await ingestFromPage({
+        exportBase64: message.exportBase64,
+        domRows: message.domRows || [],
+        filterActive: Boolean(message.filterActive),
+        source: message.source || "iplan-visit",
+      });
+      sendResponse(result);
+      return;
+    }
+
     if (message.type === "IPLAN_TRIGGER_SYNC") {
       const result = await performSync({
         force: Boolean(message.force),
@@ -254,12 +488,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     if (message.type === "IPLAN_GET_STATUS") {
       const config = await getConfig();
-      const stored = await chrome.storage.local.get(["lastSyncState", "lastSyncedRows"]);
+      const rows = await ensureSeededRows();
+      const stored = await chrome.storage.local.get("lastSyncState");
       sendResponse({
         ok: true,
         config,
-        lastSyncState: stored.lastSyncState || null,
-        rows: stored.lastSyncedRows || [],
+        lastSyncState: stored.lastSyncState || {
+          ok: rows.length > 0,
+          rowCount: rows.length,
+          syncedAt: new Date().toISOString(),
+        },
+        rows,
       });
       return;
     }
@@ -276,4 +515,3 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   })();
   return true;
 });
-

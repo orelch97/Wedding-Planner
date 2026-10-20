@@ -470,7 +470,7 @@ export function IplanSyncModal({
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-3 text-center ring-1 ring-slate-200">
                   <p className="text-xl font-bold text-slate-700">{reconciliation.matchedCount}</p>
-                  <p className="text-[11px] font-medium text-slate-500">הותאמו לפי נייד</p>
+                  <p className="text-[11px] font-medium text-slate-500">הותאמו (נייד / שם)</p>
                 </div>
                 <div className="rounded-2xl bg-slate-50 p-3 text-center ring-1 ring-slate-200">
                   <p className="text-xl font-bold text-slate-700">

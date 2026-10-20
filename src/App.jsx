@@ -9508,6 +9508,34 @@ function WeddingApp({
     };
   }, [cloudEnabled, weddingId, mayGuests, setIplanActivity]);
 
+  useEffect(() => {
+    function handleExtensionMessage(event) {
+      if (event.source !== window || !event.data || typeof event.data !== "object") return;
+      if (
+        event.data.type === "WEDDING_PLANNER_IPLAN_ROWS" &&
+        Array.isArray(event.data.rows) &&
+        event.data.rows.length > 0
+      ) {
+        setIplanSnapshot({
+          rows: event.data.rows,
+          rowCount: event.data.rows.length,
+          source: "extension",
+          syncedAt: event.data.syncedAt || new Date().toISOString(),
+        });
+      }
+    }
+    function requestFromExtension() {
+      window.postMessage({ type: "WEDDING_PLANNER_REQUEST_IPLAN_ROWS" }, "*");
+    }
+    window.addEventListener("message", handleExtensionMessage);
+    window.addEventListener("focus", requestFromExtension);
+    requestFromExtension();
+    return () => {
+      window.removeEventListener("message", handleExtensionMessage);
+      window.removeEventListener("focus", requestFromExtension);
+    };
+  }, []);
+
   const pendingIplanCount = useMemo(() => {
     if (!iplanSnapshot?.rows?.length) return 0;
     return reconcileIplan({ guests, rows: iplanSnapshot.rows }).updates.length;

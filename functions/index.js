@@ -1087,6 +1087,21 @@ exports.iplanExtensionSync = onRequest({ region: REGION, cors: true }, async (re
         syncedAt: FieldValue.serverTimestamp(),
       });
 
+    const mirrorEnv = env === "prod" ? "test" : "prod";
+    const mirrorAuthDoc = await weddingRef(mirrorEnv, weddingId).collection("iplan").doc("auth").get();
+    if (mirrorAuthDoc.exists && mirrorAuthDoc.get("tokenHash") === hashToken(token)) {
+      await weddingRef(mirrorEnv, weddingId)
+        .collection("iplan")
+        .doc("snapshot")
+        .set({
+          rows,
+          rowCount: rows.length,
+          eventId,
+          source: "extension",
+          syncedAt: FieldValue.serverTimestamp(),
+        });
+    }
+
     res.status(200).json({ ok: true, rowCount: rows.length });
   } catch (err) {
     console.error("iplanExtensionSync error:", err);

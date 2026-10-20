@@ -40,10 +40,24 @@ export function phoneKey(value) {
   return digits;
 }
 
+/**
+ * מפתח השוואה אחיד לשם מוזמן (עבור רשומות שחסר בהן טלפון באחת המערכות):
+ * מסיר ניקוד, גרשיים/מקפים ורווחים כפולים.
+ */
+export function normalizeGuestName(name) {
+  return String(name ?? "")
+    .trim()
+    .replace(/[\u0591-\u05C7]/g, "")
+    .replace(/["'״׳`\-–—.,()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 const HEADER_ALIASES = {
-  name: ["הזמנה לכבוד", "שם מוזמן", "שם מלא", "שם האורח", "שם", "name"],
+  name: ["הזמנה לכבוד", "הזמנה עבור", "שם מוזמן", "שם מלא", "שם האורח", "שם", "name"],
   invited: ["מס אורחים שהוזמנו", "מספר אורחים שהוזמנו", "מוזמנים", "כמות מוזמנים", "כיסאות", "כסאות", "invited", "seats"],
-  phone: ["סלולרי", "טלפון נייד", "נייד", "פלאפון", "טלפון", "mobile", "phone"],
+  phone: ["סלולרי", "פרטי התקשרות", "טלפון נייד", "נייד", "פלאפון", "טלפון", "mobile", "phone"],
   landline: ["טלפון רגיל", "טלפון נוסף", "טלפון בבית", "landline"],
   confirmed: ["אישרו שיגיעו", "אישרו הגעה", "יגיעו בוודאות", "יגיעו", "כמה אישרו", "מאושרים", "confirmed"],
   considering: ["מתלבטים", "אולי יגיעו", "considering"],
@@ -106,6 +120,14 @@ function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw, statu
         return { rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" };
       }
     }
+    const leadingNum = confText.match(/^(\d+)\s*מגיע/);
+    if (leadingNum) {
+      const n = Number(leadingNum[1]);
+      if (n > 0) {
+        return { rsvp: "confirmed", attendingCount: n, hasResponse: true, rawStatus: "confirmed" };
+      }
+      return { rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" };
+    }
     if (/^(כן|אישר|אישרו|יגיעו|מגיע|מגיעים|confirmed|yes|v|✓)$/i.test(confText)) {
       return {
         rsvp: "confirmed",
@@ -135,6 +157,14 @@ function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw, statu
   // 4. עמודת סטטוס טקסטואלית כללית (אם קיימת)
   if (statText !== "") {
     if (/לא יגיע|לא מגיע|סירב|declin|^no$|^לא$/i.test(statText)) {
+      return { rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" };
+    }
+    const statCountMatch = statText.match(/(\d+)\s*מגיע/);
+    if (statCountMatch) {
+      const n = Number(statCountMatch[1]);
+      if (n > 0) {
+        return { rsvp: "confirmed", attendingCount: n, hasResponse: true, rawStatus: "confirmed" };
+      }
       return { rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" };
     }
     if (/אישר|יגיעו|מגיע|confirm|^yes$|^כן$|✓/i.test(statText)) {
@@ -198,7 +228,6 @@ export function parseIplanSheetRows(matrix) {
     const landline = normalizePhone(getCell(row, "landline"));
 
     if (!name && !phone && !landline) continue;
-    // דילוג על שורות סיכום אם מופיעות בסוף הקובץ
     if (/^(סה"כ|סהכ|סיכום|total)$/i.test(name) && !phone && !landline) continue;
 
     const invitedRaw = getCell(row, "invited");
@@ -239,7 +268,6 @@ export function normalizeIplanRow(raw) {
   const invitedRaw = raw.invited ?? raw["מס' אורחים שהוזמנו"] ?? raw.seats ?? 1;
   const invited = Math.max(1, Math.round(Number(invitedRaw) || 1));
 
-  // אם האובייקט כבר מנורמל עם rsvp מפורש:
   if (raw.rsvp && ["confirmed", "declined", "pending"].includes(raw.rsvp) && typeof raw.hasResponse === "boolean") {
     const attendingCount =
       raw.rsvp === "confirmed"
@@ -280,35 +308,50 @@ export function normalizeIplanRow(raw) {
 /**
  * מתאים בין רשימת המוזמנים במערכת לבין השורות מ-iPlan.
  *
- * מחזיר:
- * - updates: רשימת הרשומות שסטטוס אישור ההגעה שלהן השתנה (להצגה בפופ-אפ האישור).
- * - unansweredLocals: רשומות שמסומנות אצלנו כ"אישרו"/"לא מגיעים", אך ב-iPlan טרם השיבו.
- * - unchangedCount: מספר הרשומות שהותאמו והסטטוס שלהן כבר זהה.
- * - unmatched: שורות מ-iPlan שלא נמצאה להן התאמה ברשימה שלנו (ללא טלפון או לא קיימות אצלנו).
- * - ambiguous: שורות עם מספר טלפון כפול (אצלנו או ב-iPlan) שלעולם לא מתעדכנות אוטומטית.
+ * סדר ההתאמה:
+ * 1. התאמה ראשית לפי 9 ספרות אחרונות של הטלפון (`phoneKey`).
+ * 2. התאמת גיבוי לפי שם מלא מנורמל (`normalizeGuestName`) כאשר באחת המערכות
+ *    חסר מספר טלפון לרשומה (למשל ברשומות "חסר נייד" במערכת שלנו כמו "נריה ושילת בחור"),
+ *    ובלבד שהשם ייחודי לחלוטין (מופיע פעם אחת בלבד אצלנו ופעם אחת בלבד ב-iPlan).
  */
 export function reconcileIplan({ guests = [], rows = [], includeUnansweredReset = false } = {}) {
   const normalizedRows = (rows || []).map((r) => (Array.isArray(r) ? null : normalizeIplanRow(r))).filter(Boolean);
 
-  // מיפוי מוזמנים שלנו לפי phoneKey
+  // מיפוי מוזמנים שלנו לפי phoneKey ולפי שם מנורמל
   const guestsByKey = new Map();
+  const guestsByName = new Map();
   for (const g of guests || []) {
     if (!g) continue;
     const key = phoneKey(g.phone);
-    if (!key) continue;
-    const list = guestsByKey.get(key);
-    if (list) list.push(g);
-    else guestsByKey.set(key, [g]);
+    if (key) {
+      const list = guestsByKey.get(key);
+      if (list) list.push(g);
+      else guestsByKey.set(key, [g]);
+    }
+    const nameKey = normalizeGuestName(g.name);
+    if (nameKey) {
+      const nList = guestsByName.get(nameKey);
+      if (nList) nList.push(g);
+      else guestsByName.set(nameKey, [g]);
+    }
   }
 
-  // ספירת הופעות של כל phoneKey ב-iPlan כדי לזהות כפילויות גם בצד של iPlan
+  // ספירת הופעות של כל phoneKey ושם ב-iPlan כדי לזהות כפילויות
   const iplanByKey = new Map();
+  const iplanByName = new Map();
   for (const row of normalizedRows) {
     const key = phoneKey(row.phone) || phoneKey(row.landline);
-    if (!key) continue;
-    const list = iplanByKey.get(key);
-    if (list) list.push(row);
-    else iplanByKey.set(key, [row]);
+    if (key) {
+      const list = iplanByKey.get(key);
+      if (list) list.push(row);
+      else iplanByKey.set(key, [row]);
+    }
+    const nameKey = normalizeGuestName(row.name);
+    if (nameKey) {
+      const nList = iplanByName.get(nameKey);
+      if (nList) nList.push(row);
+      else iplanByName.set(nameKey, [row]);
+    }
   }
 
   const updates = [];
@@ -316,62 +359,98 @@ export function reconcileIplan({ guests = [], rows = [], includeUnansweredReset 
   const unmatched = [];
   const ambiguous = [];
   const handledAmbiguousKeys = new Set();
+  const matchedGuestIds = new Set();
   let unchangedCount = 0;
   let matchedCount = 0;
 
   for (const row of normalizedRows) {
     const key = phoneKey(row.phone) || phoneKey(row.landline);
-    if (!key) {
-      unmatched.push({
-        name: row.name || "ללא שם",
-        phone: row.phone || "",
-        rsvp: row.rsvp,
-        attendingCount: row.attendingCount,
-        hasResponse: row.hasResponse,
-        reason: "missing_phone",
-      });
-      continue;
-    }
+    const nameKey = normalizeGuestName(row.name);
 
-    const matchingGuests = guestsByKey.get(key) || [];
-    const matchingIplanRows = iplanByKey.get(key) || [];
+    let guest = null;
 
-    if (matchingGuests.length === 0) {
-      unmatched.push({
-        name: row.name || "ללא שם",
-        phone: row.phone || "",
-        rsvp: row.rsvp,
-        attendingCount: row.attendingCount,
-        hasResponse: row.hasResponse,
-        reason: "not_in_guest_list",
-      });
-      continue;
-    }
+    if (key) {
+      const matchingGuests = guestsByKey.get(key) || [];
+      const matchingIplanRows = iplanByKey.get(key) || [];
 
-    if (matchingGuests.length > 1 || matchingIplanRows.length > 1) {
-      if (!handledAmbiguousKeys.has(key)) {
-        handledAmbiguousKeys.add(key);
-        ambiguous.push({
-          phoneKey: key,
-          phone: row.phone || matchingGuests[0]?.phone || "",
-          iplanRows: matchingIplanRows.map((r) => ({
-            name: r.name,
-            rsvp: r.rsvp,
-            attendingCount: r.attendingCount,
-          })),
-          guests: matchingGuests.map((g) => ({
-            id: g.id,
-            name: g.name,
-            phone: g.phone,
-            rsvp: g.rsvp || "pending",
-          })),
-          reason: matchingGuests.length > 1 ? "duplicate_guest_phone" : "duplicate_iplan_phone",
-        });
+      if (matchingGuests.length > 1 || matchingIplanRows.length > 1) {
+        if (!handledAmbiguousKeys.has(key)) {
+          handledAmbiguousKeys.add(key);
+          ambiguous.push({
+            phoneKey: key,
+            phone: row.phone || matchingGuests[0]?.phone || "",
+            iplanRows: matchingIplanRows.map((r) => ({
+              name: r.name,
+              rsvp: r.rsvp,
+              attendingCount: r.attendingCount,
+            })),
+            guests: matchingGuests.map((g) => ({
+              id: g.id,
+              name: g.name,
+              phone: g.phone,
+              rsvp: g.rsvp || "pending",
+            })),
+            reason: matchingGuests.length > 1 ? "duplicate_guest_phone" : "duplicate_iplan_phone",
+          });
+        }
+        continue;
       }
+
+      if (matchingGuests.length === 1) {
+        guest = matchingGuests[0];
+      }
+    }
+
+    // התאמת גיבוי לפי שם ייחודי מדויק כאשר למוזמן במערכת שלנו אין נייד (או שב-iPlan אין נייד)
+    if (!guest && nameKey) {
+      const byNameGuests = (guestsByName.get(nameKey) || []).filter((g) => !matchedGuestIds.has(g.id));
+      const byNameIplan = iplanByName.get(nameKey) || [];
+
+      if (byNameGuests.length === 1 && byNameIplan.length === 1) {
+        const candidate = byNameGuests[0];
+        const candidatePhoneKey = phoneKey(candidate.phone);
+        // מתאימים לפי שם כאשר לאחד הצדדים חסר טלפון (כמו 293 הרשומות חסרות הנייד במערכת)
+        if (!candidatePhoneKey || !key) {
+          guest = candidate;
+        }
+      } else if (byNameGuests.length > 1 && (!key || byNameGuests.some((g) => !phoneKey(g.phone)))) {
+        const ambKey = `name:${nameKey}`;
+        if (!handledAmbiguousKeys.has(ambKey)) {
+          handledAmbiguousKeys.add(ambKey);
+          ambiguous.push({
+            phoneKey: ambKey,
+            phone: row.phone || "ללא נייד (שם כפול)",
+            iplanRows: byNameIplan.map((r) => ({
+              name: r.name,
+              rsvp: r.rsvp,
+              attendingCount: r.attendingCount,
+            })),
+            guests: byNameGuests.map((g) => ({
+              id: g.id,
+              name: g.name,
+              phone: g.phone,
+              rsvp: g.rsvp || "pending",
+            })),
+            reason: "duplicate_guest_name",
+          });
+        }
+        continue;
+      }
+    }
+
+    if (!guest) {
+      unmatched.push({
+        name: row.name || "ללא שם",
+        phone: row.phone || "",
+        rsvp: row.rsvp,
+        attendingCount: row.attendingCount,
+        hasResponse: row.hasResponse,
+        reason: key ? "not_in_guest_list" : "missing_phone",
+      });
       continue;
     }
 
-    const guest = matchingGuests[0];
+    matchedGuestIds.add(guest.id);
     matchedCount++;
 
     const seats = Math.max(1, Number(guest.seats) || 1);
@@ -404,7 +483,6 @@ export function reconcileIplan({ guests = [], rows = [], includeUnansweredReset 
       rawStatus: row.rawStatus,
     };
 
-    // אם ב-iPlan טרם השיבו כלל (תא ריק), ואצלנו כבר מסומן סטטוס ידני:
     if (!row.hasResponse) {
       if (currentRsvp === "pending") {
         unchangedCount++;
@@ -561,4 +639,3 @@ export function formatRsvpLabel(rsvp, attendingCount, seats = 1) {
   }
   return "ממתין";
 }
-

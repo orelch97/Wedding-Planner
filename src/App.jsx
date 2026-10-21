@@ -9594,6 +9594,8 @@ function WeddingApp({
   const hasIplanSource =
     iplanExtensionAvailable ||
     Boolean(iplanSnapshot?.rows?.length);
+  const canViewIplanBell =
+    String(session?.user?.email || "").trim().toLowerCase() === "orelch97@gmail.com";
 
   const handleCommitIplanUpdates = useCallback(
     async (changes, source = "iplan") => {
@@ -10848,7 +10850,7 @@ function WeddingApp({
               <HelpCircle size={19} />
               {!tourStatus && <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-gold-600 ring-2 ring-white" />}
             </button>
-            {mayGuests && hasIplanSource && (
+            {mayGuests && canViewIplanBell && hasIplanSource && (
               <ActivityBell
                 activity={iplanActivity}
                 userId={session?.user?.id ?? "local"}

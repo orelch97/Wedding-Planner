@@ -4,6 +4,28 @@ import { blockCloudRequests } from "./helpers/sharing.js";
 
 assertEmulatorEnvironment();
 const attemptsByPage = new WeakMap();
+const iplanTestIdentity = {
+  id: "iplan-bell-owner",
+  email: "orelch97@gmail.com",
+  password: "E2E-only-Password-938!",
+};
+
+async function signUpIplanOwner(page, label) {
+  const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
+  const firestoreHost = process.env.FIRESTORE_EMULATOR_HOST;
+  const firestoreReset = await fetch(
+    `http://${firestoreHost}/emulator/v1/projects/${process.env.GCLOUD_PROJECT}/databases/(default)/documents`,
+    { method: "DELETE" }
+  );
+  if (!firestoreReset.ok) throw new Error("Could not reset demo Firestore emulator data.");
+  const resetResponse = await fetch(
+    `http://${authHost}/emulator/v1/projects/${process.env.GCLOUD_PROJECT}/accounts`,
+    { method: "DELETE" }
+  );
+  if (!resetResponse.ok) throw new Error("Could not reset demo Auth emulator accounts.");
+  await signUp(page, { ...iplanTestIdentity, id: label }, { readyTimeout: 60_000 });
+}
+
 test.beforeEach(async ({ page }) => {
   attemptsByPage.set(page, await blockCloudRequests(page));
 });
@@ -24,9 +46,26 @@ test("iPlan controls stay hidden when no iPlan source is available", async ({ pa
   await expect(page.getByTestId("activity-open-iplan-btn")).toHaveCount(0);
 });
 
+test("iPlan bell is shown only to the designated email when a source is available", async ({ page }) => {
+  await signUpIplanOwner(page, "iplan-bell-owner");
+  await navigateTo(page, "guests");
+  await page.evaluate(() => window.postMessage({ type: "WEDDING_PLANNER_IPLAN_EXTENSION_AVAILABLE" }, "*"));
+  await expect(page.getByTestId("activity-bell-btn")).toBeVisible();
+
+  await page.getByTestId("activity-bell-btn").click();
+  await expect(page.getByTestId("activity-open-iplan-btn")).toBeVisible();
+});
+
+test("iPlan bell remains hidden from other signed-in users even when the extension is available", async ({ page }) => {
+  await signUp(page, uniqueIdentity("iplan-bell-restricted"), { readyTimeout: 60_000 });
+  await navigateTo(page, "guests");
+  await page.evaluate(() => window.postMessage({ type: "WEDDING_PLANNER_IPLAN_EXTENSION_AVAILABLE" }, "*"));
+  await expect(page.getByTestId("activity-bell-btn")).toHaveCount(0);
+});
+
 test("iPlan RSVP preview modal matches by phone and exact name, and updates ONLY rsvp + attendingCount on approval", async ({ page }) => {
   test.setTimeout(120_000);
-  await signUp(page, uniqueIdentity("iplan-rsvp-sync"), { readyTimeout: 60_000 });
+  await signUpIplanOwner(page, "iplan-rsvp-sync");
   await navigateTo(page, "guests");
 
   // זריעת שלושה מוזמנים: שניים עם טלפון ואחד ללא טלפון (כמו 293 הרשומות בחתונה האמיתית)
@@ -193,7 +232,7 @@ test("iPlan RSVP preview modal matches by phone and exact name, and updates ONLY
 
 test("iPlan approval failure leaves guests unchanged, shows no success, and can be retried", async ({ page }) => {
   test.setTimeout(120_000);
-  await signUp(page, uniqueIdentity("iplan-commit-failure"), { readyTimeout: 60_000 });
+  await signUpIplanOwner(page, "iplan-commit-failure");
   await navigateTo(page, "guests");
   await page.evaluate(async () => {
     const store = await import("/src/lib/firebaseStore.js");
@@ -264,7 +303,7 @@ test("iPlan approval failure leaves guests unchanged, shows no success, and can 
 
 test("server rejects a stale iPlan approval atomically without adding activity", async ({ page }) => {
   test.setTimeout(120_000);
-  await signUp(page, uniqueIdentity("iplan-stale-server"), { readyTimeout: 60_000 });
+  await signUpIplanOwner(page, "iplan-stale-server");
   await navigateTo(page, "guests");
   const weddingId = await page.evaluate(async () => {
     const store = await import("/src/lib/firebaseStore.js");
@@ -349,7 +388,7 @@ test("server rejects a stale iPlan approval atomically without adding activity",
 
 test("iPlan commit rejects a malformed batch without partially updating guests or activity", async ({ page }) => {
   test.setTimeout(120_000);
-  await signUp(page, uniqueIdentity("iplan-invalid-batch"), { readyTimeout: 60_000 });
+  await signUpIplanOwner(page, "iplan-invalid-batch");
   await navigateTo(page, "guests");
   const result = await page.evaluate(async () => {
     const store = await import("/src/lib/firebaseStore.js");
@@ -401,7 +440,7 @@ test("iPlan commit rejects a malformed batch without partially updating guests o
 
 test("legacy iPlan client activity-only commit does not update guest RSVPs", async ({ page }) => {
   test.setTimeout(120_000);
-  await signUp(page, uniqueIdentity("iplan-legacy-client"), { readyTimeout: 60_000 });
+  await signUpIplanOwner(page, "iplan-legacy-client");
   await navigateTo(page, "guests");
   const result = await page.evaluate(async () => {
     const store = await import("/src/lib/firebaseStore.js");
@@ -442,7 +481,7 @@ test("legacy iPlan client activity-only commit does not update guest RSVPs", asy
 
 test("a newer iPlan snapshot cannot silently replace an open review; only explicit refresh rebases it", async ({ page }) => {
   test.setTimeout(120_000);
-  await signUp(page, uniqueIdentity("iplan-pinned-review"), { readyTimeout: 60_000 });
+  await signUpIplanOwner(page, "iplan-pinned-review");
   await navigateTo(page, "guests");
   const weddingId = await page.evaluate(async () => {
     const store = await import("/src/lib/firebaseStore.js");
@@ -495,7 +534,7 @@ test("a newer iPlan snapshot cannot silently replace an open review; only explic
 test("Mobile viewport (375x812) layout of IplanSyncModal has concise text and zero overlapping elements", async ({ page }) => {
   test.setTimeout(120_000);
   await page.setViewportSize({ width: 375, height: 812 });
-  await signUp(page, uniqueIdentity("iplan-mobile-ui"), { readyTimeout: 60_000 });
+  await signUpIplanOwner(page, "iplan-mobile-ui");
   await navigateTo(page, "guests");
 
   await page.evaluate(async () => {
@@ -587,7 +626,7 @@ test("Mobile viewport (375x812) layout of IplanSyncModal has concise text and ze
 
 test("ActivityBell collapses large update batches by default, expands on click, and supports single dismiss & Clear All", async ({ page }) => {
   test.setTimeout(120_000);
-  await signUp(page, uniqueIdentity("iplan-bell-ux"), { readyTimeout: 60_000 });
+  await signUpIplanOwner(page, "iplan-bell-ux");
   await navigateTo(page, "guests");
 
   // זריעת 12 מוזמנים כדי לבדוק סבב עדכון מרובה רשומות בהתראה

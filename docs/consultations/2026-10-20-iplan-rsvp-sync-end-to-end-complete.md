@@ -60,3 +60,4 @@
 ---
 
 *עותק מלא ומדויק של תשובה זו נשמר עבורך בקובץ `docs/consultations/2026-10-20-iplan-rsvp-sync-end-to-end-complete.md` להמשך התייעצות עם Gemini.*
+

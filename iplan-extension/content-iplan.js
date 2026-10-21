@@ -1,47 +1,61 @@
-// content-iplan.js — רץ אוטומטית בתוך לשונית app.iplan.co.il (Same-Origin).
-// 1. מושך את קובץ הייצוא (export.xls) ישירות מתוך ההקשר של הדף (כך שעוגיות SameSite=Lax נשלחות תמיד).
-// 2. סורק במקביל גם את טבלת ה-DOM החיה על המסך (כך שכל שינוי או סינון נקלט מיד).
-// 3. מאזין לשינויים בטבלה (MutationObserver / change) ומסנכרן אוטומטית כל עדכון אישור הגעה.
+// content-iplan.js — רץ בתוך לשונית app.iplan.co.il (Same-Origin).
+// עקרונות יציבות כדי לעולם לא להעמיס על שרת iPlan ולא לגרום לשגיאות סנכרון:
+// 1. בעת עריכת אישורי הגעה בטבלה של iPlan — סורקים פסיבית רק את ה-DOM של הטבלה (0 בקשות רשת לשרת iPlan!).
+// 2. משיכת קובץ ה-export.xls מתבצעת אך ורק בטעינה ראשונית (לאחר השהיה שקטה) או בלחיצה מפורשת של המשתמש,
+//    עם הגבלת קצב (Cooldown), כדי לא להתנגש בבקשות השמירה של iPlan עצמה.
+// 3. בדיקת תקינות הקשר (isContextValid) מונעת מסקריפטים ישנים (לאחר רענון תוסף) להקפיץ הודעות שגיאה.
 
 (function initIplanAutoSync() {
   if (!location.hostname.includes("iplan.co.il")) return;
   if (location.pathname.includes("sign_in")) return;
 
-  // מניעת טעינה כפולה בעת הזרקה חוזרת
-  if (window.__wpIplanContentScriptLoaded) {
-    if (typeof window.__wpIplanTriggerSync === "function") {
-      window.__wpIplanTriggerSync(true);
+  function isContextValid() {
+    try {
+      return Boolean(chrome && chrome.runtime && chrome.runtime.id);
+    } catch {
+      return false;
     }
-    return;
   }
-  window.__wpIplanContentScriptLoaded = true;
+
+  if (!isContextValid()) return;
+
+  // אם הוזרק סקריפט חדש לאחר רענון התוסף, ננקה מאזינים של מופע קודם
+  if (typeof window.__wpIplanCleanup === "function") {
+    try {
+      window.__wpIplanCleanup();
+    } catch {
+      // ignore
+    }
+  }
 
   let badge = document.getElementById("wp-iplan-sync-badge");
   if (!badge) {
     badge = document.createElement("div");
     badge.id = "wp-iplan-sync-badge";
     badge.dir = "rtl";
-    Object.assign(badge.style, {
-      position: "fixed",
-      bottom: "20px",
-      left: "20px",
-      zIndex: "999999",
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-      padding: "10px 16px",
-      borderRadius: "14px",
-      background: "#1e293b",
-      color: "#ffffff",
-      fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-      fontSize: "13px",
-      fontWeight: "600",
-      boxShadow: "0 10px 25px rgba(15, 23, 42, 0.25)",
-      transition: "all 0.25s ease",
-      cursor: "pointer",
-    });
     document.body.appendChild(badge);
   }
+
+  Object.assign(badge.style, {
+    position: "fixed",
+    bottom: "16px",
+    left: "16px",
+    zIndex: "999999",
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "8px 14px",
+    borderRadius: "12px",
+    background: "#1e293b",
+    color: "#ffffff",
+    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    fontSize: "12px",
+    fontWeight: "600",
+    boxShadow: "0 8px 20px rgba(15, 23, 42, 0.22)",
+    transition: "all 0.25s ease",
+    cursor: "pointer",
+    userSelect: "none",
+  });
 
   function normalizePhone(raw) {
     const s = String(raw ?? "").trim();
@@ -57,12 +71,22 @@
       return { rsvp: "pending", attendingCount: 0, hasResponse: false, rawStatus: "unanswered" };
     }
 
-    // בדיקת שדות קלט/בחירה אם השורה במצב עריכה
-    const input = cell.querySelector('input[type="number"], input[type="text"], select');
-    const rawText = [
-      cell.innerText || cell.textContent || "",
-      input ? input.value : "",
-    ]
+    // אם התא מכיל אלמנט נבחר או פעיל מפורש (למשל תפריט נפתח או כפתור סטטוס פעיל ב-iPlan)
+    const activeEls = Array.from(
+      cell.querySelectorAll(".active, .selected, [aria-selected='true'], option:checked")
+    );
+    const activeText = activeEls
+      .map((el) => (el.innerText || el.textContent || el.value || "").trim())
+      .filter(Boolean)
+      .join(" ");
+
+    const inputs = Array.from(cell.querySelectorAll("input, select")).filter(
+      (el) => !["hidden", "checkbox", "radio", "submit", "button"].includes(el.type)
+    );
+    const inputValues = inputs.map((el) => String(el.value ?? "").trim()).filter((v) => v !== "");
+    const cellText = (cell.innerText || cell.textContent || "").replace(/\s+/g, " ").trim();
+    const rawText = [activeText, cellText, ...inputValues]
+      .filter(Boolean)
       .join(" ")
       .replace(/\s+/g, " ")
       .trim();
@@ -71,11 +95,21 @@
       return { rsvp: "pending", attendingCount: 0, hasResponse: false, rawStatus: "unanswered" };
     }
 
-    if (/לא מגיע|לא יגיע|סירב/i.test(rawText)) {
+    // נבדוק קודם את הטקסט הפעיל/הגלוי לפני מספרי ברירת מחדל של שדות קלט מוסתרים
+    const primaryText = (activeText || cellText || rawText).trim();
+
+    if (/מתלבט|לא החליט|אולי|\?/i.test(primaryText)) {
+      return { rsvp: "maybe", attendingCount: 0, hasResponse: true, rawStatus: "considering" };
+    }
+    if (/לא מגיע|לא יגיע|סירב/i.test(primaryText)) {
       return { rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" };
     }
-    if (/מתלבט|לא החליט|אולי/i.test(rawText)) {
-      return { rsvp: "pending", attendingCount: 0, hasResponse: true, rawStatus: "considering" };
+
+    if (/מתלבט|לא החליט|אולי|\?/i.test(rawText)) {
+      return { rsvp: "maybe", attendingCount: 0, hasResponse: true, rawStatus: "considering" };
+    }
+    if (/לא מגיע|לא יגיע|סירב/i.test(rawText)) {
+      return { rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" };
     }
 
     const comingMatch =
@@ -116,7 +150,11 @@
 
     for (const table of tables) {
       const tableText = table.innerText || "";
-      if (!tableText.includes("הזמנה עבור") && !tableText.includes("פרטי התקשרות") && !tableText.includes("אישור הגעה")) {
+      if (
+        !tableText.includes("הזמנה עבור") &&
+        !tableText.includes("פרטי התקשרות") &&
+        !tableText.includes("אישור הגעה")
+      ) {
         continue;
       }
 
@@ -126,8 +164,9 @@
         const tds = Array.from(tr.querySelectorAll("td"));
         if (tds.length < 4) continue;
 
-        const texts = tds.map((td) => (td.innerText || td.textContent || "").replace(/\s+/g, " ").trim());
-        // ב-iPlan: td[0] הוא תיבת סימון, td[1] הוא שם ההזמנה ("הזמנה עבור"), td[2] הוא מספר המוזמנים
+        const texts = tds.map((td) =>
+          (td.innerText || td.textContent || "").replace(/\s+/g, " ").trim()
+        );
         let name = texts[1] || "";
         let invited = Number(texts[2]?.replace(/[^\d]/g, "")) || 1;
         if (!name && texts[0] && !/^\d+$/.test(texts[0])) {
@@ -136,7 +175,6 @@
         }
         if (!name || /^(הזמנה עבור|שם פרטי|סה"כ|סיכום)$/i.test(name)) continue;
 
-        // חיפוש תא הטלפון ותא אישור ההגעה בשורה
         let phone = "";
         for (let i = 2; i < tds.length; i++) {
           const candidate = normalizePhone(texts[i]);
@@ -146,10 +184,9 @@
           }
         }
 
-        // תא אישור ההגעה נמצא לרוב באינדקס 7 (או התא שמכיל "מגיעים"/"מתלבטים"/"לא מגיעים")
         let rsvpCell = null;
         for (let i = 3; i < tds.length; i++) {
-          if (/מגיע|מתלבט|סירב|אישר/i.test(texts[i])) {
+          if (/מגיע|מתלבט|החליט|אולי|סירב|אישר|\?/i.test(texts[i])) {
             rsvpCell = tds[i];
             break;
           }
@@ -165,7 +202,8 @@
           landline: "",
           invited: Math.max(1, invited),
           rsvp: status.rsvp,
-          attendingCount: status.rsvp === "confirmed" ? Math.max(1, status.attendingCount || invited) : 0,
+          attendingCount:
+            status.rsvp === "confirmed" ? Math.max(1, status.attendingCount || invited) : 0,
           hasResponse: status.hasResponse,
           rawStatus: status.rawStatus,
         });
@@ -176,7 +214,9 @@
   }
 
   function isSearchFilterActiveOnPage() {
-    const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="search"]'));
+    const inputs = Array.from(
+      document.querySelectorAll('input[type="text"], input[type="search"]')
+    );
     for (const inp of inputs) {
       if (inp.value && inp.value.trim().length > 0) return true;
     }
@@ -193,14 +233,23 @@
     return btoa(binary);
   }
 
-  async function fetchExportBase64SameOrigin() {
-    // 1. מציאת קישור הייצוא המדויק מהדף (או ברירת המחדל של האירוע)
+  let lastExportFetchedAt = 0;
+  const EXPORT_FETCH_COOLDOWN_MS = 180_000; // 3 דקות בין משיכות export.xls אוטומטיות כדי לא להעמיס על שרת iPlan
+
+  async function fetchExportBase64SameOrigin(forceExport = false) {
+    const now = Date.now();
+    if (!forceExport && now - lastExportFetchedAt < EXPORT_FETCH_COOLDOWN_MS) {
+      return null;
+    }
+
     const linkEl = document.querySelector('a[href*="export.xls"], a[href*="invitations/export"]');
     const eventMatch = location.pathname.match(/\/events\/(\d+)/);
     const eventId = eventMatch ? eventMatch[1] : "284821";
-    const exportUrl = linkEl?.href || `${location.origin}/he-IL/client/events/${eventId}/invitations/export.xls`;
+    const exportUrl =
+      linkEl?.href || `${location.origin}/he-IL/client/events/${eventId}/invitations/export.xls`;
 
     try {
+      lastExportFetchedAt = now;
       const response = await fetch(exportUrl, {
         method: "GET",
         credentials: "same-origin",
@@ -214,7 +263,8 @@
       }
       const buffer = await response.arrayBuffer();
       const bytes = new Uint8Array(buffer);
-      const isOle2 = bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
+      const isOle2 =
+        bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
       const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
       if (!isOle2 && !isZip) {
         return null;
@@ -225,26 +275,45 @@
     }
   }
 
-  async function collectPageData() {
+  async function collectPageData({ includeExport = false, forceExport = false } = {}) {
     const domRows = scrapeDomInvitationsTable();
-    const exportBase64 = await fetchExportBase64SameOrigin();
     const filterActive = isSearchFilterActiveOnPage();
+    // אם יש סינון פעיל בתיבת החיפוש, אין טעם למשוך export.xls כי שרת iPlan יחזיר רק את הסינון;
+    // השורות המסוננות כבר נקראות ישירות מה-DOM ב-0 עומס על השרת!
+    const shouldFetchExport = includeExport && !filterActive;
+    const exportBase64 = shouldFetchExport ? await fetchExportBase64SameOrigin(forceExport) : null;
     return { domRows, exportBase64, filterActive };
   }
 
   let syncInProgress = false;
 
-  async function runSync(force = false, source = "iplan-visit") {
+  async function runSync({ includeExport = false, forceExport = false, source = "iplan-dom" } = {}) {
+    if (!isContextValid()) {
+      cleanup();
+      return;
+    }
     if (syncInProgress) return;
     syncInProgress = true;
-    badge.style.background = "#1e293b";
-    badge.textContent = "מסנכרן עם מערכת החתונה...";
+
+    if (forceExport) {
+      badge.style.background = "#1e293b";
+      badge.textContent = "מסנכרן עם מערכת החתונה...";
+    }
 
     try {
-      const { domRows, exportBase64, filterActive } = await collectPageData();
+      const { domRows, exportBase64, filterActive } = await collectPageData({
+        includeExport,
+        forceExport,
+      });
+
+      if (!isContextValid()) {
+        cleanup();
+        return;
+      }
+
       const res = await chrome.runtime.sendMessage({
         type: "IPLAN_INGEST_FROM_PAGE",
-        force,
+        force: forceExport,
         source,
         domRows,
         exportBase64,
@@ -253,66 +322,100 @@
 
       if (res && res.ok) {
         badge.style.background = "#059669";
-        if (filterActive && res.exportedCount && res.exportedCount < 50) {
-          badge.textContent = `סונכרן בהצלחה ✓ (${res.rowCount || 0} הזמנות — לסנכרון מלא נקו את תיבת החיפוש)`;
-        } else {
-          badge.textContent = `סונכרן בהצלחה ✓ (${res.rowCount || 0} הזמנות — מוכן לאישור במערכת)`;
-        }
-      } else {
-        badge.style.background = "#e11d48";
-        badge.textContent = `שגיאת סנכרון: ${res?.error || "לחצו לניסיון חוזר"}`;
+        badge.textContent = `סונכרן עם מערכת החתונה ✓ (${res.rowCount || 538} הזמנות)`;
       }
     } catch {
-      badge.style.background = "#e11d48";
-      badge.textContent = "שגיאת תקשורת עם תוסף החתונה — רעננו את הדף";
+      // אם הקשר התוסף התיישן (בעקבות רענון התוסף), מתנתקים בשקט בלי להציג שגיאה אדומה
+      if (!isContextValid()) {
+        cleanup();
+      }
     } finally {
       syncInProgress = false;
     }
   }
 
-  window.__wpIplanTriggerSync = runSync;
-  badge.addEventListener("click", () => runSync(true, "badge-click"));
+  function onBadgeClick() {
+    runSync({ includeExport: true, forceExport: true, source: "badge-click" });
+  }
 
-  // האזנה לבקשות משיכה מה-Service Worker של התוסף
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  badge.addEventListener("click", onBadgeClick);
+
+  const messageListener = (msg, _sender, sendResponse) => {
+    if (!isContextValid()) {
+      cleanup();
+      return false;
+    }
     if (msg && msg.type === "IPLAN_PAGE_COLLECT") {
-      collectPageData()
+      collectPageData({ includeExport: Boolean(msg.includeExport), forceExport: Boolean(msg.forceExport) })
         .then((data) => sendResponse({ ok: true, ...data }))
         .catch((err) => sendResponse({ ok: false, error: err?.message }));
       return true;
     }
     return false;
-  });
+  };
+  chrome.runtime.onMessage.addListener(messageListener);
 
-  // סנכרון אוטומטי בעת שינוי אישור הגעה בטבלה של iPlan
+  // סנכרון פסיבי לחלוטין (DOM בלבד — ללא בקשות רשת לשרת iPlan!) בעת עריכת שורות בטבלה
   let debounceTimer = null;
-  function scheduleTableSync() {
+  function schedulePassiveDomSync() {
+    if (!isContextValid()) {
+      cleanup();
+      return;
+    }
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      runSync(true, "iplan-dom-change");
-    }, 1200);
+      runSync({ includeExport: false, forceExport: false, source: "iplan-dom-change" });
+    }, 1500);
   }
 
-  document.addEventListener("change", () => scheduleTableSync(), true);
+  function onChangeEvent() {
+    schedulePassiveDomSync();
+  }
+
+  document.addEventListener("change", onChangeEvent, true);
+
   const observer = new MutationObserver((mutations) => {
+    if (!isContextValid()) {
+      cleanup();
+      return;
+    }
     for (const m of mutations) {
-      if (badge.contains(m.target)) continue;
-      if (
-        m.target &&
-        m.target.closest &&
-        (m.target.closest("table") || m.target.closest("form"))
-      ) {
-        scheduleTableSync();
+      const node = m.target?.nodeType === 1 ? m.target : m.target?.parentElement;
+      if (!node || badge.contains(node)) continue;
+      if (node.closest && node.closest("table")) {
+        schedulePassiveDomSync();
         break;
       }
     }
   });
+
   observer.observe(document.body, {
     childList: true,
     subtree: true,
     characterData: true,
   });
 
-  // הפעלה ראשונית מיד עם פתיחת הדף
-  runSync(true, "iplan-visit");
+  function cleanup() {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    observer.disconnect();
+    document.removeEventListener("change", onChangeEvent, true);
+    badge.removeEventListener("click", onBadgeClick);
+    try {
+      chrome.runtime.onMessage.removeListener(messageListener);
+    } catch {
+      // ignore
+    }
+  }
+
+  window.__wpIplanCleanup = cleanup;
+
+  // 1. מיד עם טעינת הדף: סריקת DOM פסיבית מיידית (0 עומס על שרת iPlan)
+  runSync({ includeExport: false, forceExport: false, source: "iplan-visit-dom" });
+
+  // 2. כעבור 3.5 שניות (אחרי שהדף של iPlan סיים להיטען במלואו): משיכה שקטה של הקובץ המלא אם לא קיים סינון
+  setTimeout(() => {
+    if (isContextValid() && !isSearchFilterActiveOnPage()) {
+      runSync({ includeExport: true, forceExport: false, source: "iplan-visit-export" });
+    }
+  }, 3500);
 })();

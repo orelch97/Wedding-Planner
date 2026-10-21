@@ -1107,18 +1107,19 @@ export async function issueIplanSyncToken(weddingId) {
 export async function commitIplanRsvpUpdates(
   weddingId,
   changes,
-  { source = "iplan", applyToGuests = false } = {}
+  { source = "iplan", applyToGuests } = {}
 ) {
   requireWeddingId(weddingId);
   requireAuth();
   const call = httpsCallable(functions, "commitIplanRsvpUpdates");
-  const { data } = await call({
+  const payload = {
     env: FIREBASE_ENV,
     weddingId,
     changes,
     source,
-    applyToGuests,
-  });
+  };
+  if (applyToGuests === false) payload.applyToGuests = false;
+  const { data } = await call(payload);
   return data;
 }
 

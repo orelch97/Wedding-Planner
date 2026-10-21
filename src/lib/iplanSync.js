@@ -7,7 +7,7 @@
  *
  *  כלל ברזל:
  *  השדה היחיד שמותר לעדכן ברשומת מוזמן הוא סטטוס אישור ההגעה:
- *    - rsvp: "pending" | "confirmed" | "declined"
+ *    - rsvp: "pending" | "maybe" | "confirmed" | "declined"
  *    - attendingCount: מספר האנשים שיגיעו (עבור "confirmed"), או 0 אחרת.
  *  שום שדה אחר ברשומה (שם, טלפון, כיסאות, קטגוריה, הערות וכו') לא משתנה!
  * ====================================================================== */
@@ -23,35 +23,61 @@ import { decodeText, parseDelimited, normalizePhone, ImportError, MAX_IMPORT_BYT
  * מתמפים כולם לאותו מפתח: "506970046".
  */
 export function phoneKey(value) {
-  let digits = phoneDigits(value);
-  if (!digits) return "";
-  if (digits.startsWith("00972") && digits.length >= 12) {
-    digits = digits.slice(5);
-  } else if (digits.startsWith("972") && digits.length >= 10) {
-    digits = digits.slice(3);
-  }
-  while (digits.startsWith("0") && digits.length >= 9) {
-    digits = digits.slice(1);
-  }
-  if (digits.length > 9) {
-    digits = digits.slice(-9);
-  }
-  if (digits.length < 8) return "";
-  return digits;
+  const keys = phoneKeys(value);
+  return keys[0] || "";
 }
 
 /**
- * מפתח השוואה אחיד לשם מוזמן (עבור רשומות שחסר בהן טלפון באחת המערכות):
+ * מחלץ את כל מפתחות הטלפון מרשומה (תומך גם ברשומות עם שני טלפונים מופרדים ב-"/" או פסיק,
+ * כגון "050-6970046 / 054-5666710" אצל "שי ושקד אלעזרי").
+ */
+export function phoneKeys(value) {
+  if (value == null || typeof value === "boolean") return [];
+  const rawStr = String(value).trim();
+  if (!rawStr) return [];
+
+  const parts = rawStr.split(/[/,;|\n]+/).map((p) => p.trim()).filter(Boolean);
+  const keys = [];
+  for (const part of parts) {
+    let digits = phoneDigits(part);
+    if (!digits) continue;
+    if (digits.startsWith("00972") && digits.length >= 12) {
+      digits = digits.slice(5);
+    } else if (digits.startsWith("972") && digits.length >= 10) {
+      digits = digits.slice(3);
+    }
+    while (digits.startsWith("0") && digits.length >= 9) {
+      digits = digits.slice(1);
+    }
+    if (digits.length > 9) {
+      digits = digits.slice(-9);
+    }
+    if (digits.length >= 8 && !keys.includes(digits)) {
+      keys.push(digits);
+    }
+  }
+  return keys;
+}
+
+/**
+ * מפתח השוואה אחיד לשם מוזמן (עבור רשומות שחסר בהן טלפון או שהטלפון שונה):
  * מסיר ניקוד, גרשיים/מקפים ורווחים כפולים.
  */
 export function normalizeGuestName(name) {
   return String(name ?? "")
     .trim()
     .replace(/[\u0591-\u05C7]/g, "")
-    .replace(/["'״׳`\-–—.,()]/g, " ")
+    .replace(/["'״׳`\-–—.,()?]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+/**
+ * מפתח שם משני המסיר הערות בסוגריים (כגון "אורטל אלעזר(הבת של עופרה)" -> "אורטל אלעזר").
+ */
+export function normalizeGuestNameWithoutParens(name) {
+  return normalizeGuestName(String(name ?? "").replace(/\([^)]*\)/g, " "));
 }
 
 const HEADER_ALIASES = {
@@ -103,11 +129,28 @@ function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw, statu
   const declText = String(declinedRaw ?? "").trim();
   const statText = String(statusRaw ?? "").trim();
 
-  // 1. עמודת "אישרו שיגיעו" בייצוא של iPlan:
+  // 1. בדיקת עמודת "מתלבטים" תחילה במקרה שיש בה ערך מפורש (> 0 או טקסט התלבטות),
+  //    כדי שאם ב-iPlan עמודת "אישרו שיגיעו" מכילה "0" בזמן שעמודת "מתלבטים" מכילה "2",
+  //    הרשומה תסווג כ-"maybe" ("מתלבטים") ולא כ-"declined" ("לא מגיעים").
+  if (consText !== "") {
+    const num = Number(consText.replace(/[,\s]/g, ""));
+    if (
+      (Number.isFinite(num) && num > 0) ||
+      /^(כן|מתלבט|מתלבטים|לא החליט|לא החליטו|אולי|maybe|considering|v|✓|yes|true|\?)$/i.test(consText)
+    ) {
+      return { rsvp: "maybe", attendingCount: 0, hasResponse: true, rawStatus: "considering" };
+    }
+  }
+
+  // 2. עמודת "אישרו שיגיעו" בייצוא של iPlan:
   //    - מספר חיובי (> 0) = אישרו הגעה עם כמות המגיעים
+  //    - טקסט "מתלבטים" / "לא החליטו" = מתלבטים ("maybe")
   //    - "0" מפורש או טקסט סירוב = לא מגיעים
   //    - תא ריק = טרם השיבו (אלא אם כן סומן ב"מתלבטים" או ב"לא יגיעו")
   if (confText !== "") {
+    if (/מתלבט|לא החליט|אולי|maybe|considering|\?/i.test(confText)) {
+      return { rsvp: "maybe", attendingCount: 0, hasResponse: true, rawStatus: "considering" };
+    }
     if (/^(0|לא|לא יגיעו|לא מגיעים|לא מגיע|סירבו?|declined|no)$/i.test(confText)) {
       return { rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" };
     }
@@ -138,7 +181,7 @@ function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw, statu
     }
   }
 
-  // 2. עמודת "לא יגיעו" נפרדת (אם קיימת)
+  // 3. עמודת "לא יגיעו" נפרדת (אם קיימת)
   if (declText !== "") {
     const num = Number(declText.replace(/[,\s]/g, ""));
     if ((Number.isFinite(num) && num > 0) || /^(כן|לא יגיעו|לא מגיעים|v|✓|yes|true)$/i.test(declText)) {
@@ -146,16 +189,11 @@ function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw, statu
     }
   }
 
-  // 3. עמודת "מתלבטים" — מתמפה אצלנו ל-"pending" ("ממתין") עם ציון שהתקבלה תגובה
-  if (consText !== "") {
-    const num = Number(consText.replace(/[,\s]/g, ""));
-    if ((Number.isFinite(num) && num > 0) || /^(כן|מתלבט|מתלבטים|אולי|v|✓|yes|true)$/i.test(consText)) {
-      return { rsvp: "pending", attendingCount: 0, hasResponse: true, rawStatus: "considering" };
-    }
-  }
-
   // 4. עמודת סטטוס טקסטואלית כללית (אם קיימת)
   if (statText !== "") {
+    if (/מתלבט|לא החליט|אולי|maybe|considering|\?/i.test(statText)) {
+      return { rsvp: "maybe", attendingCount: 0, hasResponse: true, rawStatus: "considering" };
+    }
     if (/לא יגיע|לא מגיע|סירב|declin|^no$|^לא$/i.test(statText)) {
       return { rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" };
     }
@@ -174,9 +212,6 @@ function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw, statu
         hasResponse: true,
         rawStatus: "confirmed",
       };
-    }
-    if (/מתלבט|אולי|maybe|considering/i.test(statText)) {
-      return { rsvp: "pending", attendingCount: 0, hasResponse: true, rawStatus: "considering" };
     }
     if (/ממתין|טרם|pending/i.test(statText)) {
       return { rsvp: "pending", attendingCount: 0, hasResponse: false, rawStatus: "pending" };
@@ -268,9 +303,12 @@ export function normalizeIplanRow(raw) {
   const invitedRaw = raw.invited ?? raw["מס' אורחים שהוזמנו"] ?? raw.seats ?? 1;
   const invited = Math.max(1, Math.round(Number(invitedRaw) || 1));
 
-  if (raw.rsvp && ["confirmed", "declined", "pending"].includes(raw.rsvp) && typeof raw.hasResponse === "boolean") {
+  if (raw.rsvp && ["confirmed", "declined", "maybe", "pending"].includes(raw.rsvp) && typeof raw.hasResponse === "boolean") {
+    // תאימות לאחור לשורות שנשמרו בעבר עם rsvp="pending" ו-rawStatus="considering"
+    const normalizedRsvp =
+      raw.rsvp === "pending" && raw.rawStatus === "considering" ? "maybe" : raw.rsvp;
     const attendingCount =
-      raw.rsvp === "confirmed"
+      normalizedRsvp === "confirmed"
         ? Math.max(1, Math.round(Number(raw.attendingCount ?? invited) || 1))
         : 0;
     return {
@@ -278,10 +316,10 @@ export function normalizeIplanRow(raw) {
       phone: phone || landline,
       landline,
       invited,
-      rsvp: raw.rsvp,
+      rsvp: normalizedRsvp,
       attendingCount,
       hasResponse: raw.hasResponse,
-      rawStatus: raw.rawStatus || raw.rsvp,
+      rawStatus: raw.rawStatus || normalizedRsvp,
     };
   }
 
@@ -306,6 +344,109 @@ export function normalizeIplanRow(raw) {
 }
 
 /**
+ * בונה מפה של guestId -> הסטטוס האחרון שנקבע לרשומה דרך סנכרון iPlan (מתוך יומן הפעילות).
+ * משמש לזיהוי איפוס ב-iPlan: רק רשומה שהסטטוס הנוכחי שלה הגיע מ-iPlan תחזור ל"ממתין"
+ * כאשר היא מאופסת ב-iPlan; סטטוס שהוזן ידנית במערכת שלנו לא ידרס.
+ */
+export function buildIplanManagedRsvpMap(activity = []) {
+  const map = new Map();
+  const list = Array.isArray(activity) ? [...activity] : [];
+  // מהישן לחדש, כך שהעדכון האחרון של כל רשומה הוא שקובע
+  list.sort((a, b) => new Date(a?.at).getTime() - new Date(b?.at).getTime());
+  for (const batch of list) {
+    for (const c of batch?.changes || []) {
+      if (c?.guestId == null || !c.toRsvp) continue;
+      map.set(Number(c.guestId), c.toRsvp);
+    }
+  }
+  return map;
+}
+
+/**
+ * ממזג מערך שורות בסיס מ-iPlan (למשל תמונת המצב המלאה עם 538 ההזמנות מהענן)
+ * עם מערך שורות חדשות/מסוננות (למשל משיכה חלקית של 95 שורות מטבלה או מקובץ מסונן),
+ * כך שלעולם לא נעלמים עדכונים מרשומות שלא הופיעו במשיכה החלקית.
+ * overlayRows נחשבות תמיד לעדכניות יותר: הסטטוס שלהן גובר (כולל איפוס ל"טרם השיבו").
+ */
+export function mergeIplanRows(baseRows = [], overlayRows = []) {
+  if (!Array.isArray(overlayRows) || overlayRows.length === 0) {
+    return Array.isArray(baseRows) ? baseRows : [];
+  }
+  if (!Array.isArray(baseRows) || baseRows.length === 0) {
+    return overlayRows;
+  }
+
+  const normalizedBase = baseRows.map(normalizeIplanRow).filter(Boolean);
+  const normalizedOverlay = overlayRows.map(normalizeIplanRow).filter(Boolean);
+  if (!normalizedOverlay.length) return normalizedBase;
+  if (!normalizedBase.length) return normalizedOverlay;
+
+  const result = normalizedBase.map((r) => ({ ...r }));
+  const indexByPhone = new Map();
+  const indexByName = new Map();
+  const indexByNameNoParens = new Map();
+
+  result.forEach((r, idx) => {
+    for (const pk of phoneKeys(r.phone)) {
+      if (pk && !indexByPhone.has(pk)) indexByPhone.set(pk, idx);
+    }
+    for (const pk of phoneKeys(r.landline)) {
+      if (pk && !indexByPhone.has(pk)) indexByPhone.set(pk, idx);
+    }
+    const nk = normalizeGuestName(r.name);
+    if (nk && !indexByName.has(nk)) indexByName.set(nk, idx);
+    const npk = normalizeGuestNameWithoutParens(r.name);
+    if (npk && !indexByNameNoParens.has(npk)) indexByNameNoParens.set(npk, idx);
+  });
+
+  for (const inc of normalizedOverlay) {
+    if (!inc) continue;
+    const pks = [...phoneKeys(inc.phone), ...phoneKeys(inc.landline)];
+    let targetIdx;
+    for (const pk of pks) {
+      if (pk && indexByPhone.has(pk)) {
+        targetIdx = indexByPhone.get(pk);
+        break;
+      }
+    }
+    const nk = normalizeGuestName(inc.name);
+    if (targetIdx === undefined && nk && indexByName.has(nk)) {
+      targetIdx = indexByName.get(nk);
+    }
+    const npk = normalizeGuestNameWithoutParens(inc.name);
+    if (targetIdx === undefined && npk && indexByNameNoParens.has(npk)) {
+      targetIdx = indexByNameNoParens.get(npk);
+    }
+
+    if (targetIdx !== undefined) {
+      const prev = result[targetIdx];
+      // השורה החדשה גוברת תמיד — כולל איפוס ב-iPlan חזרה ל"טרם השיבו"
+      result[targetIdx] = {
+        ...prev,
+        name: inc.name || prev.name,
+        phone: inc.phone || prev.phone,
+        landline: inc.landline || prev.landline,
+        invited: inc.invited || prev.invited,
+        rsvp: inc.rsvp,
+        attendingCount: inc.attendingCount,
+        hasResponse: inc.hasResponse,
+        rawStatus: inc.rawStatus,
+      };
+    } else if (inc.name || inc.phone) {
+      const newIdx = result.length;
+      result.push({ ...inc });
+      for (const pk of pks) {
+        if (pk && !indexByPhone.has(pk)) indexByPhone.set(pk, newIdx);
+      }
+      if (nk && !indexByName.has(nk)) indexByName.set(nk, newIdx);
+      if (npk && !indexByNameNoParens.has(npk)) indexByNameNoParens.set(npk, newIdx);
+    }
+  }
+
+  return result;
+}
+
+/**
  * מתאים בין רשימת המוזמנים במערכת לבין השורות מ-iPlan.
  *
  * סדר ההתאמה:
@@ -314,16 +455,21 @@ export function normalizeIplanRow(raw) {
  *    חסר מספר טלפון לרשומה (למשל ברשומות "חסר נייד" במערכת שלנו כמו "נריה ושילת בחור"),
  *    ובלבד שהשם ייחודי לחלוטין (מופיע פעם אחת בלבד אצלנו ופעם אחת בלבד ב-iPlan).
  */
-export function reconcileIplan({ guests = [], rows = [], includeUnansweredReset = false } = {}) {
+export function reconcileIplan({
+  guests = [],
+  rows = [],
+  includeUnansweredReset = false,
+  iplanManagedRsvp = null,
+} = {}) {
   const normalizedRows = (rows || []).map((r) => (Array.isArray(r) ? null : normalizeIplanRow(r))).filter(Boolean);
 
-  // מיפוי מוזמנים שלנו לפי phoneKey ולפי שם מנורמל
+  // מיפוי מוזמנים שלנו לפי כל מפתחות הטלפון (phoneKeys) ולפי שם מנורמל
   const guestsByKey = new Map();
   const guestsByName = new Map();
+  const guestsByNameNoParens = new Map();
   for (const g of guests || []) {
     if (!g) continue;
-    const key = phoneKey(g.phone);
-    if (key) {
+    for (const key of phoneKeys(g.phone)) {
       const list = guestsByKey.get(key);
       if (list) list.push(g);
       else guestsByKey.set(key, [g]);
@@ -334,11 +480,18 @@ export function reconcileIplan({ guests = [], rows = [], includeUnansweredReset 
       if (nList) nList.push(g);
       else guestsByName.set(nameKey, [g]);
     }
+    const noParensKey = normalizeGuestNameWithoutParens(g.name);
+    if (noParensKey) {
+      const npList = guestsByNameNoParens.get(noParensKey);
+      if (npList) npList.push(g);
+      else guestsByNameNoParens.set(noParensKey, [g]);
+    }
   }
 
   // ספירת הופעות של כל phoneKey ושם ב-iPlan כדי לזהות כפילויות
   const iplanByKey = new Map();
   const iplanByName = new Map();
+  const iplanByNameNoParens = new Map();
   for (const row of normalizedRows) {
     const key = phoneKey(row.phone) || phoneKey(row.landline);
     if (key) {
@@ -351,6 +504,12 @@ export function reconcileIplan({ guests = [], rows = [], includeUnansweredReset 
       const nList = iplanByName.get(nameKey);
       if (nList) nList.push(row);
       else iplanByName.set(nameKey, [row]);
+    }
+    const noParensKey = normalizeGuestNameWithoutParens(row.name);
+    if (noParensKey) {
+      const npList = iplanByNameNoParens.get(noParensKey);
+      if (npList) npList.push(row);
+      else iplanByNameNoParens.set(noParensKey, [row]);
     }
   }
 
@@ -401,18 +560,13 @@ export function reconcileIplan({ guests = [], rows = [], includeUnansweredReset 
       }
     }
 
-    // התאמת גיבוי לפי שם ייחודי מדויק כאשר למוזמן במערכת שלנו אין נייד (או שב-iPlan אין נייד)
+    // התאמת גיבוי לפי שם ייחודי מדויק כאשר לא נמצאה התאמה לפי טלפון
     if (!guest && nameKey) {
       const byNameGuests = (guestsByName.get(nameKey) || []).filter((g) => !matchedGuestIds.has(g.id));
       const byNameIplan = iplanByName.get(nameKey) || [];
 
       if (byNameGuests.length === 1 && byNameIplan.length === 1) {
-        const candidate = byNameGuests[0];
-        const candidatePhoneKey = phoneKey(candidate.phone);
-        // מתאימים לפי שם כאשר לאחד הצדדים חסר טלפון (כמו 293 הרשומות חסרות הנייד במערכת)
-        if (!candidatePhoneKey || !key) {
-          guest = candidate;
-        }
+        guest = byNameGuests[0];
       } else if (byNameGuests.length > 1 && (!key || byNameGuests.some((g) => !phoneKey(g.phone)))) {
         const ambKey = `name:${nameKey}`;
         if (!handledAmbiguousKeys.has(ambKey)) {
@@ -435,6 +589,23 @@ export function reconcileIplan({ guests = [], rows = [], includeUnansweredReset 
           });
         }
         continue;
+      }
+
+      if (!guest) {
+        const noParensKey = normalizeGuestNameWithoutParens(row.name);
+        if (noParensKey) {
+          const npGuests = (guestsByNameNoParens.get(noParensKey) || []).filter(
+            (g) => !matchedGuestIds.has(g.id)
+          );
+          const npIplan = iplanByNameNoParens.get(noParensKey) || [];
+          if (
+            npGuests.length === 1 &&
+            npIplan.length === 1 &&
+            (!phoneKey(npGuests[0].phone) || !key)
+          ) {
+            guest = npGuests[0];
+          }
+        }
       }
     }
 
@@ -486,8 +657,18 @@ export function reconcileIplan({ guests = [], rows = [], includeUnansweredReset 
     if (!row.hasResponse) {
       if (currentRsvp === "pending") {
         unchangedCount++;
-      } else if (includeUnansweredReset) {
-        updates.push(item);
+        continue;
+      }
+      // איפוס ב-iPlan: אם הסטטוס הנוכחי אצלנו הוא בדיוק הסטטוס שהגיע בעבר מ-iPlan (לפי יומן הפעילות),
+      // והרשומה ב-iPlan אופסה ל"טרם השיבו" — מחזירים אותה ל"ממתין" כעדכון רגיל.
+      // אם הסטטוס הוזן אצלנו ידנית (ולא הגיע מ-iPlan), הוא מוגן ולא יאופס ללא בקשה מפורשת.
+      const managedRsvp =
+        iplanManagedRsvp && typeof iplanManagedRsvp.get === "function"
+          ? iplanManagedRsvp.get(Number(guest.id))
+          : undefined;
+      const cameFromIplan = managedRsvp != null && managedRsvp === currentRsvp;
+      if (cameFromIplan || includeUnansweredReset) {
+        updates.push({ ...item, isReset: true });
       } else {
         unansweredLocals.push(item);
       }
@@ -528,7 +709,7 @@ export function applyIplanUpdates(guests, approvedUpdates) {
   const updateMap = new Map();
   for (const u of approvedUpdates) {
     if (!u || u.guestId == null) continue;
-    if (!["pending", "confirmed", "declined"].includes(u.toRsvp)) continue;
+    if (!["pending", "maybe", "confirmed", "declined"].includes(u.toRsvp)) continue;
     updateMap.set(Number(u.guestId), u);
   }
 
@@ -636,6 +817,9 @@ export function formatRsvpLabel(rsvp, attendingCount, seats = 1) {
   }
   if (rsvp === "declined") {
     return "לא מגיעים";
+  }
+  if (rsvp === "maybe") {
+    return "מתלבטים";
   }
   return "ממתין";
 }

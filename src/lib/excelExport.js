@@ -14,6 +14,7 @@
 
 const RSVP_LABELS = {
   confirmed: "אישרו הגעה",
+  maybe: "מתלבטים",
   pending: "ממתין",
   declined: "לא מגיעים",
 };

@@ -180,6 +180,7 @@ function drinkersOf(raw, seats) {
 function parseRsvp(s) {
   const t = String(s ?? "").trim();
   if (!t) return "pending";
+  if (/מתלבט|לא החליט|אולי|maybe|considering/i.test(t)) return "maybe";
   if (/לא מגיע|לא יגיע|declin|^no$|^לא$/i.test(t)) return "declined";
   if (/אישר|מגיע|confirm|✓|^כן$|^yes$/i.test(t)) return "confirmed";
   return "pending";

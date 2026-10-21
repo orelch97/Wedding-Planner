@@ -973,9 +973,8 @@ exports.acceptInvite = onCall({ region: REGION }, async (request) => {
  *  2. iplanExtensionSync  — נקודת קצה (HTTPS) לתוסף הכרום ששומרת את תמונת המצב
  *                           העדכנית מ-iPlan תחת iplan/snapshot (ללא דריסה אוטומטית
  *                           של מוזמנים, כדי שהמשתמש יאשר בפופ-אפ במערכת).
- *  3. commitIplanRsvpUpdates — מתעד ביומן הפעילות (activity) את העדכונים שהמשתמש
- *                              אישר, ואופציונלית מעדכן טרנזקציונית רק את שדה
- *                              אישור ההגעה (rsvp + attendingCount) של המוזמנים.
+ *  3. commitIplanRsvpUpdates — מעדכן טרנזקציונית רק את שדה אישור ההגעה של
+ *                              המוזמנים ואת יומן הפעילות, ורק לאחר אישור משתמש.
  * ========================================================================== */
 
 async function requireGuestEditor(env, weddingId, uid) {
@@ -1009,7 +1008,7 @@ function sanitizeIplanRow(raw) {
   const landline = String(raw.landline || "").trim().slice(0, 40);
   if (!name && !phone && !landline) return null;
   const invited = Math.max(1, Math.min(100, Math.round(Number(raw.invited) || 1)));
-  const rsvp = ["confirmed", "declined", "pending"].includes(raw.rsvp) ? raw.rsvp : "pending";
+  const rsvp = ["confirmed", "declined", "maybe", "pending"].includes(raw.rsvp) ? raw.rsvp : "pending";
   const attendingCount =
     rsvp === "confirmed"
       ? Math.max(1, Math.min(100, Math.round(Number(raw.attendingCount) || invited)))
@@ -1118,22 +1117,28 @@ exports.commitIplanRsvpUpdates = onCall({ region: REGION }, async (request) => {
 
   await requireGuestEditor(env, weddingId, uid);
 
-  const rawChanges = Array.isArray(data.changes) ? data.changes : [];
+  if (!Array.isArray(data.changes)) {
+    throw new HttpsError("invalid-argument", "רשימת עדכוני iPlan אינה תקינה.");
+  }
+  const rawChanges = data.changes;
   if (!rawChanges.length) {
     return { updatedCount: 0, batchId: null };
   }
-  if (rawChanges.length > 2000) {
-    throw new HttpsError("invalid-argument", "מספר העדכונים באצווה חורג מהמותר.");
+  if (rawChanges.length > 499) {
+    throw new HttpsError("invalid-argument", "אפשר לאשר עד 499 עדכונים בכל פעם.");
   }
 
   const cleanChanges = rawChanges
     .map((c) => {
       if (!c || c.guestId == null) return null;
-      const toRsvp = ["confirmed", "declined", "pending"].includes(c.toRsvp) ? c.toRsvp : null;
+      const guestId = Number(c.guestId);
+      if (!Number.isSafeInteger(guestId) || guestId < 0) return null;
+      const toRsvp = ["confirmed", "declined", "maybe", "pending"].includes(c.toRsvp) ? c.toRsvp : null;
       if (!toRsvp) return null;
-      const fromRsvp = ["confirmed", "declined", "pending"].includes(c.fromRsvp) ? c.fromRsvp : "pending";
+      if (!["confirmed", "declined", "maybe", "pending"].includes(c.fromRsvp)) return null;
+      const fromRsvp = c.fromRsvp;
       return {
-        guestId: Number(c.guestId),
+        guestId,
         guestName: String(c.guestName || "").trim().slice(0, 200),
         fromRsvp,
         fromAttendingCount: Math.max(0, Math.round(Number(c.fromAttendingCount) || 0)),
@@ -1141,42 +1146,21 @@ exports.commitIplanRsvpUpdates = onCall({ region: REGION }, async (request) => {
         toAttendingCount:
           toRsvp === "confirmed" ? Math.max(1, Math.round(Number(c.toAttendingCount) || 1)) : 0,
       };
-    })
-    .filter(Boolean);
+    });
 
-  if (!cleanChanges.length) {
-    return { updatedCount: 0, batchId: null };
+  if (cleanChanges.some((change) => !change)) {
+    throw new HttpsError("invalid-argument", "אחד או יותר מעדכוני iPlan אינם תקינים.");
   }
 
-  const applyToGuests = Boolean(data.applyToGuests);
+  const uniqueGuestIds = new Set(cleanChanges.map((change) => change.guestId));
+  if (uniqueGuestIds.size !== cleanChanges.length) {
+    throw new HttpsError("invalid-argument", "נמצא יותר מעדכון אחד לאותו מוזמן.");
+  }
+
   const wRef = weddingRef(env, weddingId);
-
-  if (applyToGuests) {
-    for (const change of cleanChanges) {
-      const gRef = wRef.collection("guests").doc(String(change.guestId));
-      await db.runTransaction(async (tx) => {
-        const snap = await tx.get(gRef);
-        if (!snap.exists || snap.get("deletedAt")) return;
-        const currentRev = Number(snap.get("revision")) || 0;
-        const seats = Math.max(1, Number(snap.get("seats")) || 1);
-        const attendingCount =
-          change.toRsvp === "confirmed"
-            ? Math.max(1, Math.min(seats, change.toAttendingCount))
-            : 0;
-        // עדכון אך ורק של rsvp ו-attendingCount + קידום revision ו-updatedAt
-        tx.update(gRef, {
-          rsvp: change.toRsvp,
-          attendingCount,
-          revision: currentRev + 1,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-      });
-    }
-  }
-
   const batchId = randomUUID();
   const actRef = wRef.collection("activity").doc(batchId);
-  await actRef.set({
+  const activityEntry = {
     id: batchId,
     batchId,
     at: FieldValue.serverTimestamp(),
@@ -1184,6 +1168,71 @@ exports.commitIplanRsvpUpdates = onCall({ region: REGION }, async (request) => {
     byUid: uid,
     updatedCount: cleanChanges.length,
     changes: cleanChanges.slice(0, 300),
+  };
+
+  // Older open clients persist guest rows separately after recording activity.
+  if (data.applyToGuests === false) {
+    await actRef.set(activityEntry);
+    return { updatedCount: cleanChanges.length, batchId, appliedToGuests: false };
+  }
+
+  const guestRefs = cleanChanges.map((change) =>
+    wRef.collection("guests").doc(String(change.guestId))
+  );
+
+  await db.runTransaction(async (tx) => {
+    const snapshots = await Promise.all(guestRefs.map((ref) => tx.get(ref)));
+    const writes = [];
+
+    for (let index = 0; index < cleanChanges.length; index++) {
+      const change = cleanChanges[index];
+      const snap = snapshots[index];
+      if (!snap.exists || snap.get("deletedAt")) {
+        throw new HttpsError("failed-precondition", "אחת הרשומות נמחקה לפני שמירת הסנכרון. רעננו את הבדיקה.");
+      }
+
+      const seats = Math.max(1, Number(snap.get("seats")) || 1);
+      const currentRsvp = ["confirmed", "declined", "maybe", "pending"].includes(snap.get("rsvp"))
+        ? snap.get("rsvp")
+        : "pending";
+      const storedAttending = snap.get("attendingCount");
+      const currentAttendingCount = currentRsvp === "confirmed"
+        ? storedAttending != null && Number(storedAttending) > 0
+          ? Math.min(seats, Number(storedAttending))
+          : seats
+        : 0;
+      const expectedAttendingCount = change.fromRsvp === "confirmed"
+        ? Math.min(seats, change.fromAttendingCount || seats)
+        : 0;
+
+      if (currentRsvp !== change.fromRsvp || currentAttendingCount !== expectedAttendingCount) {
+        throw new HttpsError(
+          "aborted",
+          "אישור ההגעה השתנה אחרי פתיחת הבדיקה. רעננו את הסנכרון לפני אישור נוסף."
+        );
+      }
+
+      const attendingCount = change.toRsvp === "confirmed"
+        ? Math.max(1, Math.min(seats, change.toAttendingCount))
+        : 0;
+      writes.push({
+        ...change,
+        toAttendingCount: attendingCount,
+        revision: (Number(snap.get("revision")) || 0) + 1,
+      });
+    }
+
+    for (let index = 0; index < writes.length; index++) {
+      const write = writes[index];
+      tx.update(guestRefs[index], {
+        rsvp: write.toRsvp,
+        attendingCount: write.toAttendingCount,
+        revision: write.revision,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    tx.set(actRef, { ...activityEntry, updatedCount: writes.length, changes: writes.slice(0, 300) });
   });
 
   return { updatedCount: cleanChanges.length, batchId };

@@ -67,7 +67,20 @@ function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw }) {
   const consText = String(consideringRaw ?? "").trim();
   const declText = String(declinedRaw ?? "").trim();
 
+  if (consText !== "") {
+    const num = Number(consText.replace(/[,\s]/g, ""));
+    if (
+      (Number.isFinite(num) && num > 0) ||
+      /^(כן|מתלבט|מתלבטים|לא החליט|לא החליטו|אולי|maybe|considering|v|✓|\?)$/i.test(consText)
+    ) {
+      return { rsvp: "maybe", attendingCount: 0, hasResponse: true, rawStatus: "considering" };
+    }
+  }
+
   if (confText !== "") {
+    if (/מתלבט|לא החליט|אולי|maybe|considering|\?/i.test(confText)) {
+      return { rsvp: "maybe", attendingCount: 0, hasResponse: true, rawStatus: "considering" };
+    }
     if (/^(0|לא|לא יגיעו|לא מגיעים|לא מגיע|סירבו?|declined|no)$/i.test(confText)) {
       return { rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" };
     }
@@ -86,13 +99,6 @@ function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw }) {
     const num = Number(declText.replace(/[,\s]/g, ""));
     if ((Number.isFinite(num) && num > 0) || /^(כן|לא יגיעו|לא מגיעים|v|✓)$/i.test(declText)) {
       return { rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" };
-    }
-  }
-
-  if (consText !== "") {
-    const num = Number(consText.replace(/[,\s]/g, ""));
-    if ((Number.isFinite(num) && num > 0) || /^(כן|מתלבט|מתלבטים|אולי|v|✓)$/i.test(consText)) {
-      return { rsvp: "pending", attendingCount: 0, hasResponse: true, rawStatus: "considering" };
     }
   }
 
@@ -239,13 +245,17 @@ function mergeRows(baseRows = [], overlayRows = []) {
   return result;
 }
 
+const BASELINE_VERSION = 5;
+
 async function ensureSeededRows() {
-  const stored = await chrome.storage.local.get("lastSyncedRows");
+  const stored = await chrome.storage.local.get(["lastSyncedRows", "baselineVersion"]);
   let current = Array.isArray(stored.lastSyncedRows) ? stored.lastSyncedRows : [];
   const baseline = await getInitialBaselineRows();
-  if (baseline.length > 0 && current.length < baseline.length) {
+  if (baseline.length > 0 && (stored.baselineVersion !== BASELINE_VERSION || current.length < baseline.length)) {
+    // תמיד ממזגים את הרשומות הקיימות אל תוך 538 רשומות הבסיס, כך שגם אם נשמר בעבר ייצוא חלקי (למשל 95 שורות),
+    // כל 538 ההזמנות נשמרות וגם כל העדכונים החדשים נשמרים במלואם.
     current = mergeRows(baseline, current);
-    await chrome.storage.local.set({ lastSyncedRows: current });
+    await chrome.storage.local.set({ lastSyncedRows: current, baselineVersion: BASELINE_VERSION });
   }
   return current;
 }
@@ -351,7 +361,11 @@ async function performSync({ force = false, source = "auto" } = {}) {
     for (const tab of tabs) {
       if (!tab.id || (tab.url && tab.url.includes("sign_in"))) continue;
       try {
-        const pageRes = await chrome.tabs.sendMessage(tab.id, { type: "IPLAN_PAGE_COLLECT" });
+        const pageRes = await chrome.tabs.sendMessage(tab.id, {
+          type: "IPLAN_PAGE_COLLECT",
+          includeExport: true,
+          forceExport: Boolean(force),
+        });
         if (pageRes && pageRes.ok && (pageRes.exportBase64 || (pageRes.domRows && pageRes.domRows.length > 0))) {
           return await ingestFromPage({
             exportBase64: pageRes.exportBase64,

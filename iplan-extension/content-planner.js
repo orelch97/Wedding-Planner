@@ -7,6 +7,9 @@
   async function pushLatestRowsToPage() {
     try {
       const statusRes = await chrome.runtime.sendMessage({ type: "IPLAN_GET_STATUS" });
+      if (statusRes?.ok) {
+        window.postMessage({ type: "WEDDING_PLANNER_IPLAN_EXTENSION_AVAILABLE" }, "*");
+      }
       if (statusRes && Array.isArray(statusRes.rows) && statusRes.rows.length > 0) {
         window.postMessage(
           {

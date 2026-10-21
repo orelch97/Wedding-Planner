@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Wedding Planner — סנכרון אישורי הגעה מ-iPlan",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "סנכרון אוטומטי של סטטוס אישורי הגעה מ-iPlan אל מערכת תכנון החתונה (לתצוגה מקדימה ואישור מבוקר).",
   "permissions": [
     "alarms",

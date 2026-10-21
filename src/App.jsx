@@ -149,7 +149,7 @@ import {
 import AdminDashboard from "./components/AdminDashboard.jsx";
 import ChecklistOptionsManager from "./components/ChecklistOptionsManager.jsx";
 import { IplanSyncModal, ActivityBell } from "./components/IplanSyncModal.jsx";
-import { reconcileIplan } from "./lib/iplanSync.js";
+import { buildIplanManagedRsvpMap, mergeIplanRows, reconcileIplan } from "./lib/iplanSync.js";
 import { isAdminEmail } from "./lib/adminConfig.js";
 import { findDuplicatePhones, describeDuplicates, phoneDigits } from "./lib/guestDuplicates.js";
 import {
@@ -215,6 +215,7 @@ const WEDDING_DATE = new Date(2027, 0, 6, 19, 0, 0);
 
 const RSVP = {
   confirmed: { label: "אישרו הגעה", color: "sage" },
+  maybe: { label: "מתלבטים", color: "sky" },
   pending: { label: "ממתין", color: "gold" },
   declined: { label: "לא מגיעים", color: "rose" },
 };
@@ -254,6 +255,7 @@ function useCountdown(targetDate) {
 
 const colorMap = {
   sage: "bg-sage-100 text-sage-600 ring-sage-300/40",
+  sky: "bg-sky-100 text-sky-700 ring-sky-300/50",
   gold: "bg-gold-100 text-gold-600 ring-gold-300/50",
   rose: "bg-rose-100 text-rose-600 ring-rose-300/40",
   slate: "bg-slate-100 text-slate-600 ring-slate-300/40",
@@ -2078,6 +2080,7 @@ const GuestRow = memo(function GuestRow({
             }`}
           >
             <option value="pending">ממתין</option>
+            <option value="maybe">מתלבטים</option>
             <option value="confirmed">אישרו הגעה</option>
             <option value="declined">לא מגיעים</option>
           </select>
@@ -2174,7 +2177,7 @@ const GuestCard = memo(function GuestCard({
   const [open, setOpen] = useState(false);
   const rsvpKey = RSVP[g.rsvp] ? g.rsvp : "pending";
   const rsvpLabel = RSVP[rsvpKey].label;
-  const rsvpDot = { sage: "bg-sage-500", gold: "bg-gold-500", rose: "bg-rose-400" }[
+  const rsvpDot = { sage: "bg-sage-500", sky: "bg-sky-500", gold: "bg-gold-500", rose: "bg-rose-400" }[
     RSVP[rsvpKey].color
   ];
 
@@ -2348,6 +2351,7 @@ const GuestCard = memo(function GuestCard({
             className={field}
           >
             <option value="pending">ממתין</option>
+            <option value="maybe">מתלבטים</option>
             <option value="confirmed">אישרו הגעה</option>
             <option value="declined">לא מגיעים</option>
           </select>
@@ -2430,7 +2434,7 @@ const GuestCard = memo(function GuestCard({
   );
 });
 
-function Guests({ guests, setGuests, tables, setTables, categories, setCategories, dataLoading = false, dataUnavailable = false, onOpenIplanSync = null, pendingIplanCount = 0 }) {
+function Guests({ guests, setGuests, tables, setTables, categories, setCategories, dataLoading = false, dataUnavailable = false }) {
   const canEdit = useCanEdit();
   const fileRef = useRef(null);
   const addGuestFormRef = useRef(null);
@@ -2611,6 +2615,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
       drinkerRecords: guests.filter((g) => (Number(g.drinkers) || 0) > 0).length,
       gifts: guests.reduce((s, g) => s + (g.gift || 0), 0),
       confirmedCount: guests.filter((g) => g.rsvp === "confirmed").length,
+      maybeCount: guests.filter((g) => g.rsvp === "maybe").length,
       pendingCount: guests.filter((g) => g.rsvp === "pending").length,
       declinedCount: guests.filter((g) => g.rsvp === "declined").length,
       confirmedPeople: guests.reduce((s, g) => {
@@ -2618,6 +2623,10 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         const seats = g.seats || 1;
         return s + (g.attendingCount != null ? Math.min(g.attendingCount, seats) : seats);
       }, 0),
+      maybePeople: guests.reduce(
+        (s, g) => s + (g.rsvp === "maybe" ? g.seats || 1 : 0),
+        0
+      ),
       pendingPeople: guests.reduce(
         (s, g) => s + (g.rsvp === "pending" ? g.seats || 1 : 0),
         0
@@ -2690,7 +2699,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
         case "table": return guestTableMap[g.id] || "";
         case "probablyComing": return g.probablyComing ? 1 : 0;
         case "considering": return g.considering ? 1 : 0;
-        case "rsvp": return { confirmed: 0, pending: 1, declined: 2 }[g.rsvp] ?? 1;
+        case "rsvp": return { confirmed: 0, maybe: 1, pending: 2, declined: 3 }[g.rsvp] ?? 2;
         case "gift": return g.gift || 0;
         default: return "";
       }
@@ -3283,9 +3292,10 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
             <CheckCheck size={18} className="text-sage-500" /> סטטוס אישורי הגעה
           </div>
-          <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-1 sm:flex-wrap">
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-1 sm:flex-wrap">
             {[
               { key: "confirmed", label: "אישרו הגעה", value: totals.confirmedPeople, records: totals.confirmedCount, color: "sage" },
+              { key: "maybe", label: "מתלבטים", value: totals.maybePeople, records: totals.maybeCount, color: "sky" },
               { key: "pending", label: "ממתינים", value: totals.pendingPeople, records: totals.pendingCount, color: "gold" },
               { key: "declined", label: "לא מגיעים", value: totals.declinedPeople, records: totals.declinedCount, color: "rose" },
             ].map((s) => {
@@ -3375,23 +3385,6 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                     <>
                       <Upload size={18} /> ייבוא Excel / CSV
                     </>
-                  )}
-                </button>
-              )}
-              {canEdit && onOpenIplanSync && (
-                <button
-                  type="button"
-                  data-testid="open-iplan-sync-btn"
-                  onClick={onOpenIplanSync}
-                  title="עדכון אישורי הגעה מ-iPlan (תצוגה מקדימה ואישור)"
-                  className="btn-secondary relative border-gold-300 bg-gold-50/70 text-gold-900 hover:bg-gold-100/80"
-                >
-                  <CheckCheck size={17} className="text-gold-700" />
-                  <span>עדכון אישורי הגעה</span>
-                  {pendingIplanCount > 0 && (
-                    <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gold-600 px-1.5 text-[11px] font-bold text-white">
-                      {pendingIplanCount}
-                    </span>
                   )}
                 </button>
               )}
@@ -3559,6 +3552,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             >
               <option value="all">כל הסטטוסים</option>
               <option value="confirmed">אישרו הגעה</option>
+              <option value="maybe">מתלבטים</option>
               <option value="pending">ממתין</option>
               <option value="declined">לא מגיעים</option>
             </select>
@@ -3715,6 +3709,12 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               className="btn-secondary px-2.5 text-xs"
             >
               אישרו הגעה
+            </button>
+            <button
+              onClick={() => bulkRsvp("maybe")}
+              className="btn-secondary px-2.5 text-xs"
+            >
+              מתלבטים
             </button>
             <button
               onClick={() => bulkRsvp("pending")}
@@ -9496,12 +9496,50 @@ function WeddingApp({
   const [countdownBackgroundUrl, setCountdownBackgroundUrl] = useState("");
   const [iplanModalOpen, setIplanModalOpen] = useState(false);
   const [iplanSnapshot, setIplanSnapshot] = useState(null);
+  const [iplanExtensionAvailable, setIplanExtensionAvailable] = useState(false);
   const [iplanActivity, setIplanActivity] = usePersistentState("iplanActivity", []);
 
   useEffect(() => {
     if (!cloudEnabled || !weddingId || !mayGuests) return undefined;
-    const unsubSnap = subscribeIplanSnapshot(weddingId, (snap) => setIplanSnapshot(snap));
-    const unsubAct = subscribeActivity(weddingId, (items) => setIplanActivity(items));
+    const unsubSnap = subscribeIplanSnapshot(weddingId, (snap) => {
+      if (!snap || !Array.isArray(snap.rows)) return;
+      setIplanSnapshot((prev) => {
+        const prevRows = Array.isArray(prev?.rows) ? prev.rows : [];
+        if (!prevRows.length || !snap.rows.length) {
+          return snap.rows.length ? { ...snap, rowCount: snap.rows.length } : prev;
+        }
+        // הנתון העדכני יותר (לפי זמן הסנכרון) גובר — כך גם איפוס ב-iPlan מגיע למערכת
+        const prevTime = new Date(prev?.syncedAt || 0).getTime() || 0;
+        const snapTime = new Date(snap.syncedAt || 0).getTime() || 0;
+        const snapIsNewer = snapTime >= prevTime;
+        const nextRows = snapIsNewer
+          ? mergeIplanRows(prevRows, snap.rows)
+          : mergeIplanRows(snap.rows, prevRows);
+        return {
+          ...snap,
+          syncedAt: snapIsNewer ? snap.syncedAt : prev.syncedAt,
+          rows: nextRows,
+          rowCount: nextRows.length,
+        };
+      });
+    });
+    const unsubAct = subscribeActivity(weddingId, (remoteItems) => {
+      setIplanActivity((prev) => {
+        const prevList = Array.isArray(prev) ? prev : [];
+        const localOnly = prevList.filter(
+          (item) =>
+            String(item.id || "").startsWith("local-") &&
+            !remoteItems.some(
+              (r) =>
+                r.updatedCount === item.updatedCount &&
+                Math.abs(new Date(r.at).getTime() - new Date(item.at).getTime()) < 10_000
+            )
+        );
+        return [...remoteItems, ...localOnly]
+          .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+          .slice(0, 50);
+      });
+    });
     return () => {
       unsubSnap?.();
       unsubAct?.();
@@ -9511,16 +9549,27 @@ function WeddingApp({
   useEffect(() => {
     function handleExtensionMessage(event) {
       if (event.source !== window || !event.data || typeof event.data !== "object") return;
+      if (event.data.type === "WEDDING_PLANNER_IPLAN_EXTENSION_AVAILABLE") {
+        setIplanExtensionAvailable(true);
+        return;
+      }
       if (
         event.data.type === "WEDDING_PLANNER_IPLAN_ROWS" &&
         Array.isArray(event.data.rows) &&
         event.data.rows.length > 0
       ) {
-        setIplanSnapshot({
-          rows: event.data.rows,
-          rowCount: event.data.rows.length,
-          source: "extension",
-          syncedAt: event.data.syncedAt || new Date().toISOString(),
+        setIplanSnapshot((prev) => {
+          const prevRows = Array.isArray(prev?.rows) ? prev.rows : [];
+          const incomingRows = event.data.rows;
+          // נתונים חיים מהתוסף הם תמיד העדכניים ביותר — הם גוברים (כולל איפוס ל"טרם השיבו")
+          const mergedRows =
+            prevRows.length > 0 ? mergeIplanRows(prevRows, incomingRows) : incomingRows;
+          return {
+            rows: mergedRows,
+            rowCount: mergedRows.length,
+            source: "extension",
+            syncedAt: event.data.syncedAt || new Date().toISOString(),
+          };
         });
       }
     }
@@ -9536,33 +9585,54 @@ function WeddingApp({
     };
   }, []);
 
+  const iplanManagedRsvp = useMemo(() => buildIplanManagedRsvpMap(iplanActivity), [iplanActivity]);
+
   const pendingIplanCount = useMemo(() => {
     if (!iplanSnapshot?.rows?.length) return 0;
-    return reconcileIplan({ guests, rows: iplanSnapshot.rows }).updates.length;
-  }, [guests, iplanSnapshot]);
+    return reconcileIplan({ guests, rows: iplanSnapshot.rows, iplanManagedRsvp }).updates.length;
+  }, [guests, iplanSnapshot, iplanManagedRsvp]);
+  const hasIplanSource =
+    iplanExtensionAvailable ||
+    Boolean(iplanSnapshot?.rows?.length);
 
-  const handleCommitIplanActivity = useCallback(
+  const handleCommitIplanUpdates = useCallback(
     async (changes, source = "iplan") => {
-      if (!changes?.length) return;
-      if (cloudEnabled && weddingId) {
+      if (!changes?.length) return { updatedCount: 0, persistedToCloud: cloudEnabled };
+      const currentUid = session?.user?.id ?? "local";
+      const seenStorageKey = `wp_activity_seen_${currentUid}_${weddingId || "local"}`;
+      // סימון הפעולה שהמשתמש עצמו הרגע אישר כ"נקראה" כדי שלא יקפוץ לו Badge אדום של "1" על פעולה שהוא עצמו ביצע:
+      const markSelfSeen = () => {
         try {
-          await commitIplanRsvpUpdates(weddingId, changes, { source, applyToGuests: false });
-          return;
-        } catch (err) {
-          console.error("Failed to record iPlan activity in cloud:", err);
+          // +15_000ms כדי לכסות גם הפרשי שעון קלים מול FieldValue.serverTimestamp() של השרת
+          localStorage.setItem(seenStorageKey, String(Date.now() + 15_000));
+        } catch {
+          /* ignore storage quota */
         }
+      };
+
+      if (cloudEnabled && weddingId) {
+        const result = await commitIplanRsvpUpdates(weddingId, changes, { source });
+        if (result?.updatedCount !== changes.length) {
+          throw new Error("The server did not commit every approved iPlan update.");
+        }
+        markSelfSeen();
+        return { ...result, persistedToCloud: true };
       }
+      const nowIso = new Date().toISOString();
       const localBatch = {
         id: `local-${Date.now()}`,
         batchId: `local-${Date.now()}`,
-        at: new Date().toISOString(),
+        at: nowIso,
         source,
+        byUid: currentUid,
         updatedCount: changes.length,
         changes,
       };
       setIplanActivity((prev) => [localBatch, ...(Array.isArray(prev) ? prev : [])].slice(0, 50));
+      markSelfSeen();
+      return { updatedCount: changes.length, persistedToCloud: false };
     },
-    [cloudEnabled, weddingId, setIplanActivity]
+    [cloudEnabled, weddingId, session?.user?.id, setIplanActivity]
   );
 
   const handleCountdownBackgroundChange = useCallback(
@@ -10673,10 +10743,11 @@ function WeddingApp({
         guests={guests}
         setGuests={setGuests}
         cloudSnapshot={iplanSnapshot}
+        iplanManagedRsvp={iplanManagedRsvp}
         weddingId={cloudEnabled ? weddingId : null}
         isOwner={isOwner}
         onIssueToken={cloudEnabled && isOwner ? issueIplanSyncToken : null}
-        onCommitActivity={handleCommitIplanActivity}
+        onCommitUpdates={handleCommitIplanUpdates}
         onNotify={notify}
       />
       {membersOpen && (
@@ -10777,7 +10848,7 @@ function WeddingApp({
               <HelpCircle size={19} />
               {!tourStatus && <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-gold-600 ring-2 ring-white" />}
             </button>
-            {mayGuests && (
+            {mayGuests && hasIplanSource && (
               <ActivityBell
                 activity={iplanActivity}
                 userId={session?.user?.id ?? "local"}
@@ -11074,8 +11145,6 @@ function WeddingApp({
           {active === "guests" && (
             <CategoriesContext.Provider value={categories}>
               <Guests
-                onOpenIplanSync={canEdit ? () => setIplanModalOpen(true) : null}
-                pendingIplanCount={pendingIplanCount}
                 guests={guests}
                 setGuests={setGuests}
                 tables={tables}

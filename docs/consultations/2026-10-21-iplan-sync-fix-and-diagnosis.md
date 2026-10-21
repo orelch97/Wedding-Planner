@@ -44,3 +44,4 @@
 ---
 
 *עותק מלא ומדויק של תשובה זו נשמר עבורך בקובץ [2026-10-21-iplan-sync-fix-and-diagnosis.md](file:///c:/Users/User/Wedding-Planner/docs/consultations/2026-10-21-iplan-sync-fix-and-diagnosis.md).*
+

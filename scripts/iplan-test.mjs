@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import {
   phoneKey,
+  phoneKeys,
   parseIplanSheetRows,
   normalizeIplanRow,
+  mergeIplanRows,
+  buildIplanManagedRsvpMap,
   reconcileIplan,
   applyIplanUpdates,
   readIplanBuffer,
@@ -84,7 +87,7 @@ await check("parseIplanSheetRows parses iPlan double-header export structure", (
   assert.equal(rows[1].hasResponse, true);
 
   assert.equal(rows[2].name, "יוסי לוי");
-  assert.equal(rows[2].rsvp, "pending");
+  assert.equal(rows[2].rsvp, "maybe");
   assert.equal(rows[2].attendingCount, 0);
   assert.equal(rows[2].hasResponse, true);
   assert.equal(rows[2].rawStatus, "considering");
@@ -125,7 +128,7 @@ await check("reconcileIplan detects confirmed, declined, considering, and clamps
 
   const u3 = result.updates.find((u) => u.guestId === 3);
   assert.equal(u3.fromRsvp, "confirmed");
-  assert.equal(u3.toRsvp, "pending");
+  assert.equal(u3.toRsvp, "maybe");
   assert.equal(u3.toAttendingCount, 0);
 
   const u4 = result.updates.find((u) => u.guestId === 4);
@@ -173,6 +176,48 @@ await check("reconcileIplan matches unique guest by exact name when phone is mis
   assert.equal(result.updates[0].guestId, 77);
   assert.equal(result.updates[0].toRsvp, "confirmed");
   assert.equal(result.updates[0].toAttendingCount, 2);
+});
+
+await check("phoneKeys and reconcileIplan match multi-phone guest records like שי ושקד אלעזרי (050-6970046 / 054-5666710)", () => {
+  assert.deepEqual(phoneKeys("050-6970046 / 054-5666710"), ["506970046", "545666710"]);
+  const guests = [
+    {
+      id: 222,
+      name: "שי ושקד אלעזרי",
+      phone: "050-6970046 / 054-5666710",
+      seats: 2,
+      category: "צד חתן - משפחה צד אמא",
+      rsvp: "pending",
+    },
+    {
+      id: 68,
+      name: "אתי וקובי נעים",
+      phone: "053-53338930",
+      seats: 1,
+      category: "צד חתן",
+      rsvp: "pending",
+    },
+    {
+      id: 29,
+      name: "אורטל אלעזר(הבת של עופרה)",
+      phone: "",
+      seats: 1,
+      category: "צד חתן",
+      rsvp: "pending",
+    },
+  ];
+  const rows = [
+    { name: "שי ושקד אלעזרי", phone: "050-697-0046", invited: 2, confirmed: "2" },
+    { name: "אתי וקובי נעים", phone: "053-533-8930", invited: 1, confirmed: "1" },
+    { name: "אורטל אלעזר", phone: "", invited: 1, confirmed: "1" },
+  ];
+
+  const result = reconcileIplan({ guests, rows });
+  assert.equal(result.updates.length, 3);
+  const shay = result.updates.find((u) => u.guestId === 222);
+  assert.ok(shay);
+  assert.equal(shay.toRsvp, "confirmed");
+  assert.equal(shay.toAttendingCount, 2);
 });
 
 await check("reconcileIplan protects manual local confirmations when iPlan row is unanswered unless requested", () => {
@@ -257,9 +302,142 @@ await check("readIplanBuffer reads binary .xls / .xlsx buffers via SheetJS", asy
 
 await check("formatRsvpLabel formats Hebrew status labels with count", () => {
   assert.equal(formatRsvpLabel("confirmed", 3, 4), "אישרו הגעה (3)");
+  assert.equal(formatRsvpLabel("maybe", 0, 2), "מתלבטים");
   assert.equal(formatRsvpLabel("declined", 0, 2), "לא מגיעים");
   assert.equal(formatRsvpLabel("pending", 0, 2), "ממתין");
   assert.equal(normalizeIplanRow({ name: "בדיקה", phone: "0501234567", confirmed: "1" }).rsvp, "confirmed");
+});
+
+await check("reconcileIplan detects transition from pending ('ממתין') to maybe ('מתלבטים') and applyIplanUpdates applies it", () => {
+  const guests = [
+    { id: 88, name: "אופיר ושרון", phone: "050-4445566", seats: 2, rsvp: "pending", attendingCount: null },
+  ];
+  // גם כאשר בייצוא מופיע 0 ב"אישרו שיגיעו" ו-2 ב"מתלבטים", וגם כאשר מגיע מהתוסף כ-rsvp="maybe"
+  const rows = [
+    { name: "אופיר ושרון", phone: "050-444-5566", invited: 2, confirmed: "0", considering: "2" },
+  ];
+
+  const result = reconcileIplan({ guests, rows });
+  assert.equal(result.updates.length, 1);
+  assert.equal(result.updates[0].guestId, 88);
+  assert.equal(result.updates[0].fromRsvp, "pending");
+  assert.equal(result.updates[0].toRsvp, "maybe");
+  assert.equal(result.updates[0].toAttendingCount, 0);
+
+  const { nextGuests, changes } = applyIplanUpdates(guests, result.updates);
+  assert.equal(changes.length, 1);
+  assert.equal(nextGuests[0].rsvp, "maybe");
+  assert.equal(nextGuests[0].attendingCount, 0);
+});
+
+await check("iplan-extension content-iplan.js enforces passive DOM scraping on edits, 3-min export cooldown, and context guard", async () => {
+  const fs = await import("node:fs");
+  const contentScript = fs.readFileSync(new URL("../iplan-extension/content-iplan.js", import.meta.url), "utf8");
+  assert.ok(contentScript.includes("EXPORT_FETCH_COOLDOWN_MS = 180_000"), "Must enforce 3-min export cooldown");
+  assert.ok(contentScript.includes("function isContextValid()"), "Must guard against invalidated extension context");
+  assert.ok(contentScript.includes("window.__wpIplanCleanup = cleanup"), "Must clean up previous content-script instances");
+  assert.ok(
+    contentScript.includes('runSync({ includeExport: false, forceExport: false, source: "iplan-dom-change" })'),
+    "DOM change events must trigger passive DOM sync without network export"
+  );
+  assert.ok(
+    contentScript.includes("function isSearchFilterActiveOnPage()"),
+    "Must detect active search filter to avoid unnecessary export.xls requests"
+  );
+});
+
+await check("mergeIplanRows merges a partial 95-row filtered extension sync into a full 538-row cloud snapshot so all 7 updates are preserved", () => {
+  const guests = [
+    { id: 1, name: "אופיר קוזי", phone: "052-558-5956", seats: 1, rsvp: "pending" },
+    { id: 2, name: "שיי-לי מדמוני", phone: "052-538-1648", seats: 1, rsvp: "pending" },
+    { id: 3, name: "מור דוידי", phone: "050-216-9499", seats: 1, rsvp: "pending" },
+    { id: 4, name: "שי ושקד אלעזרי", phone: "050-6970046 / 054-5666710", seats: 2, rsvp: "pending" },
+    { id: 5, name: "נריה ושילת בחור", phone: "", seats: 2, rsvp: "pending" },
+    { id: 6, name: "אתי וקובי נעים", phone: "053-53338930", seats: 1, rsvp: "pending" },
+    { id: 7, name: "אורטל אלעזר(הבת של עופרה)", phone: "", seats: 1, rsvp: "pending" },
+    { id: 8, name: "מנשה בן ברוך", phone: "", seats: 1, rsvp: "pending" },
+  ];
+
+  // תמונת מצב מלאה בענן (עם כל המוזמנים ו-7 עדכונים):
+  const fullCloudRows = [
+    { name: "אופיר קוזי", phone: "052-558-5956", invited: 1, rsvp: "confirmed", attendingCount: 1, hasResponse: true, rawStatus: "confirmed" },
+    { name: "שיי-לי מדמוני", phone: "052-538-1648", invited: 1, rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" },
+    { name: "מור דוידי", phone: "050-216-9499", invited: 1, rsvp: "maybe", attendingCount: 0, hasResponse: true, rawStatus: "considering" },
+    { name: "שי ושקד אלעזרי", phone: "050-697-0046", invited: 2, rsvp: "confirmed", attendingCount: 2, hasResponse: true, rawStatus: "confirmed" },
+    { name: "נריה ושילת בחור", phone: "052-279-8717", invited: 2, rsvp: "confirmed", attendingCount: 2, hasResponse: true, rawStatus: "confirmed" },
+    { name: "אתי וקובי נעים", phone: "053-533-8930", invited: 1, rsvp: "confirmed", attendingCount: 1, hasResponse: true, rawStatus: "confirmed" },
+    { name: "אורטל אלעזר", phone: "", invited: 1, rsvp: "confirmed", attendingCount: 1, hasResponse: true, rawStatus: "confirmed" },
+    { name: "מנשה בן ברוך", phone: "", invited: 1, rsvp: "pending", attendingCount: 0, hasResponse: false, rawStatus: "unanswered" },
+  ];
+
+  // משיכה חלקית/מסוננת מהתוסף (למשל 95 הזמנות מתוך 538, שמכילה רק 3 מתוך 7 העדכונים):
+  const partialExtensionRows = [
+    { name: "אופיר קוזי", phone: "052-558-5956", invited: 1, rsvp: "confirmed", attendingCount: 1, hasResponse: true, rawStatus: "confirmed" },
+    { name: "שיי-לי מדמוני", phone: "052-538-1648", invited: 1, rsvp: "declined", attendingCount: 0, hasResponse: true, rawStatus: "declined" },
+    { name: "מור דוידי", phone: "050-216-9499", invited: 1, rsvp: "maybe", attendingCount: 0, hasResponse: true, rawStatus: "considering" },
+  ];
+
+  // ללא מיזוג, המשיכה החלקית הייתה מציגה רק 3 עדכונים:
+  assert.equal(reconcileIplan({ guests, rows: partialExtensionRows }).updates.length, 3);
+
+  // עם mergeIplanRows (בשני הכיוונים: ענן כבסיס ותוסף כעדכון, או להפך), כל 8 השורות וכל 7 העדכונים נשמרים במלואם!
+  const merged = mergeIplanRows(fullCloudRows, partialExtensionRows);
+  assert.equal(merged.length, 8);
+  const reconciled = reconcileIplan({ guests, rows: merged });
+  assert.equal(reconciled.updates.length, 7);
+});
+
+await check("Reset in iPlan (answered -> unanswered) returns an iPlan-sourced guest to 'pending', but protects manual local statuses", () => {
+  const guests = [
+    // הסטטוס הגיע מ-iPlan (מופיע ביומן הפעילות) ואז אופס ב-iPlan
+    { id: 1, name: "דנה כהן", phone: "050-1111111", seats: 2, rsvp: "confirmed", attendingCount: 2 },
+    // אופס ב-iPlan מ"מתלבטים"
+    { id: 2, name: "יוסי לוי", phone: "050-2222222", seats: 1, rsvp: "maybe", attendingCount: 0 },
+    // סטטוס שהוזן ידנית אצלנו (לא דרך iPlan) — מוגן
+    { id: 3, name: "רונית אברהם", phone: "050-3333333", seats: 1, rsvp: "confirmed", attendingCount: 1 },
+    // הגיע מ-iPlan כ"אישרו", אבל אחר כך שונה אצלנו ידנית ל"לא מגיעים" — מוגן
+    { id: 4, name: "משה דוד", phone: "050-4444444", seats: 1, rsvp: "declined", attendingCount: 0 },
+  ];
+  const activity = [
+    { at: "2026-10-20T10:00:00Z", changes: [{ guestId: 1, toRsvp: "confirmed" }, { guestId: 4, toRsvp: "confirmed" }] },
+    { at: "2026-10-21T10:00:00Z", changes: [{ guestId: 2, toRsvp: "maybe" }] },
+  ];
+  const unanswered = (name, phone) => ({
+    name, phone, invited: 1, rsvp: "pending", attendingCount: 0, hasResponse: false, rawStatus: "unanswered",
+  });
+  const rows = [
+    unanswered("דנה כהן", "050-1111111"),
+    unanswered("יוסי לוי", "050-2222222"),
+    unanswered("רונית אברהם", "050-3333333"),
+    unanswered("משה דוד", "050-4444444"),
+  ];
+
+  const managed = buildIplanManagedRsvpMap(activity);
+  const result = reconcileIplan({ guests, rows, iplanManagedRsvp: managed });
+  assert.deepEqual(result.updates.map((u) => u.guestId).sort(), [1, 2]);
+  for (const u of result.updates) {
+    assert.equal(u.toRsvp, "pending");
+    assert.equal(u.toAttendingCount, 0);
+    assert.equal(u.isReset, true);
+  }
+  assert.deepEqual(result.unansweredLocals.map((u) => u.guestId).sort(), [3, 4]);
+
+  // החלת האיפוס מחזירה ל"ממתין" ומעדכנת רק rsvp + attendingCount
+  const { nextGuests, changes } = applyIplanUpdates(guests, result.updates);
+  assert.equal(changes.length, 2);
+  assert.equal(nextGuests[0].rsvp, "pending");
+  assert.equal(nextGuests[0].attendingCount, 0);
+  assert.equal(nextGuests[0].name, "דנה כהן");
+  assert.equal(nextGuests[2].rsvp, "confirmed");
+});
+
+await check("mergeIplanRows lets a newer unanswered row override an older answered row (so iPlan resets propagate)", () => {
+  const older = [{ name: "דנה כהן", phone: "050-1111111", invited: 2, rsvp: "confirmed", attendingCount: 2, hasResponse: true, rawStatus: "confirmed" }];
+  const newer = [{ name: "דנה כהן", phone: "050-1111111", invited: 2, rsvp: "pending", attendingCount: 0, hasResponse: false, rawStatus: "unanswered" }];
+  const merged = mergeIplanRows(older, newer);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].rsvp, "pending");
+  assert.equal(merged[0].hasResponse, false);
 });
 
 console.log(`\niPlan checks: ${passed} passed, ${failed} failed\n`);

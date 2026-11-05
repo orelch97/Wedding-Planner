@@ -197,7 +197,7 @@ test.describe("emulator isolation and account lifecycle", () => {
     await expect(filters.getByRole("button", { name: "כנראה יבוא", exact: true })).toHaveAttribute("aria-pressed", "true");
     await filters.getByRole("button", { name: "נקה", exact: true }).click();
     await expect(status).toHaveValue("all");
-    await page.getByRole("button", { name: "קטגוריות", exact: true }).click();
+    await page.getByRole("button", { name: "ניהול קטגוריות", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "ניהול קטגוריות מוזמנים" })).toBeVisible();
     await page.getByRole("dialog", { name: "ניהול קטגוריות מוזמנים" }).getByRole("button", { name: "סגירה", exact: true }).click();
   });
@@ -568,11 +568,18 @@ test.describe("emulator isolation and account lifecycle", () => {
     await expect(task).toBeHidden();
     await page.getByRole("combobox", { name: "סינון לפי שיוך" }).selectOption("both");
     await expect(task).toBeVisible();
-    await task.check();
-    await expect(task).toBeChecked();
-    await page.getByRole("button", { name: /שהושלמו/ }).click();
+    const hideCompleted = page.getByRole("button", { name: /שהושלמו/ });
+    await expect(hideCompleted).toHaveAttribute("aria-pressed", "true");
+    // Completed tasks are hidden by default, so the row disappears as soon as it is checked.
+    await task.click();
     await expect(task).toBeHidden();
-    await page.getByRole("button", { name: /שהושלמו/ }).click();
+    await hideCompleted.click();
+    await expect(hideCompleted).toHaveAttribute("aria-pressed", "false");
+    await expect(task).toBeVisible();
+    await expect(task).toBeChecked();
+    await hideCompleted.click();
+    await expect(task).toBeHidden();
+    await hideCompleted.click();
     await expect(task).toBeVisible();
 
     await page.getByRole("button", { name: `שינוי שם המשימה "${taskTitle}"` }).click();
@@ -826,7 +833,11 @@ test.describe("emulator isolation and account lifecycle", () => {
     await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
     await expectGuestPresent(page, guestName);
 
+    await page.getByRole("checkbox", { name: `בחירת ${guestName}`, exact: true }).check();
+    await page.getByRole("button", { name: "אישרו הגעה", exact: true }).click();
+
     await navigateTo(page, "seating");
+    await expect(page.getByTestId("seating-rsvp-rule")).toContainText("רק מוזמנים בסטטוס “אישרו הגעה”");
     const tableName = `E2E table ${Date.now()}`;
     await page.getByRole("textbox", { name: "שם השולחן החדש" }).fill(tableName);
     await page.locator('[data-tour="seating-add-table"]').getByRole("button").click();
@@ -834,6 +845,185 @@ test.describe("emulator isolation and account lifecycle", () => {
     const picker = page.getByRole("dialog", { name: new RegExp(tableName) });
     await picker.getByRole("button").filter({ hasText: guestName }).click();
     await expect(page.locator('[data-tour="seating-table-cards"]')).toContainText(guestName);
+  });
+
+  test("seating picker excludes pending, maybe, and declined guests", async ({ page }) => {
+    await signUp(page, uniqueIdentity("seating-rsvp-eligibility"));
+    await navigateTo(page, "guests");
+    await page.evaluate(async () => {
+      const store = await import("/src/lib/firebaseStore.js");
+      const [wedding] = await store.listWeddings();
+      await store.cloudSeed(wedding.id, {
+        guests: [
+          { id: 801, name: "Confirmed RSVP", category: "Family", seats: 2, rsvp: "confirmed", attendingCount: 2 },
+          { id: 802, name: "Pending RSVP", category: "Family", seats: 1, rsvp: "pending", attendingCount: 0 },
+          { id: 803, name: "Maybe RSVP", category: "Friends", seats: 1, rsvp: "maybe", attendingCount: 0 },
+          { id: 804, name: "Declined RSVP", category: "Friends", seats: 1, rsvp: "declined", attendingCount: 0 },
+        ],
+      });
+    });
+    await navigateTo(page, "seating");
+    await expect(page.getByTestId("seating-rsvp-rule")).toBeVisible();
+    await page.getByRole("button", { name: "פתיחת הסיור המודרך" }).click();
+    const seatingTour = page.getByRole("dialog");
+    await expect(seatingTour).toContainText("רק אורחים שאישרו הגעה מופיעים בבורר");
+    await seatingTour.getByRole("button", { name: "סגירת ההדרכה" }).click();
+    await expect(page.getByText("עדיין אין שולחנות", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-tour="seating-unassigned"]')).toContainText("1 מוזמנים ללא שיבוץ");
+    await expect(page.locator('[data-tour="seating-unassigned"]')).toContainText("Confirmed RSVP");
+    await expect(page.locator('[data-tour="seating-unassigned"]')).not.toContainText("Pending RSVP");
+
+    const tableName = `Eligibility table ${Date.now()}`;
+    await page.getByRole("textbox", { name: "שם השולחן החדש" }).fill(tableName);
+    await page.locator('[data-tour="seating-add-table"]').getByRole("button").click();
+    await page.getByRole("button", { name: "שבץ מוזמן" }).click();
+    const picker = page.getByRole("dialog", { name: new RegExp(tableName) });
+    await expect(picker.getByRole("button").filter({ hasText: "Confirmed RSVP" })).toBeVisible();
+    await expect(picker.getByText("Pending RSVP")).toHaveCount(0);
+    await expect(picker.getByText("Maybe RSVP")).toHaveCount(0);
+    await expect(picker.getByText("Declined RSVP")).toHaveCount(0);
+    await picker.getByRole("button").filter({ hasText: "Confirmed RSVP" }).click();
+    const seatingCards = page.locator('[data-tour="seating-table-cards"]');
+    await expect(seatingCards).toContainText("Confirmed RSVP");
+    await expect(seatingCards).not.toContainText("Pending RSVP");
+    await expect(seatingCards).not.toContainText("Maybe RSVP");
+    await expect(seatingCards).not.toContainText("Declined RSVP");
+    await expect(seatingCards).toContainText("תפוסה: 2/12");
+  });
+
+  test("a seated guest whose RSVP changes keeps their seats and is flagged for removal", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signUp(page, uniqueIdentity("seating-rsvp-change"));
+    await navigateTo(page, "guests");
+    await page.evaluate(async () => {
+      const store = await import("/src/lib/firebaseStore.js");
+      const [wedding] = await store.listWeddings();
+      await store.cloudSeed(wedding.id, {
+        guests: [
+          { id: 821, name: "Changed Mind", category: "Family", seats: 4, rsvp: "confirmed", attendingCount: 4 },
+          { id: 822, name: "Still Coming", category: "Family", seats: 2, rsvp: "confirmed", attendingCount: 2 },
+        ],
+      });
+    });
+    await navigateTo(page, "seating");
+    const tableName = `RSVP change ${Date.now()}`;
+    await page.getByRole("textbox", { name: "שם השולחן החדש" }).fill(tableName);
+    await page.locator('[data-tour="seating-add-table"]').getByRole("button").click();
+    const card = page.locator('[data-tour="seating-table-cards"] > div').filter({ hasText: tableName });
+    await card.getByRole("button", { name: "שבץ מוזמן" }).click();
+    const picker = page.getByRole("dialog", { name: new RegExp(tableName) });
+    await picker.getByRole("button").filter({ hasText: "Changed Mind" }).click();
+    await picker.getByRole("button").filter({ hasText: "Still Coming" }).click();
+    await picker.getByRole("button", { name: "סגירת חלון השיבוץ" }).click();
+    await expect(card).toContainText("תפוסה: 6/12");
+
+    await navigateTo(page, "guests");
+    await page.getByRole("checkbox", { name: "בחירת Changed Mind", exact: true }).check();
+    await page.getByRole("button", { name: "לא מגיעים", exact: true }).click();
+
+    await navigateTo(page, "seating");
+    const flagged = card.getByTestId("seating-unconfirmed-guest");
+    await expect(flagged).toHaveCount(1);
+    await expect(flagged).toContainText("Changed Mind");
+    await expect(flagged).toContainText("לא מגיעים");
+    // The seats stay reserved until someone removes the guest on purpose.
+    await expect(card).toContainText("תפוסה: 6/12");
+    await expect(card.getByRole("status")).toContainText("רשומה אחת כבר לא בסטטוס");
+    await expect(page.locator('[data-tour="seating-unassigned"]')).toHaveCount(0);
+
+    await card.getByRole("button", { name: "הסרת Changed Mind מהשולחן" }).click();
+    await expect(flagged).toHaveCount(0);
+    await expect(card).toContainText("תפוסה: 2/12");
+    await expect(card.getByRole("status")).toHaveCount(0);
+    await expect(card).toContainText("Still Coming");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+
+  test("seating search, category filters, capacity, unassign, and table deletion work", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signUp(page, uniqueIdentity("seating-actions"));
+    await navigateTo(page, "guests");
+    await page.getByRole("button", { name: "ניהול קטגוריות", exact: true }).click();
+    const categoriesDialog = page.getByRole("dialog", { name: "ניהול קטגוריות מוזמנים" });
+    for (const category of ["Family", "Friends"]) {
+      await categoriesDialog.getByRole("textbox", { name: "שם קטגוריה חדשה" }).fill(category);
+      await categoriesDialog.getByRole("button", { name: "הוסף", exact: true }).click();
+    }
+    await categoriesDialog.getByRole("button", { name: "סגירה" }).click();
+    await page.evaluate(async () => {
+      const store = await import("/src/lib/firebaseStore.js");
+      const [wedding] = await store.listWeddings();
+      await store.cloudSeed(wedding.id, {
+        guests: [
+          { id: 811, name: "Family Five", category: "Family", seats: 5, rsvp: "confirmed", attendingCount: 5 },
+          { id: 812, name: "Friends Eight", category: "Friends", seats: 8, rsvp: "confirmed", attendingCount: 8 },
+          { id: 813, name: "Friends Two", category: "Friends", seats: 2, rsvp: "confirmed", attendingCount: 2 },
+          { id: 814, name: "Pending One", category: "Family", seats: 1, rsvp: "pending", attendingCount: 0 },
+        ],
+      });
+    });
+    await navigateTo(page, "seating");
+    await expect(page.getByText("עדיין אין שולחנות", { exact: true })).toBeVisible();
+
+    const standardName = `Standard ${Date.now()}`;
+    await page.getByRole("textbox", { name: "שם השולחן החדש" }).fill(standardName);
+    await page.getByRole("combobox", { name: "סוג השולחן החדש" }).selectOption("standard");
+    await page.locator('[data-tour="seating-add-table"]').getByRole("button").click();
+    const standardCard = page.locator('[data-tour="seating-table-cards"] > div').filter({ hasText: standardName });
+
+    await standardCard.getByRole("button", { name: "שבץ מוזמן" }).click();
+    let picker = page.getByRole("dialog", { name: new RegExp(standardName) });
+    const search = picker.getByPlaceholder("חיפוש לפי שם...");
+    await search.fill("Family");
+    await expect(picker.getByText("Family Five")).toBeVisible();
+    await expect(picker.getByText("Friends Eight")).toHaveCount(0);
+    await search.clear();
+    await picker.getByRole("combobox", { name: "סינון לפי קטגוריה" }).selectOption("Friends");
+    await expect(picker.getByText("Friends Eight")).toBeVisible();
+    await expect(picker.getByText("Friends Two")).toBeVisible();
+    await expect(picker.getByText("Family Five")).toHaveCount(0);
+    await picker.getByRole("combobox", { name: "סינון לפי קטגוריה" }).selectOption("all");
+    await picker.getByRole("button").filter({ hasText: "Family Five" }).click();
+    await expect(standardCard).toContainText("תפוסה: 5/12");
+    await picker.getByRole("button", { name: "סגירת חלון השיבוץ" }).click();
+
+    await standardCard.getByRole("button", { name: "שבץ מוזמן" }).click();
+    picker = page.getByRole("dialog", { name: new RegExp(standardName) });
+    await expect(picker.getByText("Friends Eight")).toHaveCount(0);
+    await expect(picker.getByRole("button").filter({ hasText: "Friends Two" })).toBeVisible();
+    await picker.getByRole("button").filter({ hasText: "Friends Two" }).click();
+    await expect(standardCard).toContainText("תפוסה: 7/12");
+    await picker.getByRole("button", { name: "סגירת חלון השיבוץ" }).click();
+    await standardCard.getByRole("button", { name: "הסרת Friends Two מהשולחן" }).click();
+    await expect(standardCard).toContainText("תפוסה: 5/12");
+
+    const knightName = `Knight ${Date.now()}`;
+    await page.getByRole("textbox", { name: "שם השולחן החדש" }).fill(knightName);
+    await page.getByRole("combobox", { name: "סוג השולחן החדש" }).selectOption("knight");
+    await page.locator('[data-tour="seating-add-table"]').getByRole("button").click();
+    const knightCard = page.locator('[data-tour="seating-table-cards"] > div').filter({ hasText: knightName });
+    await knightCard.getByRole("button", { name: "שבץ מוזמן" }).click();
+    picker = page.getByRole("dialog", { name: new RegExp(knightName) });
+    await expect(picker.getByRole("button").filter({ hasText: "Friends Eight" })).toBeVisible();
+    await picker.getByRole("button").filter({ hasText: "Friends Eight" }).click();
+    await expect(knightCard).toContainText("תפוסה: 8/24");
+    await page.keyboard.press("Escape");
+    await expect(picker).toHaveCount(0);
+
+    await knightCard.getByRole("button", { name: "מחיקת השולחן " + knightName }).click();
+    const deleteDialog = page.getByRole("alertdialog");
+    await expect(deleteDialog).toBeVisible();
+    await expect(deleteDialog.getByRole("button", { name: "ביטול" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(deleteDialog).toHaveCount(0);
+    await expect(knightCard).toBeVisible();
+    await knightCard.getByRole("button", { name: "מחיקת השולחן " + knightName }).click();
+    await expect(deleteDialog.getByRole("button", { name: "ביטול" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(deleteDialog.getByRole("button", { name: "מחק שולחן", exact: true })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(knightCard).toHaveCount(0);
+    await expect(page.locator('[data-tour="seating-unassigned"]')).toContainText("Friends Eight");
   });
 
   test("budget-search filters both layouts without changing totals or stored items", async ({ page }, testInfo) => {
@@ -1139,7 +1329,7 @@ test.describe("emulator isolation and account lifecycle", () => {
       await columnsButton.click();
       const chooser = page.getByRole("group", { name: "בחירת עמודות בטבלת המוזמנים" });
       const defaults = [
-        ["קטגוריה", true], ["אזכור / הערות", false], ["כיסאות", true], ["מקור", false],
+        ["קטגוריה", true], ["אזכור / הערות", false], ["כיסאות", true],
         ["גלאט", true], ["שותים", true], ["כנראה יבוא", false], ["לשקול", false],
         ["אישור הגעה", true], ["מתנה", true],
       ];
@@ -1147,16 +1337,15 @@ test.describe("emulator isolation and account lifecycle", () => {
         await expect(chooser.getByRole("checkbox", { name: label })).toHaveJSProperty("checked", checked);
         if (!checked) await chooser.getByRole("checkbox", { name: label }).check();
       }
+      // The source column was retired from the table; imported values are kept but not shown.
+      await expect(chooser.getByRole("checkbox", { name: "מקור", exact: true })).toHaveCount(0);
       await expect(guestTable.getByRole("columnheader", { name: "אזכור / הערות", exact: true })).toBeVisible();
-      await expect(guestTable.getByRole("columnheader", { name: "מקור", exact: true })).toBeVisible();
       await expect(guestTable.getByRole("columnheader", { name: "כנראה יבוא", exact: true })).toBeVisible();
       await expect(guestTable.getByRole("columnheader", { name: "לשקול", exact: true })).toBeVisible();
       const mentionInputs = guestTable.locator('tbody input[placeholder="אזכור"]');
       await expect(mentionInputs).toHaveCount(2);
       await expect(mentionInputs.nth(0)).toHaveValue("Aunt, cousin");
       await expect(mentionInputs.nth(1)).toHaveValue("College");
-      await expect(guestTable.getByText("CSV source", { exact: true })).toBeVisible();
-      await expect(guestTable.getByText("XLSX source", { exact: true })).toBeVisible();
       await expect(guestTable.getByRole("button", { name: "מסומן ככנראה יבוא" })).toBeVisible();
       await expect(guestTable.getByRole("button", { name: "מסומן לשקילה" })).toBeVisible();
       await chooser.getByRole("checkbox", { name: "קטגוריה" }).uncheck();
@@ -1172,20 +1361,18 @@ test.describe("emulator isolation and account lifecycle", () => {
       const columnsButton = page.getByRole("button", { name: /עמודות/ });
       await columnsButton.click();
       const chooser = page.getByRole("group", { name: "בחירת עמודות בטבלת המוזמנים" });
-      await chooser.getByRole("checkbox", { name: "מקור" }).check();
       await chooser.getByRole("checkbox", { name: "אזכור / הערות" }).check();
       await chooser.getByRole("checkbox", { name: "קטגוריה" }).uncheck();
       await expect.poll(() => page.evaluate(() => {
         const key = Object.keys(localStorage).find((item) => item.endsWith(":guestTableColumns"));
         return key ? JSON.parse(localStorage.getItem(key)) : null;
-      }), { timeout: 5_000 }).toMatchObject({ category: false, mention: true, source: true });
+      }), { timeout: 5_000 }).toMatchObject({ category: false, mention: true });
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByRole("main").waitFor({ state: "visible", timeout: 30_000 });
       await page.locator('[aria-label="מצב סנכרון: מסונכרן"]').waitFor({ state: "visible", timeout: 30_000 });
       await navigateTo(page, "guests");
       await page.getByRole("button", { name: /עמודות/ }).click();
       const persistedChooser = page.getByRole("group", { name: "בחירת עמודות בטבלת המוזמנים" });
-      await expect(persistedChooser.getByRole("checkbox", { name: "מקור" })).toBeChecked();
       await expect(persistedChooser.getByRole("checkbox", { name: "אזכור / הערות" })).toBeChecked();
       await expect(persistedChooser.getByRole("checkbox", { name: "קטגוריה" })).not.toBeChecked();
       await persistedChooser.getByRole("button", { name: "ברירת מחדל" }).click();
@@ -1199,9 +1386,8 @@ test.describe("emulator isolation and account lifecycle", () => {
       const exported = await readFile(await download.path(), "utf8");
       expect(exported).toContain(csvGuest);
       expect(exported).toContain("Aunt, cousin");
-      expect(exported).toContain("CSV source");
       expect(exported).toContain(xlsxGuest);
-      expect(exported).toContain("XLSX source");
+      expect(exported).toContain("College");
     });
 
     await test.step("Undo a guest deletion, then delete both imported records and verify the empty state survives reload", async () => {

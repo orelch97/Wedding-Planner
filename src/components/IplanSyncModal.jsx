@@ -706,6 +706,14 @@ export function IplanSyncModal({
                                   : ""}
                                 {u.isReset ? " · אופס ב-iPlan" : ""}
                               </p>
+                              {u.isSplitRsvp && (
+                                <p
+                                  data-testid="iplan-split-note"
+                                  className="mt-1.5 inline-flex max-w-full items-start gap-1.5 rounded-lg bg-amber-50 px-2 py-1 text-xs font-semibold leading-5 text-amber-800 ring-1 ring-amber-200"
+                                >
+                                  {String(u.toIplanNotes || "").split("\n")[0]}
+                                </p>
+                              )}
                             </div>
                           </div>
 
@@ -908,6 +916,7 @@ export function ActivityBell({
   const [open, setOpen] = useState(false);
   const [expandedBatchIds, setExpandedBatchIds] = useState(() => new Set());
   const menuRef = useRef(null);
+  const bellButtonRef = useRef(null);
 
   const seenStorageKey = `wp_activity_seen_${userId || "anon"}_${weddingId || "local"}`;
   const dismissedStorageKey = `wp_activity_dismissed_${userId || "anon"}_${weddingId || "local"}`;
@@ -947,8 +956,18 @@ export function ActivityBell({
         setOpen(false);
       }
     }
+    function handleKeyDown(e) {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+      bellButtonRef.current?.focus();
+    }
     document.addEventListener("mousedown", handleOutside);
-    return () => document.removeEventListener("mousedown", handleOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [open]);
 
   const visibleActivity = useMemo(() => {
@@ -1028,6 +1047,7 @@ export function ActivityBell({
   return (
     <div className="relative" ref={menuRef}>
       <button
+        ref={bellButtonRef}
         type="button"
         onClick={toggleMenu}
         data-testid="activity-bell-btn"

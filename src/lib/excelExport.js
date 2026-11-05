@@ -118,7 +118,7 @@ export function buildSheets({
       { header: "טלפון", key: "phone", width: 16 },
       { header: "אימייל", key: "email", width: 26 },
       { header: "עלות בחוזה", key: "contractCost", width: 14, numFmt: "#,##0" },
-      { header: "מקדמה ששולמה", key: "deposit", width: 14, numFmt: "#,##0" },
+      { header: "שולם", key: "deposit", width: 14, numFmt: "#,##0" },
       { header: "יתרה לתשלום", key: "balance", width: 14, numFmt: "#,##0" },
       { header: "משימות שהושלמו", key: "tasksDone", width: 14 },
       { header: "סה״כ משימות", key: "tasksTotal", width: 12 },

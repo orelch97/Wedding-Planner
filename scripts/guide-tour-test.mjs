@@ -14,6 +14,7 @@ const context = {
   currentScreen: "overview",
   isMobile: false,
   hasVendors: true,
+  hasUnassignedGuests: true,
   canTransferBudget: true,
 };
 const screens = ["overview", "checklist", "guests", "alcohol", "seating", "vendors", "finance", "admin"];
@@ -45,6 +46,11 @@ assert.ok(!financeDesktop.some((step) => step.target === '[data-tour="finance-mo
 assert.ok(financeMobile.some((step) => step.target === '[data-tour="finance-mobile-totals"]'));
 const alcoholWithoutFinance = appTourSteps({ ...context, currentScreen: "alcohol", canTransferBudget: false });
 assert.ok(!alcoholWithoutFinance.some((step) => step.target === '[data-tour="alcohol-budget-transfer"]'));
+const seatingAllPlaced = appTourSteps({ ...context, currentScreen: "seating", hasUnassignedGuests: false });
+const seatingWithUnassigned = appTourSteps({ ...context, currentScreen: "seating", hasUnassignedGuests: true });
+assert.ok(!seatingAllPlaced.some((step) => step.target === '[data-tour="seating-unassigned"]'));
+assert.ok(seatingWithUnassigned.some((step) => step.target === '[data-tour="seating-unassigned"]'));
+assert.equal(new Set(seatingWithUnassigned.map((s) => s.target)).size, seatingWithUnassigned.length, "seating steps have distinct targets");
 
 console.log(`Page-specific tour targets: ${checked} verified; no global/cross-screen steps; responsive and permission variants passed.`);
 

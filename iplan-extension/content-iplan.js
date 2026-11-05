@@ -66,9 +66,41 @@
     return s;
   }
 
+  //  קורא זוגות "מספר + סטטוס" (למשל "1 מגיעים 1 לא החליטו"). זהה ל-parseRsvpBreakdownText באפליקציה.
+  function parseRsvpBreakdownText(text) {
+    const b = { confirmed: 0, maybe: 0, declined: 0 };
+    let found = false;
+    const pattern = /(\d+)\s*(לא\s*מגיעי?ם?|לא\s*יגיעו|סירבו?|לא\s*החליטו?|מתלבטי?ם?|אולי|מגיעי?ם?|יגיעו|אישרו)/g;
+    for (const [, count, label] of String(text || "").matchAll(pattern)) {
+      const n = Number(count);
+      if (!n) continue;
+      found = true;
+      if (/^לא\s*(מגיע|יגיעו)|^סירב/.test(label)) b.declined += n;
+      else if (/החליט|מתלבט|אולי/.test(label)) b.maybe += n;
+      else b.confirmed += n;
+    }
+    return found ? b : null;
+  }
+
   function parseRsvpFromDomCell(cell) {
     if (!cell) {
       return { rsvp: "pending", attendingCount: 0, hasResponse: false, rawStatus: "unanswered" };
+    }
+
+    //  הזמנה אחת יכולה להציג כמה זוגות (מגיעים + לא החליטו). הפירוק נשלח כמות שהוא
+    //  והאפליקציה קובעת ממנו את הסטטוס, במקום ש"מתלבטים" יבלע את מי שאישר.
+    const breakdown = parseRsvpBreakdownText(
+      (cell.innerText || cell.textContent || "").replace(/\s+/g, " ").trim()
+    );
+    if (breakdown) {
+      const rsvp = breakdown.confirmed ? "confirmed" : breakdown.maybe ? "maybe" : "declined";
+      return {
+        rsvp,
+        attendingCount: breakdown.confirmed,
+        hasResponse: true,
+        rawStatus: rsvp === "maybe" ? "considering" : rsvp,
+        breakdown,
+      };
     }
 
     // אם התא מכיל אלמנט נבחר או פעיל מפורש (למשל תפריט נפתח או כפתור סטטוס פעיל ב-iPlan)
@@ -206,6 +238,7 @@
             status.rsvp === "confirmed" ? Math.max(1, status.attendingCount || invited) : 0,
           hasResponse: status.hasResponse,
           rawStatus: status.rawStatus,
+          ...(status.breakdown ? { breakdown: status.breakdown } : {}),
         });
       }
     }

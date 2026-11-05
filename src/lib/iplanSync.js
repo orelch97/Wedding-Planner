@@ -221,6 +221,101 @@ function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw, statu
   return { rsvp: "pending", attendingCount: 0, hasResponse: false, rawStatus: "unanswered" };
 }
 
+/* ── פיצול אישורים בהזמנה אחת ───────────────────────────────────────────────
+ *  ב-iPlan הזמנה אחת יכולה להחזיק כמה סטטוסים, למשל "1 מגיעים, 1 לא החליטו".
+ *  ברשומה שלנו יש סטטוס אחד, ולכן נקבע הסטטוס הדומיננטי: מישהו שאישר גובר
+ *  על מתלבט, ומתלבט גובר על מי שסירב. attendingCount הוא רק מי שאישר במפורש.  */
+
+export const SPLIT_RSVP_PREFIX = "⚠️ פיצול אישורים:";
+
+function countOf(value) {
+  const n = Math.round(Number(String(value ?? "").replace(/[,\s]/g, "")));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function sanitizeBreakdown(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const b = { confirmed: countOf(raw.confirmed), maybe: countOf(raw.maybe), declined: countOf(raw.declined) };
+  return b.confirmed + b.maybe + b.declined > 0 ? b : null;
+}
+
+/** @returns {{rsvp: string, attendingCount: number, split: boolean} | null} */
+export function dominantRsvp(breakdown) {
+  const b = sanitizeBreakdown(breakdown);
+  if (!b) return null;
+  if (b.confirmed > 0) return { rsvp: "confirmed", attendingCount: b.confirmed, split: b.maybe + b.declined > 0 };
+  if (b.maybe > 0) return { rsvp: "maybe", attendingCount: 0, split: b.declined > 0 };
+  return { rsvp: "declined", attendingCount: 0, split: false };
+}
+
+/** שורת הערה בעברית לפיצול, או מחרוזת ריקה כשכל ההזמנה ענתה אותו דבר. */
+export function splitRsvpNote(breakdown) {
+  const b = sanitizeBreakdown(breakdown);
+  if (!b || !dominantRsvp(b).split) return "";
+  const parts = [];
+  if (b.confirmed) parts.push(`${b.confirmed} ${b.confirmed === 1 ? "מגיע" : "מגיעים"}`);
+  if (b.maybe) parts.push(`${b.maybe} ${b.maybe === 1 ? "מתלבט" : "מתלבטים"}`);
+  if (b.declined) parts.push(`${b.declined} ${b.declined === 1 ? "לא מגיע" : "לא מגיעים"}`);
+  return `${SPLIT_RSVP_PREFIX} ${parts.join(", ")}`;
+}
+
+/** מחליף את שורת הפיצול בראש ההערות (או מסיר אותה) בלי לגעת בשאר השורות. */
+export function withSplitRsvpNote(existing, note) {
+  const kept = String(existing ?? "")
+    .split("\n")
+    .filter((line) => line.trim() && !line.trim().startsWith(SPLIT_RSVP_PREFIX));
+  return (note ? [note, ...kept] : kept).join("\n");
+}
+
+export function isSplitRsvp(guest) {
+  return String(guest?.iplanNotes ?? "")
+    .split("\n")
+    .some((line) => line.trim().startsWith(SPLIT_RSVP_PREFIX));
+}
+
+/** קורא זוגות "מספר + סטטוס" מתא בטבלת iPlan, כגון "1 מגיעים 1 לא החליטו". */
+export function parseRsvpBreakdownText(text) {
+  const b = { confirmed: 0, maybe: 0, declined: 0 };
+  let found = false;
+  //  "לא מגיעים" נבדק לפני "מגיעים", אחרת הוא נספר בטעות כאישור.
+  const pattern = /(\d+)\s*(לא\s*מגיעי?ם?|לא\s*יגיעו|סירבו?|לא\s*החליטו?|מתלבטי?ם?|אולי|מגיעי?ם?|יגיעו|אישרו)/g;
+  for (const [, count, label] of String(text ?? "").matchAll(pattern)) {
+    const n = Number(count);
+    if (!n) continue;
+    found = true;
+    if (/^לא\s*(מגיע|יגיעו)|^סירב/.test(label)) b.declined += n;
+    else if (/החליט|מתלבט|אולי/.test(label)) b.maybe += n;
+    else b.confirmed += n;
+  }
+  return found ? b : null;
+}
+
+/** פיצול מעמודות הייצוא: נבנה רק כשיש לפחות שני מספרים מפורשים, כדי לא לשנות שורות רגילות. */
+function breakdownFromCells({ confirmedRaw, consideringRaw, declinedRaw }) {
+  const numeric = (v) => /^\s*\d+\s*$/.test(String(v ?? ""));
+  const fromText = parseRsvpBreakdownText(confirmedRaw);
+  if (fromText) {
+    if (numeric(consideringRaw)) fromText.maybe += countOf(consideringRaw);
+    if (numeric(declinedRaw)) fromText.declined += countOf(declinedRaw);
+    return sanitizeBreakdown(fromText);
+  }
+  const values = [confirmedRaw, consideringRaw, declinedRaw].filter(numeric);
+  if (values.length < 2) return null;
+  return sanitizeBreakdown({ confirmed: confirmedRaw, maybe: consideringRaw, declined: declinedRaw });
+}
+
+function applyBreakdown(status, breakdown) {
+  const dominant = dominantRsvp(breakdown);
+  if (!dominant) return status;
+  return {
+    rsvp: dominant.rsvp,
+    attendingCount: dominant.attendingCount,
+    hasResponse: true,
+    rawStatus: dominant.split ? "split" : dominant.rsvp === "maybe" ? "considering" : dominant.rsvp,
+    breakdown,
+  };
+}
+
 /**
  * מפרק מטריצת תאים (כפי שנקראה מקובץ ה-.xls של iPlan) לרשומות מנורמלות.
  * תומך בשורת כותרת כפולה של iPlan (שורה 0 כותרות-על, שורה 1 כותרות עמודות).
@@ -269,13 +364,14 @@ export function parseIplanSheetRows(matrix) {
     const invitedNum = Number(invitedRaw.replace(/[,\s]/g, ""));
     const invited = Number.isFinite(invitedNum) && invitedNum > 0 ? Math.round(invitedNum) : 1;
 
-    const status = parseStatusFromCells({
+    const cells = {
       confirmedRaw: getCell(row, "confirmed"),
       consideringRaw: getCell(row, "considering"),
       declinedRaw: getCell(row, "declined"),
       statusRaw: getCell(row, "status"),
       invited,
-    });
+    };
+    const status = applyBreakdown(parseStatusFromCells(cells), breakdownFromCells(cells));
 
     parsed.push({
       name,
@@ -286,6 +382,7 @@ export function parseIplanSheetRows(matrix) {
       attendingCount: status.attendingCount,
       hasResponse: status.hasResponse,
       rawStatus: status.rawStatus,
+      ...(status.breakdown ? { breakdown: status.breakdown } : {}),
     });
   }
 
@@ -302,6 +399,23 @@ export function normalizeIplanRow(raw) {
   const landline = normalizePhone(raw.landline ?? raw["טלפון רגיל"] ?? "");
   const invitedRaw = raw.invited ?? raw["מס' אורחים שהוזמנו"] ?? raw.seats ?? 1;
   const invited = Math.max(1, Math.round(Number(invitedRaw) || 1));
+
+  //  פיצול מפורש גובר תמיד, גם על rsvp שתוסף ישן כבר הכריע (בדרך כלל ל"מתלבטים").
+  const breakdown = sanitizeBreakdown(raw.breakdown);
+  if (breakdown) {
+    const status = applyBreakdown(null, breakdown);
+    return {
+      name,
+      phone: phone || landline,
+      landline,
+      invited,
+      rsvp: status.rsvp,
+      attendingCount: status.attendingCount,
+      hasResponse: true,
+      rawStatus: status.rawStatus,
+      breakdown,
+    };
+  }
 
   if (raw.rsvp && ["confirmed", "declined", "maybe", "pending"].includes(raw.rsvp) && typeof raw.hasResponse === "boolean") {
     // תאימות לאחור לשורות שנשמרו בעבר עם rsvp="pending" ו-rawStatus="considering"
@@ -421,7 +535,7 @@ export function mergeIplanRows(baseRows = [], overlayRows = []) {
     if (targetIdx !== undefined) {
       const prev = result[targetIdx];
       // השורה החדשה גוברת תמיד — כולל איפוס ב-iPlan חזרה ל"טרם השיבו"
-      result[targetIdx] = {
+      const merged = {
         ...prev,
         name: inc.name || prev.name,
         phone: inc.phone || prev.phone,
@@ -431,7 +545,11 @@ export function mergeIplanRows(baseRows = [], overlayRows = []) {
         attendingCount: inc.attendingCount,
         hasResponse: inc.hasResponse,
         rawStatus: inc.rawStatus,
+        breakdown: inc.breakdown,
       };
+      //  פיצול ישן לא נשאר כשהשורה העדכנית כבר לא מפוצלת.
+      if (!merged.breakdown) delete merged.breakdown;
+      result[targetIdx] = merged;
     } else if (inc.name || inc.phone) {
       const newIdx = result.length;
       result.push({ ...inc });
@@ -654,6 +772,15 @@ export function reconcileIplan({
       rawStatus: row.rawStatus,
     };
 
+    //  רק שורה עם פיצול מפורש מנהלת את הערת הפיצול; שורה ישנה בלי breakdown לא נוגעת בה.
+    let notesChanged = false;
+    if (row.breakdown) {
+      const currentNotes = String(guest.iplanNotes ?? "");
+      item.toIplanNotes = withSplitRsvpNote(currentNotes, splitRsvpNote(row.breakdown));
+      item.isSplitRsvp = Boolean(dominantRsvp(row.breakdown)?.split);
+      notesChanged = item.toIplanNotes !== currentNotes;
+    }
+
     if (!row.hasResponse) {
       if (currentRsvp === "pending") {
         unchangedCount++;
@@ -677,7 +804,8 @@ export function reconcileIplan({
 
     const isSame =
       currentRsvp === nextRsvp &&
-      (nextRsvp !== "confirmed" || currentAttendingCount === nextAttendingCount);
+      (nextRsvp !== "confirmed" || currentAttendingCount === nextAttendingCount) &&
+      !notesChanged;
 
     if (isSame) {
       unchangedCount++;
@@ -733,9 +861,14 @@ export function applyIplanUpdates(guests, approvedUpdates) {
         ? Math.max(1, Math.min(seats, Number(u.toAttendingCount) || seats))
         : 0;
 
+    const hasNotes = typeof u.toIplanNotes === "string";
+    const toIplanNotes = hasNotes ? u.toIplanNotes.slice(0, 500) : undefined;
+    const notesChanged = hasNotes && toIplanNotes !== String(g.iplanNotes ?? "");
+
     if (
       currentRsvp === toRsvp &&
-      (toRsvp !== "confirmed" || currentAttendingCount === toAttendingCount)
+      (toRsvp !== "confirmed" || currentAttendingCount === toAttendingCount) &&
+      !notesChanged
     ) {
       return g;
     }
@@ -749,13 +882,15 @@ export function applyIplanUpdates(guests, approvedUpdates) {
       fromAttendingCount: currentAttendingCount,
       toRsvp,
       toAttendingCount,
+      ...(hasNotes ? { toIplanNotes } : {}),
     });
 
-    // עדכון אך ורק של rsvp ו-attendingCount — כל שאר השדות נשארים זהים!
+    // עדכון של rsvp, attendingCount והערת הפיצול של iPlan בלבד; ההערה הידנית (mention) לא משתנה.
     return {
       ...g,
       rsvp: toRsvp,
       attendingCount: toAttendingCount,
+      ...(hasNotes ? { iplanNotes: toIplanNotes } : {}),
     };
   });
 

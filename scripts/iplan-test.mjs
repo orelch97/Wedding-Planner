@@ -10,6 +10,11 @@ import {
   applyIplanUpdates,
   readIplanBuffer,
   formatRsvpLabel,
+  dominantRsvp,
+  splitRsvpNote,
+  withSplitRsvpNote,
+  isSplitRsvp,
+  parseRsvpBreakdownText,
 } from "../src/lib/iplanSync.js";
 
 let passed = 0;
@@ -438,6 +443,136 @@ await check("mergeIplanRows lets a newer unanswered row override an older answer
   assert.equal(merged.length, 1);
   assert.equal(merged[0].rsvp, "pending");
   assert.equal(merged[0].hasResponse, false);
+});
+
+await check("dominantRsvp: any confirmed wins, then maybe, then declined; attendingCount is the confirmed count only", () => {
+  assert.deepEqual(dominantRsvp({ confirmed: 1, maybe: 1, declined: 0 }), { rsvp: "confirmed", attendingCount: 1, split: true });
+  assert.deepEqual(dominantRsvp({ confirmed: 1, maybe: 0, declined: 2 }), { rsvp: "confirmed", attendingCount: 1, split: true });
+  assert.deepEqual(dominantRsvp({ confirmed: 0, maybe: 1, declined: 1 }), { rsvp: "maybe", attendingCount: 0, split: true });
+  assert.deepEqual(dominantRsvp({ confirmed: 0, maybe: 0, declined: 3 }), { rsvp: "declined", attendingCount: 0, split: false });
+  assert.deepEqual(dominantRsvp({ confirmed: 2, maybe: 0, declined: 0 }), { rsvp: "confirmed", attendingCount: 2, split: false });
+  assert.equal(dominantRsvp({ confirmed: 0, maybe: 0, declined: 0 }), null);
+  assert.equal(dominantRsvp(null), null);
+});
+
+await check("splitRsvpNote writes a Hebrew summary with correct singular/plural forms", () => {
+  assert.equal(splitRsvpNote({ confirmed: 1, maybe: 1, declined: 0 }), "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט");
+  assert.equal(splitRsvpNote({ confirmed: 2, maybe: 0, declined: 1 }), "⚠️ פיצול אישורים: 2 מגיעים, 1 לא מגיע");
+  assert.equal(splitRsvpNote({ confirmed: 0, maybe: 2, declined: 3 }), "⚠️ פיצול אישורים: 2 מתלבטים, 3 לא מגיעים");
+  assert.equal(splitRsvpNote({ confirmed: 2, maybe: 0, declined: 0 }), "");
+});
+
+await check("withSplitRsvpNote prepends once, replaces on re-sync, keeps other notes and removes itself when resolved", () => {
+  const first = withSplitRsvpNote("", "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט");
+  assert.equal(first, "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט");
+  // Re-syncing the same split must not stack a second copy.
+  assert.equal(withSplitRsvpNote(first, "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט"), first);
+  // A changed split replaces the old line instead of adding another.
+  const withOther = `${first}\nלבדוק הסעה`;
+  assert.equal(
+    withSplitRsvpNote(withOther, "⚠️ פיצול אישורים: 2 מגיעים, 1 לא מגיע"),
+    "⚠️ פיצול אישורים: 2 מגיעים, 1 לא מגיע\nלבדוק הסעה"
+  );
+  // Once everyone answered the same way the warning disappears, other notes stay.
+  assert.equal(withSplitRsvpNote(withOther, ""), "לבדוק הסעה");
+  assert.equal(isSplitRsvp({ iplanNotes: first }), true);
+  assert.equal(isSplitRsvp({ iplanNotes: "לבדוק הסעה" }), false);
+  assert.equal(isSplitRsvp({}), false);
+});
+
+await check("parseRsvpBreakdownText reads iPlan's per-status count pairs from a table cell", () => {
+  assert.deepEqual(parseRsvpBreakdownText("1 מגיעים 1 לא החליטו"), { confirmed: 1, maybe: 1, declined: 0 });
+  assert.deepEqual(parseRsvpBreakdownText("2 מגיעים"), { confirmed: 2, maybe: 0, declined: 0 });
+  assert.deepEqual(parseRsvpBreakdownText("1 מגיעים 2 לא מגיעים"), { confirmed: 1, maybe: 0, declined: 2 });
+  assert.deepEqual(parseRsvpBreakdownText("3 מתלבטים"), { confirmed: 0, maybe: 3, declined: 0 });
+  // "לא מגיעים" must never be counted as "מגיעים".
+  assert.deepEqual(parseRsvpBreakdownText("2 לא מגיעים"), { confirmed: 0, maybe: 0, declined: 2 });
+  assert.equal(parseRsvpBreakdownText(""), null);
+  assert.equal(parseRsvpBreakdownText("ללא מענה"), null);
+});
+
+await check("split export row (1 confirmed + 1 maybe) is CONFIRMED with attendingCount 1 — not maybe", () => {
+  const matrix = [
+    ["הזמנה לכבוד", "מס' אורחים שהוזמנו", "סלולרי", "אישרו שיגיעו", "מתלבטים"],
+    ["שחר דלל", "2", "054-482-6052", "1", "1"],
+  ];
+  const [row] = parseIplanSheetRows(matrix);
+  assert.equal(row.rsvp, "confirmed");
+  assert.equal(row.attendingCount, 1);
+  assert.deepEqual(row.breakdown, { confirmed: 1, maybe: 1, declined: 0 });
+});
+
+await check("reconcileIplan marks a split update, sets confirmed/1 and carries the split note", () => {
+  const guests = [{ id: 501, name: "שחר דלל", phone: "054-482-6052", seats: 2, rsvp: "pending", attendingCount: null }];
+  const rows = [{ name: "שחר דלל", phone: "0544826052", invited: 2, breakdown: { confirmed: 1, maybe: 1, declined: 0 } }];
+  const result = reconcileIplan({ guests, rows });
+  assert.equal(result.updates.length, 1);
+  const u = result.updates[0];
+  assert.equal(u.toRsvp, "confirmed");
+  assert.equal(u.toAttendingCount, 1);
+  assert.equal(u.isSplitRsvp, true);
+  assert.equal(u.toIplanNotes, "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט");
+});
+
+await check("a breakdown always overrides a stale resolved rsvp sent by an older extension", () => {
+  const guests = [{ id: 502, name: "שחר דלל", phone: "054-482-6052", seats: 2, rsvp: "pending" }];
+  // The extension used to resolve this split to "maybe"; the breakdown is the truth.
+  const rows = [{
+    name: "שחר דלל", phone: "0544826052", invited: 2,
+    rsvp: "maybe", attendingCount: 0, hasResponse: true, rawStatus: "considering",
+    breakdown: { confirmed: 1, maybe: 1, declined: 0 },
+  }];
+  const u = reconcileIplan({ guests, rows }).updates[0];
+  assert.equal(u.toRsvp, "confirmed");
+  assert.equal(u.toAttendingCount, 1);
+});
+
+await check("an unchanged status whose split note changed is still offered as an update", () => {
+  const guests = [{ id: 503, name: "שחר דלל", phone: "054-482-6052", seats: 3, rsvp: "confirmed", attendingCount: 1, iplanNotes: "" }];
+  const rows = [{ name: "שחר דלל", phone: "0544826052", invited: 3, breakdown: { confirmed: 1, maybe: 2, declined: 0 } }];
+  const result = reconcileIplan({ guests, rows });
+  assert.equal(result.updates.length, 1);
+  assert.equal(result.updates[0].toIplanNotes, "⚠️ פיצול אישורים: 1 מגיע, 2 מתלבטים");
+});
+
+await check("a fully resolved family clears the split note and leaves an identical guest unchanged", () => {
+  const note = "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט";
+  const resolving = reconcileIplan({
+    guests: [{ id: 504, name: "שחר דלל", phone: "054-482-6052", seats: 2, rsvp: "confirmed", attendingCount: 1, iplanNotes: note }],
+    rows: [{ name: "שחר דלל", phone: "0544826052", invited: 2, breakdown: { confirmed: 2, maybe: 0, declined: 0 } }],
+  });
+  assert.equal(resolving.updates.length, 1);
+  assert.equal(resolving.updates[0].toAttendingCount, 2);
+  assert.equal(resolving.updates[0].toIplanNotes, "");
+  assert.equal(resolving.updates[0].isSplitRsvp, false);
+
+  const settled = reconcileIplan({
+    guests: [{ id: 505, name: "שחר דלל", phone: "054-482-6052", seats: 2, rsvp: "confirmed", attendingCount: 1, iplanNotes: note }],
+    rows: [{ name: "שחר דלל", phone: "0544826052", invited: 2, breakdown: { confirmed: 1, maybe: 1, declined: 0 } }],
+  });
+  assert.equal(settled.updates.length, 0);
+  assert.equal(settled.unchangedCount, 1);
+});
+
+await check("applyIplanUpdates writes iplanNotes for split updates and still never touches the manual note (mention)", () => {
+  const guest = { id: 506, name: "שחר דלל", phone: "054-482-6052", seats: 2, mention: "הערה ידנית שלנו", rsvp: "pending", attendingCount: null };
+  const { nextGuests, changes } = applyIplanUpdates([guest], [{
+    guestId: 506, toRsvp: "confirmed", toAttendingCount: 1, toIplanNotes: "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט",
+  }]);
+  assert.equal(changes.length, 1);
+  assert.equal(nextGuests[0].rsvp, "confirmed");
+  assert.equal(nextGuests[0].attendingCount, 1);
+  assert.equal(nextGuests[0].iplanNotes, "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט");
+  assert.equal(nextGuests[0].mention, "הערה ידנית שלנו");
+  assert.equal(changes[0].toIplanNotes, "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט");
+});
+
+await check("mergeIplanRows keeps the newest breakdown when a later sync overlays the row", () => {
+  const older = [{ name: "שחר דלל", phone: "0544826052", invited: 2, breakdown: { confirmed: 0, maybe: 2, declined: 0 } }];
+  const newer = [{ name: "שחר דלל", phone: "0544826052", invited: 2, breakdown: { confirmed: 1, maybe: 1, declined: 0 } }];
+  const [merged] = mergeIplanRows(older, newer);
+  assert.deepEqual(merged.breakdown, { confirmed: 1, maybe: 1, declined: 0 });
+  assert.equal(merged.rsvp, "confirmed");
 });
 
 console.log(`\niPlan checks: ${passed} passed, ${failed} failed\n`);

@@ -321,7 +321,7 @@ test.describe("shared access: owner, editors and viewers", () => {
     await navigateTo(financeViewer, "finance");
     await expect(shownText(financeViewer, "סעיף מהבעלים")).toBeVisible();
     const screen = await probeScreen(financeViewer);
-    expect(screen.editable).toEqual([]);
+    expect(screen.editable.filter((label) => !VIEW_ONLY_FIELDS.test(label))).toEqual([]);
     await expect(financeViewer.locator('[data-tour="finance-add-item"]')).toHaveCount(0);
 
     for (const key of ["editorGuests", "viewerFinance"]) {

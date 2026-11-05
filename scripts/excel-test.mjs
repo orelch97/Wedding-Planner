@@ -195,7 +195,7 @@ check(
 console.log("\n4. גיליון \u201eספקים\u201d");
 const V = readSheet("ספקים");
 const vendorHeaders = [
-  "מס׳", "שם הספק", "סוג", "טלפון", "אימייל", "עלות בחוזה", "מקדמה ששולמה",
+  "מס׳", "שם הספק", "סוג", "טלפון", "אימייל", "עלות בחוזה", "שולם",
   "יתרה לתשלום", "משימות שהושלמו", "סה״כ משימות", "פירוט המשימות", "הערות",
 ];
 check("כל 12 העמודות קיימות ובסדר הנכון", JSON.stringify(V.headers) === JSON.stringify(vendorHeaders), V.headers.join(" | "));
@@ -216,7 +216,7 @@ for (const v of SEED_VENDORS) {
     "טלפון": v.phone,
     "אימייל": v.email,
     "עלות בחוזה": v.contractCost,
-    "מקדמה ששולמה": v.deposit,
+    "שולם": v.deposit,
     "יתרה לתשלום": v.contractCost - v.deposit,
     "משימות שהושלמו": v.tasks.filter((t) => t.status === "done").length,
     "סה״כ משימות": v.tasks.length,

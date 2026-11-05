@@ -7,7 +7,7 @@ function OptionRow({ option, kind, canDelete, onRename, onDelete }) {
   return (
     <li className="flex min-w-0 items-center gap-2 border-b border-slate-100 py-2">
       <form onSubmit={(event) => { event.preventDefault(); onRename(kind, option.key, name); }} className="flex min-w-0 flex-1 items-center gap-1">
-        <input aria-label={`שם ${option.label}`} value={name} onChange={(event) => setName(event.target.value)} maxLength={60} className="min-h-11 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 text-base text-slate-700 outline-none focus:border-gold-400 sm:text-sm" />
+        <input aria-label={`שם ${option.label}`} value={name} onChange={(event) => setName(event.target.value)} maxLength={60} className="min-h-11 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 text-base text-slate-700 outline-none focus:border-gold-400 sm:pointer-fine:text-sm" />
         <button type="submit" aria-label={`שמירת ${option.label}`} title="שמירת שם" disabled={!name.trim() || name === option.label} className="btn-icon"><Save size={16} /></button>
       </form>
       <button type="button" aria-label={`מחיקת ${option.label}`} title={canDelete ? "מחיקת אפשרות" : "חייבת להישאר אפשרות אחת"} disabled={!canDelete} onClick={() => onDelete(kind, option.key)} className="btn-icon-danger"><Trash2 size={16} /></button>
@@ -35,7 +35,7 @@ export default function ChecklistOptionsManager({ categories, assignees, onAdd, 
           ))}
         </div>
         <form onSubmit={(event) => { event.preventDefault(); if (onAdd(kind, draft)) setDraft(""); }} className="mb-3 flex min-w-0 gap-2">
-          <input ref={inputRef} aria-label={kind === "category" ? "קטגוריה חדשה" : "שיוך חדש"} placeholder={kind === "category" ? "קטגוריה חדשה" : "שיוך חדש"} value={draft} maxLength={60} onChange={(event) => setDraft(event.target.value)} className="min-h-11 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 text-base outline-none focus:border-gold-400 sm:text-sm" />
+          <input ref={inputRef} aria-label={kind === "category" ? "קטגוריה חדשה" : "שיוך חדש"} placeholder={kind === "category" ? "קטגוריה חדשה" : "שיוך חדש"} value={draft} maxLength={60} onChange={(event) => setDraft(event.target.value)} className="min-h-11 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 text-base outline-none focus:border-gold-400 sm:pointer-fine:text-sm" />
           <button type="submit" disabled={!draft.trim()} className="btn-primary shrink-0"><Plus size={16} /> הוספה</button>
         </form>
         <ul className="min-h-0 overflow-y-auto overscroll-contain">

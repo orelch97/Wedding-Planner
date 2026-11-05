@@ -10,7 +10,7 @@ const iplanTestIdentity = {
   password: "E2E-only-Password-938!",
 };
 
-async function signUpIplanOwner(page, label) {
+async function signUpIplanOwner(page, label, email = iplanTestIdentity.email) {
   const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
   const firestoreHost = process.env.FIRESTORE_EMULATOR_HOST;
   const firestoreReset = await fetch(
@@ -23,7 +23,7 @@ async function signUpIplanOwner(page, label) {
     { method: "DELETE" }
   );
   if (!resetResponse.ok) throw new Error("Could not reset demo Auth emulator accounts.");
-  await signUp(page, { ...iplanTestIdentity, id: label }, { readyTimeout: 60_000 });
+  await signUp(page, { ...iplanTestIdentity, email, id: label }, { readyTimeout: 60_000 });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -34,6 +34,9 @@ test.afterEach(async ({ page }) => {
 });
 
 async function openIplanModalFromBell(page) {
+  if ((page.viewportSize()?.width || 0) < 480) {
+    test.skip(true, "The RSVP notification bell is intentionally desktop-only.");
+  }
   await page.getByTestId("activity-bell-btn").click();
   await page.getByTestId("activity-open-iplan-btn").click();
   return page.getByTestId("iplan-sync-modal");
@@ -50,10 +53,52 @@ test("iPlan bell is shown only to the designated email when a source is availabl
   await signUpIplanOwner(page, "iplan-bell-owner");
   await navigateTo(page, "guests");
   await page.evaluate(() => window.postMessage({ type: "WEDDING_PLANNER_IPLAN_EXTENSION_AVAILABLE" }, "*"));
-  await expect(page.getByTestId("activity-bell-btn")).toBeVisible();
+  const bell = page.getByTestId("activity-bell-btn");
+  if ((page.viewportSize()?.width || 0) < 480) {
+    await expect(bell).toBeHidden();
+    return;
+  }
+  await expect(bell).toBeVisible();
 
   await page.getByTestId("activity-bell-btn").click();
   await expect(page.getByTestId("activity-open-iplan-btn")).toBeVisible();
+});
+
+test("iPlan bell remains visible in a compact desktop window", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 768, height: 900 });
+  await signUpIplanOwner(page, "iplan-bell-compact-desktop");
+  await navigateTo(page, "guests");
+  await page.evaluate(() => window.postMessage({ type: "WEDDING_PLANNER_IPLAN_EXTENSION_AVAILABLE" }, "*"));
+  if (testInfo.project.name === "chromium-mobile") {
+    // A phone turned sideways is wider than 480px but must still hide the desktop-only bell.
+    await expect(page.getByTestId("iplan-bell-slot")).toBeHidden();
+    await expect(page.getByTestId("activity-bell-btn")).toBeHidden();
+    return;
+  }
+  await expect(page.getByTestId("activity-bell-btn")).toBeVisible();
+});
+
+test("the second allowlisted email also sees the iPlan bell", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "chromium-mobile", "The RSVP notification bell is intentionally desktop-only.");
+  await signUpIplanOwner(page, "iplan-bell-meitar", "meitar1703@gmail.com");
+  await navigateTo(page, "guests");
+  await page.evaluate(() => window.postMessage({ type: "WEDDING_PLANNER_IPLAN_EXTENSION_AVAILABLE" }, "*"));
+  await expect(page.getByTestId("activity-bell-btn")).toBeVisible();
+});
+
+test("Escape closes the bell popover and returns focus to the bell", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "chromium-mobile", "The RSVP notification bell is intentionally desktop-only.");
+  await signUpIplanOwner(page, "iplan-bell-escape");
+  await navigateTo(page, "guests");
+  await page.evaluate(() => window.postMessage({ type: "WEDDING_PLANNER_IPLAN_EXTENSION_AVAILABLE" }, "*"));
+  const bell = page.getByTestId("activity-bell-btn");
+  await bell.click();
+  await expect(page.getByTestId("activity-bell-popover")).toBeVisible();
+  await expect(bell).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("activity-bell-popover")).toHaveCount(0);
+  await expect(bell).toHaveAttribute("aria-expanded", "false");
+  await expect(bell).toBeFocused();
 });
 
 test("iPlan bell remains hidden from other signed-in users even when the extension is available", async ({ page }) => {
@@ -228,6 +273,89 @@ test("iPlan RSVP preview modal matches by phone and exact name, and updates ONLY
         gift: 0,
       },
     });
+});
+
+test("split iPlan RSVP (1 coming + 1 undecided) is approved as confirmed/1 with a split note and badge", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "chromium-mobile", "The iPlan review is opened from the desktop-only bell.");
+  test.setTimeout(120_000);
+  await signUpIplanOwner(page, "iplan-split-rsvp");
+  await navigateTo(page, "guests");
+  await page.evaluate(async () => {
+    const store = await import("/src/lib/firebaseStore.js");
+    const [wedding] = await store.listWeddings();
+    await store.cloudSeed(wedding.id, {
+      guests: [{
+        id: 950, name: "שחר דלל", phone: "054-482-6052", category: "QA", seats: 2,
+        mention: "הערה ידנית", rsvp: "pending", attendingCount: null, gift: 0,
+      }],
+    });
+  });
+  await expect(page.getByText("1 רשומות ברשימה")).toBeVisible({ timeout: 30_000 });
+  // An older extension resolved this invitation to "maybe"; the breakdown must win.
+  await page.evaluate(() => window.postMessage({
+    type: "WEDDING_PLANNER_IPLAN_ROWS",
+    syncedAt: new Date().toISOString(),
+    rows: [{
+      name: "שחר דלל", phone: "0544826052", invited: 2,
+      rsvp: "maybe", attendingCount: 0, hasResponse: true, rawStatus: "considering",
+      breakdown: { confirmed: 1, maybe: 1, declined: 0 },
+    }],
+  }, "*"));
+
+  const modal = await openIplanModalFromBell(page);
+  const row = modal.getByTestId("iplan-update-row-950");
+  await expect(row).toBeVisible();
+  await expect(row.getByTestId("iplan-split-note")).toHaveText("⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט");
+  await modal.getByTestId("iplan-approve-btn").click();
+  await expect(modal).toHaveCount(0);
+
+  await expect.poll(async () => page.evaluate(async () => {
+    const store = await import("/src/lib/firebaseStore.js");
+    const [wedding] = await store.listWeddings();
+    const data = await store.cloudFetchAll(wedding.id, { scopes: ["guests"] });
+    const g = data.guests.find((guest) => guest.id === 950);
+    return { rsvp: g?.rsvp, attendingCount: g?.attendingCount, iplanNotes: g?.iplanNotes, mention: g?.mention };
+  }), { timeout: 30_000 }).toEqual({
+    rsvp: "confirmed",
+    attendingCount: 1,
+    iplanNotes: "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט",
+    mention: "הערה ידנית",
+  });
+  const badge = page.locator('[data-testid="guest-split-rsvp"]:visible');
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveAttribute("aria-label", "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט");
+});
+
+test("a guest with a split RSVP note shows the split badge on desktop and mobile", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  await signUp(page, uniqueIdentity("split-badge"), { readyTimeout: 60_000 });
+  await navigateTo(page, "guests");
+  const note = "⚠️ פיצול אישורים: 1 מגיע, 1 מתלבט";
+  await page.evaluate(async (iplanNotes) => {
+    const store = await import("/src/lib/firebaseStore.js");
+    const [wedding] = await store.listWeddings();
+    await store.cloudSeed(wedding.id, {
+      guests: [
+        { id: 960, name: "משפחה מפוצלת", phone: "050-100-2000", category: "", seats: 2, rsvp: "confirmed", attendingCount: 1, iplanNotes },
+        { id: 961, name: "משפחה רגילה", phone: "050-100-3000", category: "", seats: 2, rsvp: "confirmed", attendingCount: 2 },
+      ],
+    });
+  }, note);
+  await expect(page.getByText("2 רשומות ברשימה")).toBeVisible({ timeout: 30_000 });
+
+  // Desktop table and mobile cards both stay mounted; only one layout is visible.
+  const badge = page.locator('[data-testid="guest-split-rsvp"]:visible');
+  await expect(badge).toHaveCount(1);
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveText("פיצול");
+  await expect(badge).toHaveAttribute("aria-label", note);
+
+  if (testInfo.project.name === "chromium-mobile") {
+    await page.getByRole("button", { name: "פתיחת פרטי משפחה מפוצלת" }).click();
+    await expect(page.locator('[data-testid="guest-split-rsvp-note"]:visible')).toHaveText(note);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+  }
 });
 
 test("iPlan approval failure leaves guests unchanged, shows no success, and can be retried", async ({ page }) => {
@@ -502,14 +630,7 @@ test("a newer iPlan snapshot cannot silently replace an open review; only explic
   }, "*"), { rows, syncedAt });
 
   await postSnapshot(proposedRows, "2026-10-21T12:00:00.000Z");
-  const bellButton = page.getByTestId("activity-bell-btn");
-  await expect(bellButton).toBeVisible({ timeout: 10_000 });
-  await bellButton.click();
-  const bellPopover = page.getByTestId("activity-bell-popover");
-  const reviewButton = bellPopover.getByTestId("activity-open-iplan-btn");
-  await expect(reviewButton).toContainText("בדיקה ואישור (1)");
-  await reviewButton.click();
-  const modal = page.getByTestId("iplan-sync-modal");
+  const modal = await openIplanModalFromBell(page);
   await expect(modal.getByTestId("iplan-update-row-904")).toBeVisible();
   await expect(modal.getByTestId("iplan-approve-btn")).toContainText("(1)");
 

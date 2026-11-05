@@ -200,7 +200,7 @@ export function Tour({ steps, onClose, onComplete }) {
         aria-modal="true"
         aria-labelledby="guided-tour-title"
         aria-describedby="guided-tour-description"
-        className="fixed z-[121] rounded-2xl bg-white p-4 text-right shadow-2xl ring-1 ring-slate-200"
+        className="fixed z-[121] max-h-[calc(100dvh-20px)] overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 text-right shadow-2xl ring-1 ring-slate-200"
         style={{
           top: card?.top ?? -9999,
           left: card?.left ?? -9999,
@@ -223,7 +223,7 @@ export function Tour({ steps, onClose, onComplete }) {
             type="button"
             onClick={onClose}
             aria-label="סגירת ההדרכה"
-            className="btn-icon -m-1 h-8 w-8"
+            className="btn-icon -m-1.5"
           >
             <X size={16} />
           </button>
@@ -265,7 +265,7 @@ export function Tour({ steps, onClose, onComplete }) {
           <button
             type="button"
             onClick={onClose}
-            className="mt-1.5 w-full rounded-lg py-1 text-[11px] text-slate-400 transition hover:text-slate-600"
+            className="mt-1.5 min-h-11 w-full rounded-lg py-2 text-xs text-slate-500 transition hover:text-slate-700"
           >
             דילוג על ההדרכה
           </button>

@@ -273,9 +273,9 @@ select,
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-width: 1023px) and (pointer: coarse) {
   /* iOS auto-zooms when a focused field is under 16px – keep inputs at 16px
-     on phones while the visual scale stays compact. */
+     on phones (portrait and landscape) while the visual scale stays compact. */
   input,
   select,
   textarea {

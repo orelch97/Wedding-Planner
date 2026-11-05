@@ -105,6 +105,17 @@ function parseStatusFromCells({ confirmedRaw, consideringRaw, declinedRaw }) {
   return { rsvp: "pending", attendingCount: 0, hasResponse: false, rawStatus: "unanswered" };
 }
 
+//  פיצול אישורים בקובץ הייצוא: נשלח רק כשיש לפחות שתי עמודות מספריות מפורשות,
+//  והאפליקציה קובעת ממנו את הסטטוס (מי שאישר גובר על מתלבט).
+function breakdownFromCells({ confirmedRaw, consideringRaw, declinedRaw }) {
+  const values = [confirmedRaw, consideringRaw, declinedRaw].map((v) => String(v ?? "").trim());
+  const numeric = values.filter((v) => /^\d+$/.test(v));
+  if (numeric.length < 2) return null;
+  const count = (v) => (/^\d+$/.test(v) ? Number(v) : 0);
+  const breakdown = { confirmed: count(values[0]), maybe: count(values[1]), declined: count(values[2]) };
+  return breakdown.confirmed + breakdown.maybe + breakdown.declined > 0 ? breakdown : null;
+}
+
 function base64ToUint8Array(base64) {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -169,12 +180,14 @@ function parseExportBytes(bytes) {
     const invitedNum = Number(get(r, invitedCol).replace(/[,\s]/g, ""));
     const invited = Number.isFinite(invitedNum) && invitedNum > 0 ? Math.round(invitedNum) : 1;
 
-    const status = parseStatusFromCells({
+    const cells = {
       confirmedRaw: get(r, confirmedCol),
       consideringRaw: get(r, consideringCol),
       declinedRaw: get(r, declinedCol),
       invited,
-    });
+    };
+    const status = parseStatusFromCells(cells);
+    const breakdown = breakdownFromCells(cells);
 
     rows.push({
       name,
@@ -185,6 +198,7 @@ function parseExportBytes(bytes) {
       attendingCount: status.attendingCount,
       hasResponse: status.hasResponse,
       rawStatus: status.rawStatus,
+      ...(breakdown ? { breakdown } : {}),
     });
   }
 
@@ -223,7 +237,7 @@ function mergeRows(baseRows = [], overlayRows = []) {
 
     if (targetIdx !== undefined) {
       const prev = result[targetIdx];
-      result[targetIdx] = {
+      const merged = {
         ...prev,
         name: inc.name || prev.name,
         phone: inc.phone || prev.phone,
@@ -233,7 +247,10 @@ function mergeRows(baseRows = [], overlayRows = []) {
         attendingCount: inc.attendingCount,
         hasResponse: inc.hasResponse,
         rawStatus: inc.rawStatus,
+        breakdown: inc.breakdown,
       };
+      if (!merged.breakdown) delete merged.breakdown;
+      result[targetIdx] = merged;
     } else if (inc.name || inc.phone) {
       const newIdx = result.length;
       result.push({ ...inc });

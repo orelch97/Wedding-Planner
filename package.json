@@ -22,7 +22,8 @@
     "e2e:report": "playwright show-report playwright-report",
     "test:backup": "node scripts/backup-test.mjs",
     "test:import": "node scripts/import-test.mjs",
-    "test:iplan": "node scripts/iplan-test.mjs"
+    "test:iplan": "node scripts/iplan-test.mjs",
+    "test:realtime": "node scripts/realtime-merge-test.mjs"
   },
   "engines": {
     "node": ">=22"

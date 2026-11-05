@@ -149,7 +149,8 @@ import {
 import AdminDashboard from "./components/AdminDashboard.jsx";
 import ChecklistOptionsManager from "./components/ChecklistOptionsManager.jsx";
 import { IplanSyncModal, ActivityBell } from "./components/IplanSyncModal.jsx";
-import { buildIplanManagedRsvpMap, mergeIplanRows, reconcileIplan } from "./lib/iplanSync.js";
+import { buildIplanManagedRsvpMap, mergeIplanRows, reconcileIplan, SPLIT_RSVP_PREFIX } from "./lib/iplanSync.js";
+import { rebaseOnLatest } from "./lib/realtimeMerge.js";
 import { isAdminEmail } from "./lib/adminConfig.js";
 import { findDuplicatePhones, describeDuplicates, phoneDigits } from "./lib/guestDuplicates.js";
 import {
@@ -186,7 +187,6 @@ function Logo({ className = "h-14 w-14", rounded = "rounded-2xl" }) {
     />
   );
 }
-
 /* =========================================================================
  *  DATA LAYER (Mock)
  *  ------------------------------------------------------------------------
@@ -1365,7 +1365,7 @@ function EditableText({
       /*  בנייד הכותרות האלה היו מטרות לחיצה בגובה 17px בלבד. `py-2 -my-2`
        *  מגדיל את אזור המגע בלי לשנות את הפריסה החזותית, ובלי לדחוף את
        *  השורות זו מזו.  */
-      className={`group -my-2 inline-flex items-center gap-1 py-2 text-right align-baseline transition hover:text-gold-600 sm:my-0 sm:py-0 ${className}`}
+      className={`group -my-3 inline-flex min-h-11 items-center gap-1 py-3 text-right align-baseline transition hover:text-gold-600 sm:pointer-fine:my-0 sm:pointer-fine:min-h-0 sm:pointer-fine:py-0 ${className}`}
     >
       {/*  כשאין עדיין ערך מציגים את ה-placeholder בעמעום, כדי שגם מסך ריק
           לגמרי יזמין את המשתמש להקליד ולא ייראה כמו באג.  */}
@@ -1471,7 +1471,7 @@ function Countdown({
           //  היה בגובה 16px בלבד — קטן מדי ללחיצה באצבע.
           <button
             onClick={onOpenSettings}
-            className="inline-flex min-h-11 items-center gap-1.5 text-xs font-medium text-white/70 underline decoration-white/30 underline-offset-4 transition hover:text-white sm:min-h-0"
+            className="inline-flex min-h-11 items-center gap-1.5 text-xs font-medium text-white/70 underline decoration-white/30 underline-offset-4 transition hover:text-white sm:pointer-fine:min-h-0"
           >
             <Settings2 size={13} />
             להשלמת פרטי החתונה
@@ -1855,6 +1855,15 @@ function guestColumnsPopoverPosition(anchor, viewportWidth, viewportHeight) {
   return { top, left, maxHeight };
 }
 
+//  שורת "פיצול אישורים" שנכתבה מסנכרון iPlan, או מחרוזת ריקה.
+function splitRsvpNoteOf(g) {
+  return (
+    String(g?.iplanNotes ?? "")
+      .split("\n")
+      .find((line) => line.trim().startsWith(SPLIT_RSVP_PREFIX)) || ""
+  );
+}
+
 const GuestRow = memo(function GuestRow({
   g,
   tableLabel,
@@ -1891,6 +1900,7 @@ const GuestRow = memo(function GuestRow({
   useEffect(() => setSeats(g.seats ?? 1), [g.seats]);
   useEffect(() => setGift(g.gift ?? 0), [g.gift]);
   useEffect(() => setAttending(g.attendingCount ?? (g.seats ?? 1)), [g.attendingCount, g.seats]);
+  const splitNote = splitRsvpNoteOf(g);
 
   return (
     <tr className={`border-b border-slate-100 transition ${selected ? "bg-gold-50/60" : "hover:bg-white/60"}`}>
@@ -2069,6 +2079,8 @@ const GuestRow = memo(function GuestRow({
       </td>}
       {visibleColumns.rsvp && <td className="px-2 py-3">
         <div className="flex flex-col gap-1">
+          {/*  התג מוצמד לפינת השדה ולא מתחתיו, כי גובה השורה קבוע בווירטואליזציה.  */}
+          <div className="relative">
           <select
             value={RSVP[g.rsvp] ? g.rsvp : "pending"}
             disabled={!canEdit}
@@ -2084,6 +2096,18 @@ const GuestRow = memo(function GuestRow({
             <option value="confirmed">אישרו הגעה</option>
             <option value="declined">לא מגיעים</option>
           </select>
+          {splitNote && (
+            <span
+              role="img"
+              aria-label={splitNote}
+              title={splitNote}
+              data-testid="guest-split-rsvp"
+              className="pointer-events-auto absolute -top-2 -left-2 rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-bold leading-4 text-amber-800 shadow-sm ring-1 ring-amber-300"
+            >
+              פיצול
+            </span>
+          )}
+          </div>
           {g.rsvp === "confirmed" && (
             <div className="flex items-center justify-center gap-1">
               <input
@@ -2170,7 +2194,7 @@ const GuestCard = memo(function GuestCard({
   const field =
     //  בנייד שדות הקלט חייבים להיות גבוהים מ-44px כדי שאפשר יהיה לדיוק
     //  להקיש עליהם, ו-16px גופן כדי ש-iOS לא יעשה זום אוטומטי בפוקוס.
-    "min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm";
+    "min-h-11 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base outline-none focus:border-gold-400 sm:pointer-fine:min-h-0 sm:pointer-fine:text-sm";
 
   //  כרטיס פתוח הוא כ-420px. עם 592 מוזמנים זה שני כרטיסים למסך וגלילה
   //  אין-סופית, ולכן ברירת המחדל היא שורת סיכום שנפתחת בלחיצה.
@@ -2180,6 +2204,7 @@ const GuestCard = memo(function GuestCard({
   const rsvpDot = { sage: "bg-sage-500", sky: "bg-sky-500", gold: "bg-gold-500", rose: "bg-rose-400" }[
     RSVP[rsvpKey].color
   ];
+  const splitNote = splitRsvpNoteOf(g);
 
   return (
     <div
@@ -2191,7 +2216,7 @@ const GuestCard = memo(function GuestCard({
         {/*  תיבת הסימון היא 16px ובלתי אפשרית ללחיצה באצבע. עטיפה
             ב-label עם ריפוד מגדילה את אזור הלחיצה ל-44px בלי לשנות
             את המראה ובלי להזיז את שאר השורה.  */}
-        <label className="-m-1.5 grid h-11 w-9 shrink-0 cursor-pointer place-items-center">
+        <label className="-m-1.5 grid h-11 w-11 shrink-0 cursor-pointer place-items-center">
           {canEdit && (
             <input
               type="checkbox"
@@ -2208,7 +2233,7 @@ const GuestCard = memo(function GuestCard({
           onChange={(e) => setName(e.target.value)}
           onBlur={() => name !== (g.name || "") && updateName(g.id, name)}
           placeholder="שם האורח"
-          className="min-h-11 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base font-semibold text-slate-800 outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
+          className="min-h-11 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base font-semibold text-slate-800 outline-none focus:border-gold-400 sm:pointer-fine:min-h-0 sm:pointer-fine:text-sm"
         />
         {/*  סיכום בשורה עצמה: מספר הכיסאות ונקודת צבע לסטטוס, כדי
             שלא יהיה צורך לפתוח כרטיס רק כדי לראות אותם.  */}
@@ -2221,14 +2246,27 @@ const GuestCard = memo(function GuestCard({
                 data-duplicate-phone
                 aria-label={duplicateNote}
                 title={duplicateNote}
-                className="grid h-8 w-8 place-items-center rounded-lg bg-amber-50 text-amber-600 ring-1 ring-amber-300"
+                className="-m-1.5 grid h-11 w-11 place-items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
               >
-                <AlertTriangle size={15} />
+                <span className="grid h-8 w-8 place-items-center rounded-lg bg-amber-50 text-amber-600 ring-1 ring-amber-300">
+                  <AlertTriangle size={15} />
+                </span>
               </button>
             )}
             <span className="tabular-nums" title="כיסאות">
               {g.seats ?? 1}
             </span>
+            {splitNote && (
+              <span
+                role="img"
+                aria-label={splitNote}
+                title={splitNote}
+                data-testid="guest-split-rsvp"
+                className="rounded-full bg-amber-100 px-1.5 py-px text-[11px] font-bold leading-4 text-amber-800 ring-1 ring-amber-300"
+              >
+                פיצול
+              </span>
+            )}
             <span
               title={rsvpLabel}
               aria-label={`אישור הגעה: ${rsvpLabel}`}
@@ -2241,14 +2279,14 @@ const GuestCard = memo(function GuestCard({
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           aria-label={`${open ? "סגירת" : "פתיחת"} פרטי ${g.name || "מוזמן"}`}
-          className="btn-icon w-8"
+          className="btn-icon"
         >
           <ChevronDown size={18} className={open ? "rotate-180 transition" : "transition"} />
         </button>
         <button
           onClick={() => removeGuest(g.id)}
           aria-label={`מחיקת ${g.name || "מוזמן"}`}
-          className={`btn-icon-danger w-8 ${
+          className={`btn-icon-danger ${
             canEdit ? "" : "hidden"
           }`}
         >
@@ -2356,6 +2394,14 @@ const GuestCard = memo(function GuestCard({
             <option value="declined">לא מגיעים</option>
           </select>
         </label>
+        {splitNote && (
+          <p
+            data-testid="guest-split-rsvp-note"
+            className="col-span-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 ring-1 ring-amber-200"
+          >
+            {splitNote}
+          </p>
+        )}
         {g.rsvp === "confirmed" && (
           <label className="col-span-2 text-xs font-medium text-sage-600">
             כמה אישרו הגעה (מתוך {g.seats || 1})
@@ -2382,7 +2428,7 @@ const GuestCard = memo(function GuestCard({
           onClick={() => toggleFlag(g.id, "probablyComing")}
           disabled={!canEdit}
           aria-pressed={!!g.probablyComing}
-          className={`flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition sm:min-h-0 sm:px-2.5 sm:py-1.5 sm:text-xs ${
+          className={`flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition sm:pointer-fine:min-h-0 sm:pointer-fine:px-2.5 sm:pointer-fine:py-1.5 sm:pointer-fine:text-xs ${
             g.probablyComing
               ? "bg-sage-100 text-sage-600 ring-1 ring-sage-300"
               : "bg-white text-slate-500 ring-1 ring-slate-200"
@@ -2394,7 +2440,7 @@ const GuestCard = memo(function GuestCard({
           onClick={() => toggleFlag(g.id, "considering")}
           disabled={!canEdit}
           aria-pressed={!!g.considering}
-          className={`flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition sm:min-h-0 sm:px-2.5 sm:py-1.5 sm:text-xs ${
+          className={`flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition sm:pointer-fine:min-h-0 sm:pointer-fine:px-2.5 sm:pointer-fine:py-1.5 sm:pointer-fine:text-xs ${
             g.considering
               ? "bg-rose-100 text-rose-600 ring-1 ring-rose-300"
               : "bg-white text-slate-500 ring-1 ring-slate-200"
@@ -2406,7 +2452,7 @@ const GuestCard = memo(function GuestCard({
           onClick={() => toggleFlag(g.id, "glatt")}
           disabled={!canEdit}
           aria-pressed={!!g.glatt}
-          className={`flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition sm:min-h-0 sm:px-2.5 sm:py-1.5 sm:text-xs ${
+          className={`flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition sm:pointer-fine:min-h-0 sm:pointer-fine:px-2.5 sm:pointer-fine:py-1.5 sm:pointer-fine:text-xs ${
             g.glatt
               ? "bg-gold-100 text-gold-600 ring-1 ring-gold-300"
               : "bg-white text-slate-500 ring-1 ring-slate-200"
@@ -2414,7 +2460,7 @@ const GuestCard = memo(function GuestCard({
         >
           <UtensilsCrossed size={16} /> גלאט
         </button>
-        <span className="flex min-h-11 items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-500 ring-1 ring-slate-200 sm:min-h-0 sm:px-2.5 sm:py-1.5 sm:text-xs">
+        <span className="flex min-h-11 items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-500 ring-1 ring-slate-200 sm:pointer-fine:min-h-0 sm:pointer-fine:px-2.5 sm:pointer-fine:py-1.5 sm:pointer-fine:text-xs">
           <Wine size={16} /> שותים
           <DrinkersControl
             guest={g}
@@ -2831,7 +2877,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     else addGuestToggleRef.current?.focus();
   }, [isAddGuestOpen]);
 
-  //  גם הכפתור במצב „רשימה ריקה” מגיע לכאן, והוא נמצא רחוק מהטופס.
+  //  גם הכפתור במצב “רשימה ריקה” מגיע לכאן, והוא נמצא רחוק מהטופס.
   function openAddGuest() {
     addGuestTouched.current = true;
     addGuestToggleRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -3468,7 +3514,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           />
           <label
             title="נדרש להזמין מנת בד״צ / גלאט עבור מוזמן זה"
-            className="flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-600 outline-none focus-within:border-gold-400 sm:min-h-0"
+            className="flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-600 outline-none focus-within:border-gold-400 sm:pointer-fine:min-h-0"
           >
             <input
               type="checkbox"
@@ -3480,7 +3526,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
           </label>
           <label
             title="המוזמנים ברשומה הזו שותים אלכוהול — משמש לחישוב האלכוהול"
-            className="flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-600 outline-none focus-within:border-gold-400 sm:min-h-0"
+            className="flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-600 outline-none focus-within:border-gold-400 sm:pointer-fine:min-h-0"
           >
             <input
               type="checkbox"
@@ -4112,7 +4158,7 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
           <button
             type="button"
             onClick={requestClose}
-            className="rounded-xl bg-slate-800 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700"
+            className="min-h-11 rounded-xl bg-slate-800 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700"
           >
             סיום
           </button>
@@ -4132,7 +4178,7 @@ function CategoryManager({ open, onClose, categories, guests, onAdd, onRename, o
  *  לא יודע לומר שרבע מהשתייה תהיה ערק — הוא כן יודע לומר “נקנה 6 בקבוקי
  *  ערק”. לכן הכמות היא קלט ישיר, והיעד הוא רק מד.
  *
- *  הרשימה מתחילה ריקה במכוון: אין „ברירת מחדל” שצריך לכבות. יש הצעות
+ *  הרשימה מתחילה ריקה במכוון: אין “ברירת מחדל” שצריך לכבות. יש הצעות
  *  להוספה מהירה, אבל כל שורה נכנסת רק כי מישהו ביקש אותה — ולכן גם כל
  *  שורה ניתנת למחיקה.
  *
@@ -4367,7 +4413,7 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
       next[idx] = { ...next[idx], expected: totalCost };
       return next;
     });
-    notify(`סעיף „${ALCOHOL_BUDGET_CATEGORY}” עודכן ל-${fmt(totalCost)}`, {
+    notify(`סעיף “${ALCOHOL_BUDGET_CATEGORY}” עודכן ל-${fmt(totalCost)}`, {
       tone: "success",
     });
   }
@@ -4453,7 +4499,7 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
                   <button
                     type="button"
                     onClick={() => setHeadcount(String(listedSeats))}
-                    className="mt-1.5 min-h-9 text-[11px] font-medium text-gold-700 underline decoration-gold-300 underline-offset-4 transition hover:text-gold-600"
+                    className="mt-1.5 min-h-11 text-xs font-medium text-gold-700 underline decoration-gold-300 underline-offset-4 transition hover:text-gold-600"
                   >
                     להשתמש במספר המוזמנים ברשימה ({listedSeats})
                   </button>
@@ -4510,11 +4556,11 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
                 </p>
                 <p className="mt-0.5 text-xs text-slate-600">
                   {drinkers > 0
-                    ? "סכום העמודה „שותים” בכל הרשומות שלא סירבו להגיע"
+                    ? "סכום העמודה “שותים” בכל הרשומות שלא סירבו להגיע"
                     : "עדיין לא סומן אף אחד כשותה"}
                 </p>
                 <p className="mt-2 text-[11px] text-slate-500">
-                  הסימון נעשה במסך המוזמנים — מסמנים שורות ולוחצים „סמן כשותים”.
+                  הסימון נעשה במסך המוזמנים — מסמנים שורות ולוחצים “סמן כשותים”.
                 </p>
               </div>
             )}
@@ -4672,7 +4718,7 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
               </div>
 
               <p className="mt-2.5 text-[11px] leading-5 text-slate-500">
-                בקבוק נפתח עם נפח, ארגז או מגש עם „יחידות באריזה”. מחיר, כמות והחלטה אם
+                בקבוק נפתח עם נפח, ארגז או מגש עם “יחידות באריזה”. מחיר, כמות והחלטה אם
                 השורה נכנסת ליעד הליטרים נקבעים בשורה עצמה.
               </p>
             </form>
@@ -4703,7 +4749,7 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
           </div>
           {unitsOutsideLiters > 0 && (
             <p className="mt-2 text-[11px] text-slate-500">
-              בנוסף {unitsOutsideLiters === 1 ? "יחידה אחת" : `${unitsOutsideLiters} יחידות`} שסימנתם „לא מחושב באלכוהול” — נספרות בעלות בלבד.
+              בנוסף {unitsOutsideLiters === 1 ? "יחידה אחת" : `${unitsOutsideLiters} יחידות`} שסימנתם “לא מחושב באלכוהול” — נספרות בעלות בלבד.
             </p>
           )}
         </div>
@@ -4924,8 +4970,8 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
         </div>
 
         <p className="mt-2 text-[11px] leading-5 text-slate-400">
-          העברה לתקציב יוצרת (או מעדכנת) סעיף בשם „{ALCOHOL_BUDGET_CATEGORY}” בשדה
-          „תקציב מתוכנן” בלבד — מה שכבר שילמתם בפועל לא נדרס.
+          העברה לתקציב יוצרת (או מעדכנת) סעיף בשם “{ALCOHOL_BUDGET_CATEGORY}” בשדה
+          “תקציב מתוכנן” בלבד — מה שכבר שילמתם בפועל לא נדרס.
         </p>
       </Card>
     </div>
@@ -4953,7 +4999,7 @@ function Seating({ guests, tables, setTables }) {
     [tables]
   );
   const unassigned = guests.filter(
-    (g) => g.rsvp !== "declined" && !assignedIds.has(g.id)
+    (g) => g.rsvp === "confirmed" && !assignedIds.has(g.id)
   );
 
   const searchTerm = search.trim();
@@ -4962,8 +5008,12 @@ function Seating({ guests, tables, setTables }) {
   //  ומעוות את התפוסה, ובבורר השיבוץ ההשוואה מול undefined מסתירה אותו לגמרי.
   const guestSeats = (g) => Math.max(1, Number(g?.seats) || 1);
 
+  //  כל מוזמן שמשובץ תופס מקום, גם אם ה-RSVP שלו השתנה אחרי השיבוץ.
   const seatsUsed = (t) =>
-    t.guestIds.reduce((s, id) => s + (guestById[id] ? guestSeats(guestById[id]) : 0), 0);
+    t.guestIds.reduce(
+      (sum, id) => sum + (guestById[id] ? guestSeats(guestById[id]) : 0),
+      0
+    );
 
   function addTable(e) {
     e.preventDefault();
@@ -4978,6 +5028,10 @@ function Seating({ guests, tables, setTables }) {
   function assign(tableId, guestId) {
     if (!guestId) return;
     const gid = Number(guestId);
+    if (guestById[gid]?.rsvp !== "confirmed") {
+      notify("אפשר לשבץ רק מוזמנים שאישרו הגעה", { tone: "error" });
+      return;
+    }
     const table = tables.find((t) => t.id === tableId);
     if (!table) return;
     //  הגנה מפני כפילות: id כפול היה נספר פעמיים בתפוסה ונותן מפתח React כפול.
@@ -5054,7 +5108,7 @@ function Seating({ guests, tables, setTables }) {
       <SectionTitle
         icon={Armchair}
         title="סידור הושבה"
-        subtitle="שולחן רגיל (12) או שולחן אבירים (24) · ניתן לשבץ כל מוזמן שלא סירב להגיע"
+        subtitle="שולחן רגיל (12) או שולחן אבירים (24) · משבצים רק מי שאישרו הגעה"
         action={
           canEdit ? (
           <form
@@ -5067,7 +5121,7 @@ function Seating({ guests, tables, setTables }) {
               onChange={(e) => setNewTable({ ...newTable, name: e.target.value })}
               placeholder="שם שולחן"
               aria-label="שם השולחן החדש"
-              className="min-h-11 min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-gold-400 sm:min-h-0 sm:w-36 sm:flex-none sm:text-sm"
+              className="min-h-11 min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-gold-400 sm:pointer-fine:min-h-0 sm:w-36 sm:flex-none sm:pointer-fine:text-sm"
             />
             <select
               value={newTable.type}
@@ -5080,7 +5134,7 @@ function Seating({ guests, tables, setTables }) {
             </select>
             <button
               type="submit"
-              className="btn-primary min-h-11 shrink-0 sm:min-h-0 sm:px-3"
+              className="btn-primary min-h-11 shrink-0 sm:pointer-fine:min-h-0 sm:px-3"
             >
               <Plus size={16} /> שולחן
             </button>
@@ -5088,6 +5142,16 @@ function Seating({ guests, tables, setTables }) {
           ) : null
         }
       />
+
+      <div
+        role="note"
+        data-testid="seating-rsvp-rule"
+        data-tour="seating-rsvp-rule"
+        className="mb-4 flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900"
+      >
+        <CheckCircle2 size={17} className="mt-0.5 shrink-0 text-sky-700" />
+        <span>אפשר לשבץ רק מוזמנים בסטטוס “אישרו הגעה”. ממתינים, מתלבטים ומי שלא מגיעים לא יופיעו בבורר.</span>
+      </div>
 
       {unassigned.length > 0 && (
         <div data-tour="seating-unassigned" className="mb-5 rounded-2xl bg-amber-50/70 p-3 text-sm ring-1 ring-amber-200/70">
@@ -5113,6 +5177,9 @@ function Seating({ guests, tables, setTables }) {
           const used = seatsUsed(t);
           const left = cap - used;
           const isKnight = t.type === "knight";
+          const unconfirmedCount = t.guestIds.filter(
+            (id) => guestById[id] && guestById[id].rsvp !== "confirmed"
+          ).length;
           return (
             <div
               key={t.id}
@@ -5172,29 +5239,53 @@ function Seating({ guests, tables, setTables }) {
                 max={cap}
                 tone={left <= 0 ? "rose" : "sage"}
               />
+              {unconfirmedCount > 0 && (
+                <p
+                  role="status"
+                  className="mt-2 flex items-start gap-1.5 rounded-xl bg-amber-50 px-2.5 py-1.5 text-right text-[11px] leading-relaxed text-amber-800"
+                >
+                  <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    {unconfirmedCount === 1
+                      ? "רשומה אחת כבר לא בסטטוס “אישרו הגעה”"
+                      : `${unconfirmedCount} רשומות כבר לא בסטטוס “אישרו הגעה”`}
+                    {" "}— הן עדיין תופסות מקום.{canEdit ? " הסירו אותן כדי לפנות כיסאות." : ""}
+                  </span>
+                </p>
+              )}
 
               <ul className="mt-3 space-y-1.5">
                 {t.guestIds.map((id) => {
                   const g = guestById[id];
                   if (!g) return null;
+                  const notConfirmed = g.rsvp !== "confirmed";
                   return (
                     <li
                       key={id}
-                      className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-1.5 text-sm"
+                      data-testid={notConfirmed ? "seating-unconfirmed-guest" : undefined}
+                      className={`flex items-center justify-between gap-2 rounded-xl px-3 py-1.5 text-sm ${
+                        notConfirmed ? "bg-amber-50 ring-1 ring-amber-200" : "bg-slate-50"
+                      }`}
                     >
-                      <span className="text-slate-700">
-                        {g.name}{" "}
-                        <span className="text-xs text-slate-400">
-                          ({guestSeats(g)})
+                      <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                        <span className={notConfirmed ? "text-slate-400 line-through decoration-slate-300" : "text-slate-700"}>
+                          {g.name}
                         </span>
+                        <span className="text-xs text-slate-400">({guestSeats(g)})</span>
+                        {notConfirmed && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                            <AlertTriangle size={11} aria-hidden="true" />
+                            {RSVP[g.rsvp]?.label || "ממתין"} · להסיר
+                          </span>
+                        )}
                       </span>
                       <button
                         onClick={() => unassign(t.id, id)}
                         aria-label={`הסרת ${g.name} מהשולחן`}
                         title="הסרה מהשולחן"
-                        className={`-my-1.5 grid h-11 w-11 shrink-0 place-items-center rounded text-slate-400 transition hover:text-rose-500 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none ${
-                          canEdit ? "" : "hidden"
-                        }`}
+                        className={`-my-1.5 grid h-11 w-11 shrink-0 place-items-center rounded-lg transition hover:text-rose-600 focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:outline-none ${
+                          notConfirmed ? "text-rose-500 hover:bg-rose-50" : "text-slate-400"
+                        } ${canEdit ? "" : "hidden"}`}
                       >
                         <X size={16} />
                       </button>
@@ -5230,7 +5321,10 @@ function Seating({ guests, tables, setTables }) {
         )}
       </div>
 
-      {pickerTable && (
+      {/*  פורטל ל-body: ל-Card יש backdrop-filter, והוא הופך כל fixed שבתוכו ליחסי
+          לכרטיס עצמו. בלי זה החלון ממורכז על כרטיס ההושבה הארוך, ובטלפון
+          במצב שוכב הכותרת וכפתור הסגירה נדחפים מעל קצה המסך.  */}
+      {pickerTable && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
           role="dialog"
@@ -5290,7 +5384,7 @@ function Seating({ guests, tables, setTables }) {
               </select>
             </div>
 
-            <div className="-mx-1 flex-1 overflow-auto px-1">
+            <div className="-mx-1 min-h-0 flex-1 overflow-auto px-1">
               <ul className="space-y-1.5">
                 {pickerList.map((g) => (
                   <li key={g.id}>
@@ -5317,7 +5411,8 @@ function Seating({ guests, tables, setTables }) {
               </ul>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </Card>
   );
@@ -5443,7 +5538,7 @@ function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename
 
       <label className="min-w-0 text-xs font-medium text-slate-500">
         קטגוריה
-        <select value={item.category || "כללי"} disabled={!canEdit} onChange={(event) => onPatch(item.id, { category: event.target.value })} aria-label={`קטגוריה — ${item.title}`} className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 text-base text-slate-700 outline-none focus:border-gold-400 disabled:bg-slate-50 sm:text-sm">
+        <select value={item.category || "כללי"} disabled={!canEdit} onChange={(event) => onPatch(item.id, { category: event.target.value })} aria-label={`קטגוריה — ${item.title}`} className="mt-1 min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 text-base text-slate-700 outline-none focus:border-gold-400 disabled:bg-slate-50 sm:pointer-fine:text-sm">
           {categories.map((category) => <option key={category} value={category}>{category}</option>)}
         </select>
       </label>
@@ -5453,7 +5548,7 @@ function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename
           <select
             value={item.assignee}
             onChange={(e) => onAssign(item.id, e.target.value)}
-            className="min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-2 text-base text-slate-600 outline-none focus:border-gold-400 sm:text-sm"
+            className="min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-2 text-base text-slate-600 outline-none focus:border-gold-400 sm:pointer-fine:text-sm"
             aria-label={`שיוך — ${item.title}`}
           >
             {assignees.map((a) => (
@@ -5619,7 +5714,7 @@ function Checklist({ items, setItems, options, setOptions }) {
     const fallbackLabel = kind === "category" ? fallback : remaining[0].label;
     const belongs = (item) => (item[kind] || (kind === "category" ? "כללי" : "both")) === key;
     const used = items.filter(belongs).length;
-    const ok = await confirmDialog({ title: `מחיקת ${label}`, message: used ? `${used} משימות יעברו אל „${fallbackLabel}”. המשימות וההערות שלהן לא יימחקו.` : "האפשרות תוסר מהרשימה. המשימות לא יימחקו.", confirmLabel: "מחיקה", tone: "danger" });
+    const ok = await confirmDialog({ title: `מחיקת ${label}`, message: used ? `${used} משימות יעברו אל “${fallbackLabel}”. המשימות וההערות שלהן לא יימחקו.` : "האפשרות תוסר מהרשימה. המשימות לא יימחקו.", confirmLabel: "מחיקה", tone: "danger" });
     if (!ok) return;
     setOptions((previous) => ({ ...previous, [kind === "category" ? "categories" : "assignees"]: remaining }));
     setItems((previous) => previous.map((item) => belongs(item) ? { ...item, [kind]: fallback } : item));
@@ -5694,7 +5789,7 @@ function Checklist({ items, setItems, options, setOptions }) {
 
   const pct = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
   const filterSelect = (active) =>
-    `min-h-12 w-full min-w-0 appearance-none rounded-lg border-2 py-2 ps-3 pe-9 text-base font-medium text-slate-700 outline-none transition focus:border-gold-500 focus:ring-2 focus:ring-gold-200 sm:text-sm ${
+    `min-h-12 w-full min-w-0 appearance-none rounded-lg border-2 py-2 ps-3 pe-9 text-base font-medium text-slate-700 outline-none transition focus:border-gold-500 focus:ring-2 focus:ring-gold-200 sm:pointer-fine:text-sm ${
       active ? "border-gold-400 bg-gold-50" : "border-sage-200 bg-sage-50 hover:border-sage-400"
     }`;
   const activeFilterCount = Number(Boolean(query.trim())) + Number(categoryFilter !== "all") + Number(assigneeFilter !== "all") + Number(hideDone);
@@ -5788,7 +5883,7 @@ function Checklist({ items, setItems, options, setOptions }) {
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
                 placeholder="משימה חדשה…"
-                className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200 sm:text-sm"
+                className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-200 sm:pointer-fine:text-sm"
                 aria-label="שם המשימה החדשה"
               />
               </label>
@@ -5797,7 +5892,7 @@ function Checklist({ items, setItems, options, setOptions }) {
               <select
                 value={formCategory}
                 onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
-                className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:text-sm"
+                className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:pointer-fine:text-sm"
                 aria-label="קטגוריה"
               >
                 {categories.map((c) => (
@@ -5812,7 +5907,7 @@ function Checklist({ items, setItems, options, setOptions }) {
               <select
                 value={formAssignee}
                 onChange={(e) => setForm((f) => ({ ...f, assignee: e.target.value }))}
-                className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:text-sm"
+                className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:pointer-fine:text-sm"
                 aria-label="שיוך"
               >
                 {assignees.map((a) => (
@@ -5831,7 +5926,7 @@ function Checklist({ items, setItems, options, setOptions }) {
               </button>
               <label className="col-span-2 min-w-0 space-y-1 lg:col-span-4">
                 <span className="text-xs font-medium text-slate-500">הערות</span>
-                <textarea value={form.notes} onChange={(event) => setForm((previous) => ({ ...previous, notes: event.target.value }))} rows={2} aria-label="הערות למשימה החדשה" className="block w-full min-w-0 resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:text-sm" />
+                <textarea value={form.notes} onChange={(event) => setForm((previous) => ({ ...previous, notes: event.target.value }))} rows={2} aria-label="הערות למשימה החדשה" className="block w-full min-w-0 resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:pointer-fine:text-sm" />
               </label>
             </form>
             </CollapsibleAdd>
@@ -6277,7 +6372,7 @@ function Vendors({
                       value={v.name}
                       onChange={(e) => updateVendor(v.id, { name: e.target.value })}
                       aria-label="שם הספק"
-                      className="min-h-11 w-full min-w-0 bg-transparent text-xl font-bold text-slate-800 outline-none sm:min-h-0"
+                      className="min-h-11 w-full min-w-0 bg-transparent text-xl font-bold text-slate-800 outline-none sm:pointer-fine:min-h-0"
                     />
                     <button
                       onClick={() => removeVendor(v.id)}
@@ -6291,37 +6386,37 @@ function Vendors({
                   <input
                     value={v.type}
                     onChange={(e) => updateVendor(v.id, { type: e.target.value })}
-                    className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
+                    className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-gold-400 sm:pointer-fine:min-h-0 sm:pointer-fine:text-sm"
                     placeholder="סוג ספק"
                   />
                   {/*  עטיפה ב-label ולא ב-div: בנייד השדה עצמו היה 22px בלבד,
                       ולחיצה על המסגרת סביבו לא עשתה כלום. עכשיו כל השורה
                       ממקדת את הקלט.  */}
-                  <label className="flex min-h-11 items-center gap-2 rounded-xl bg-white/60 px-3 py-2 ring-1 ring-slate-200 sm:min-h-0">
+                  <label className="flex min-h-11 items-center gap-2 rounded-xl bg-white/60 px-3 py-2 ring-1 ring-slate-200 sm:pointer-fine:min-h-0">
                     <Phone size={16} className="shrink-0 text-sage-500" />
                     <input
                       value={v.phone}
                       onChange={(e) => updateVendor(v.id, { phone: e.target.value })}
                       placeholder="טלפון"
                       type="tel"
-                      className="w-full bg-transparent text-base outline-none sm:text-sm"
+                      className="w-full bg-transparent text-base outline-none sm:pointer-fine:text-sm"
                     />
                   </label>
-                  <label className="flex min-h-11 items-center gap-2 rounded-xl bg-white/60 px-3 py-2 ring-1 ring-slate-200 sm:min-h-0">
+                  <label className="flex min-h-11 items-center gap-2 rounded-xl bg-white/60 px-3 py-2 ring-1 ring-slate-200 sm:pointer-fine:min-h-0">
                     <Mail size={16} className="shrink-0 text-sage-500" />
                     <input
                       value={v.email}
                       onChange={(e) => updateVendor(v.id, { email: e.target.value })}
                       placeholder="אימייל"
                       type="email"
-                      className="w-full bg-transparent text-base outline-none sm:text-sm"
+                      className="w-full bg-transparent text-base outline-none sm:pointer-fine:text-sm"
                       dir="ltr"
                     />
                   </label>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-xs font-semibold text-slate-500">
+                  <div className="grid grid-cols-2 items-start gap-3">
+                    <div className="min-w-0">
+                      <label className="block text-xs font-semibold text-slate-500">
                         עלות בחוזה
                         <input
                           type="number"
@@ -6331,7 +6426,7 @@ function Vendors({
                               contractCost: Number(e.target.value) || 0,
                             })
                           }
-                          className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
+                          className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:pointer-fine:min-h-0 sm:pointer-fine:text-sm"
                         />
                       </label>
                       {setBudget && (
@@ -6340,17 +6435,19 @@ function Vendors({
                         </p>
                       )}
                     </div>
-                    <label className="text-xs font-semibold text-slate-500">
-                      מקדמה ששולמה
-                      <input
-                        type="number"
-                        value={v.deposit}
-                        onChange={(e) =>
-                          updateVendor(v.id, { deposit: Number(e.target.value) || 0 })
-                        }
-                        className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:min-h-0 sm:text-sm"
-                      />
-                    </label>
+                    <div className="min-w-0">
+                      <label className="block text-xs font-semibold text-slate-500">
+                        שולם
+                        <input
+                          type="number"
+                          value={v.deposit}
+                          onChange={(e) =>
+                            updateVendor(v.id, { deposit: Number(e.target.value) || 0 })
+                          }
+                          className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base tabular-nums outline-none focus:border-gold-400 sm:pointer-fine:min-h-0 sm:pointer-fine:text-sm"
+                        />
+                      </label>
+                    </div>
                   </div>
 
                   <div className="rounded-2xl bg-gradient-to-l from-gold-50 to-sage-50 p-3 text-center ring-1 ring-gold-200/60">
@@ -6395,7 +6492,7 @@ function Vendors({
                         onChange={(e) => setTaskInput(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && addTask(v.id)}
                         placeholder="משימה חדשה..."
-                        className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-gold-400 sm:min-h-0 sm:w-44 sm:text-sm"
+                        className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base outline-none focus:border-gold-400 sm:pointer-fine:min-h-0 sm:w-44 sm:pointer-fine:text-sm"
                       />
                       <button
                         onClick={() => addTask(v.id)}
@@ -6920,7 +7017,7 @@ function BudgetNotes({ item, canEdit, onChange, label = item.category }) {
       aria-label={`הערות — ${label}`}
       title={notes || undefined}
       placeholder="הערות"
-      className="block min-h-11 w-full min-w-0 resize-y rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base leading-5 text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-100 [overflow-wrap:anywhere] sm:text-sm"
+      className="block min-h-11 w-full min-w-0 resize-y rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base leading-5 text-slate-700 outline-none transition focus:border-gold-400 focus:ring-2 focus:ring-gold-100 [overflow-wrap:anywhere] sm:pointer-fine:text-sm"
     />
   );
 }
@@ -7012,6 +7109,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
   );
 
   const contractOf = (v) => Number(v.contractCost) || 0;
+  const paidOf = (v) => Number(v.deposit) || 0;
 
   const L = { ...DEFAULT_FINANCE_LABELS, ...financeLabels };
   const updateLabel = (key, val) =>
@@ -7139,6 +7237,10 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
     setBudget((prev) =>
       prev.map((b) => (b.id === id ? { ...b, expected: cost, actual: cost } : b))
     );
+  }
+
+  function matchVendorPaid(id, paid) {
+    setBudget((prev) => prev.map((b) => (b.id === id ? { ...b, paid } : b)));
   }
 
   return (
@@ -7393,6 +7495,8 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                 const cost = vendor ? contractOf(vendor) : 0;
                 const mismatch =
                   vendor && (b.expected !== cost || b.actual !== cost);
+                const vendorPaid = vendor ? paidOf(vendor) : 0;
+                const paidMismatch = vendor && (Number(b.paid) || 0) !== vendorPaid;
                 return (
                   <tr
                     key={b.id}
@@ -7409,7 +7513,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                     className={`border-b border-slate-100 transition ${
                       dragId === b.id
                         ? "opacity-40"
-                        : mismatch
+                        : mismatch || paidMismatch
                           ? "bg-rose-50/70 hover:bg-rose-50"
                           : "hover:bg-white/60"
                     } ${
@@ -7451,6 +7555,24 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                             <button
                               type="button"
                               onClick={() => matchVendor(b.id, cost)}
+                              className="btn-secondary px-2 text-xs"
+                            >
+                              עדכון לפי הספק
+                            </button>
+                          )}
+                        </span>
+                      )}
+                      {paidMismatch && (
+                        <span
+                          data-testid="budget-paid-mismatch"
+                          className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-normal text-rose-600"
+                        >
+                          הסכום ששולם לספק הוא{" "}
+                          <b className="tabular-nums">{fmt(vendorPaid)}</b>
+                          {canEdit && (
+                            <button
+                              type="button"
+                              onClick={() => matchVendorPaid(b.id, vendorPaid)}
                               className="btn-secondary px-2 text-xs"
                             >
                               עדכון לפי הספק
@@ -7568,6 +7690,8 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
             const vendor = vendorOf(b);
             const cost = vendor ? contractOf(vendor) : 0;
             const mismatch = vendor && (b.expected !== cost || b.actual !== cost);
+            const vendorPaid = vendor ? paidOf(vendor) : 0;
+            const paidMismatch = vendor && (Number(b.paid) || 0) !== vendorPaid;
             const dragging = touchDrag?.id === b.id;
             const dropTarget = touchDrag?.overId === b.id;
             return (
@@ -7583,7 +7707,7 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                     ? "relative z-10 border-gold-400 bg-white shadow-xl"
                     : dropTarget
                       ? "border-gold-400 bg-gold-50/70"
-                      : mismatch
+                      : mismatch || paidMismatch
                         ? "border-rose-200 bg-rose-50/70"
                         : "border-slate-200 bg-white/70"
                 }`}
@@ -7610,6 +7734,24 @@ function Finance({ budget, setBudget, vendors = [], guests, budgetGoal, setBudge
                           <button
                             type="button"
                             onClick={() => matchVendor(b.id, cost)}
+                            className="btn-secondary px-2 text-xs"
+                          >
+                            עדכון לפי הספק
+                          </button>
+                        )}
+                      </p>
+                    )}
+                    {paidMismatch && (
+                      <p
+                        data-testid="budget-paid-mismatch"
+                        className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-rose-600"
+                      >
+                        הסכום ששולם לספק הוא{" "}
+                        <b className="tabular-nums">{fmt(vendorPaid)}</b>
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() => matchVendorPaid(b.id, vendorPaid)}
                             className="btn-secondary px-2 text-xs"
                           >
                             עדכון לפי הספק
@@ -7953,6 +8095,8 @@ function VendorPortal({ vendors, setVendors, weddingName = "", coupleTitle = "" 
  * ====================================================================== */
 
 const STORAGE_ROOT = "wp:v1:";
+//  מנהלת האירוע ושותפים אחרים בכוונה מחוץ לרשימה.
+const IPLAN_BELL_EMAILS = new Set(["orelch97@gmail.com", "meitar1703@gmail.com"]);
 
 /* Storage namespacing
  * -------------------------------------------------------------------------
@@ -9416,6 +9560,10 @@ function WeddingApp({
     "vendors",
     cloudEnabled ? [] : SEED_VENDORS
   );
+  const hasUnassignedGuests = useMemo(() => {
+    const assigned = new Set((tables || []).flatMap((t) => t.guestIds || []));
+    return (guests || []).some((g) => g.rsvp === "confirmed" && !assigned.has(g.id));
+  }, [guests, tables]);
   const tourSteps = useMemo(
     () =>
       appTourSteps({
@@ -9427,9 +9575,10 @@ function WeddingApp({
         currentScreen: active,
         isMobile: isMobileViewport,
         hasVendors: vendors.length > 0,
+        hasUnassignedGuests,
         canTransferBudget: canEdit && hasScope(scopes, "finance"),
       }),
-    [active, canEdit, isMobileViewport, isOwner, navKeys, scopes, showBackup, vendors.length]
+    [active, canEdit, hasUnassignedGuests, isMobileViewport, isOwner, navKeys, scopes, showBackup, vendors.length]
   );
   //  התקציב חייב להתנהג כמו שאר המערכים: במצב ענן ה-DB הוא מקור האמת, ואסור
   //  שחתונה חדשה תיזרע בסעיפי ההדגמה — הם מוצגים למשתמש כאילו הם שלו.
@@ -9594,8 +9743,10 @@ function WeddingApp({
   const hasIplanSource =
     iplanExtensionAvailable ||
     Boolean(iplanSnapshot?.rows?.length);
+  //  מצב מקומי בלבד הוא תצוגת פיתוח ללא התחברות, ולכן אין בו אימייל לבדיקה מול הרשימה.
   const canViewIplanBell =
-    String(session?.user?.email || "").trim().toLowerCase() === "orelch97@gmail.com";
+    !isCloudConfigured ||
+    IPLAN_BELL_EMAILS.has(String(session?.user?.email || "").trim().toLowerCase());
 
   const handleCommitIplanUpdates = useCallback(
     async (changes, source = "iplan") => {
@@ -10122,12 +10273,17 @@ function WeddingApp({
           if (!localById.has(id) && !knownIds.has(id)) baseline.delete(id);
         }
 
-        datasetStateRef.current[key] = next;
-        setRows((current) =>
-          JSON.stringify(current.map(cfg.toDoc)) === JSON.stringify(next.map(cfg.toDoc))
-            ? current
-            : next
-        );
+        //  The ref is refreshed only after render, so local adds, edits and deletes made
+        //  since then are re-applied; the updater stays pure for StrictMode double calls.
+        setRows((current) => {
+          const merged = rebaseOnLatest(next, localRows, current);
+          const result =
+            JSON.stringify(current.map(cfg.toDoc)) === JSON.stringify(merged.map(cfg.toDoc))
+              ? current
+              : merged;
+          datasetStateRef.current[key] = result;
+          return result;
+        });
           },
           (error) => {
             console.error("Realtime wedding subscription failed:", {
@@ -10252,7 +10408,7 @@ function WeddingApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checklistOptions, syncRetry]);
 
-  //  מחשבון האלכוהול נשמר בנפרד מההגדרות: הוא שייך להיקף „מוזמנים", וגם הוא
+  //  מחשבון האלכוהול נשמר בנפרד מההגדרות: הוא שייך להיקף “מוזמנים", וגם הוא
   //  מסתנכרן רק אחרי שהטעינה הסתיימה ורק למי שרשאי לערוך.
   useEffect(() => {
     if (!cloudEnabled || !canEdit || !mayGuests || !settingsReadyRef.current) return;
@@ -10850,14 +11006,17 @@ function WeddingApp({
               <HelpCircle size={19} />
               {!tourStatus && <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-gold-600 ring-2 ring-white" />}
             </button>
+            {/*  תוסף iPlan רץ רק במחשב, ולכן הפעמון מוסתר במסכי מגע גם כשהנייד מסובב לרוחב.  */}
             {mayGuests && canViewIplanBell && hasIplanSource && (
-              <ActivityBell
-                activity={iplanActivity}
-                userId={session?.user?.id ?? "local"}
-                weddingId={weddingId || "local"}
-                pendingIplanCount={canEdit ? pendingIplanCount : 0}
-                onOpenIplanModal={canEdit ? () => setIplanModalOpen(true) : null}
-              />
+              <div data-testid="iplan-bell-slot" className="hidden min-[480px]:pointer-fine:block">
+                <ActivityBell
+                  activity={iplanActivity}
+                  userId={session?.user?.id ?? "local"}
+                  weddingId={weddingId || "local"}
+                  pendingIplanCount={canEdit ? pendingIplanCount : 0}
+                  onOpenIplanModal={canEdit ? () => setIplanModalOpen(true) : null}
+                />
+              </div>
             )}
             {/* במצב ענן מחוון הענן כבר מספר את סיפור השמירה; שני מחוונים זה
                 רעש ודוחק את כותרת המסך. מציגים "נשמר" רק במצב מקומי. */}
@@ -10915,7 +11074,7 @@ function WeddingApp({
                   aria-expanded={backupMenuOpen}
                   /*  בנייד הכפתורים האלה היו 32px — קטן מהמינימום שנדרש
                       ללחיצה באצבע.  */
-                  className="grid h-11 w-11 place-items-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 sm:flex sm:h-auto sm:w-auto sm:min-h-0 sm:items-center sm:gap-1.5 sm:bg-gold-500 sm:px-3 sm:py-2 sm:text-xs sm:font-semibold sm:text-slate-950 sm:ring-0 sm:hover:bg-gold-600"
+                  className="grid h-11 min-h-11 w-11 place-items-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 sm:flex sm:h-auto sm:w-auto sm:pointer-fine:min-h-0 sm:items-center sm:gap-1.5 sm:bg-gold-500 sm:px-3 sm:py-2 sm:text-xs sm:font-semibold sm:text-slate-950 sm:ring-0 sm:hover:bg-gold-600"
                 >
                   {excelBusy ? (
                     <Loader2 size={16} className="animate-spin" />
@@ -11171,7 +11330,9 @@ function WeddingApp({
             );
           })()}
           {active === "seating" && (
-            <Seating guests={guests} tables={tables} setTables={setTables} />
+            <CategoriesContext.Provider value={categories}>
+              <Seating guests={guests} tables={tables} setTables={setTables} />
+            </CategoriesContext.Provider>
           )}
           {active === "vendors" && (
             <Vendors

@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     watch: {
-      ignored: ['**/tmp/**'],
+      ignored: ['**/tmp/**', '**/playwright-report/**', '**/test-results/**'],
     },
     // מאותו origin כמו האפליקציה, כדי שעוגיית SameSite=Strict תישלח בפיתוח.
     proxy: {

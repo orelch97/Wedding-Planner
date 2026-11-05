@@ -1015,7 +1015,17 @@ function sanitizeIplanRow(raw) {
       : 0;
   const hasResponse = Boolean(raw.hasResponse);
   const rawStatus = String(raw.rawStatus || rsvp).slice(0, 40);
-  return { name, phone, landline, invited, rsvp, attendingCount, hasResponse, rawStatus };
+  const row = { name, phone, landline, invited, rsvp, attendingCount, hasResponse, rawStatus };
+  const breakdown = sanitizeIplanBreakdown(raw.breakdown);
+  if (breakdown) row.breakdown = breakdown;
+  return row;
+}
+
+function sanitizeIplanBreakdown(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const count = (v) => Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
+  const breakdown = { confirmed: count(raw.confirmed), maybe: count(raw.maybe), declined: count(raw.declined) };
+  return breakdown.confirmed + breakdown.maybe + breakdown.declined > 0 ? breakdown : null;
 }
 
 exports.issueIplanSyncToken = onCall({ region: REGION }, async (request) => {
@@ -1137,7 +1147,7 @@ exports.commitIplanRsvpUpdates = onCall({ region: REGION }, async (request) => {
       if (!toRsvp) return null;
       if (!["confirmed", "declined", "maybe", "pending"].includes(c.fromRsvp)) return null;
       const fromRsvp = c.fromRsvp;
-      return {
+      const clean = {
         guestId,
         guestName: String(c.guestName || "").trim().slice(0, 200),
         fromRsvp,
@@ -1146,6 +1156,9 @@ exports.commitIplanRsvpUpdates = onCall({ region: REGION }, async (request) => {
         toAttendingCount:
           toRsvp === "confirmed" ? Math.max(1, Math.round(Number(c.toAttendingCount) || 1)) : 0,
       };
+      //  הערת פיצול האישורים מ-iPlan נכתבת רק כשהלקוח שלח אותה (לקוחות ישנים לא נוגעים בה).
+      if (typeof c.toIplanNotes === "string") clean.toIplanNotes = c.toIplanNotes.slice(0, 500);
+      return clean;
     });
 
   if (cleanChanges.some((change) => !change)) {
@@ -1227,6 +1240,7 @@ exports.commitIplanRsvpUpdates = onCall({ region: REGION }, async (request) => {
       tx.update(guestRefs[index], {
         rsvp: write.toRsvp,
         attendingCount: write.toAttendingCount,
+        ...(write.toIplanNotes !== undefined ? { iplanNotes: write.toIplanNotes } : {}),
         revision: write.revision,
         updatedAt: FieldValue.serverTimestamp(),
       });

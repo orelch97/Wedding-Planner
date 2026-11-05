@@ -27,6 +27,7 @@ export const ENTITIES = {
       rsvp: g.rsvp ?? "pending",
       gift: Number(g.gift) || 0,
       attendingCount: g.attendingCount == null ? null : Number(g.attendingCount),
+      iplanNotes: String(g.iplanNotes ?? ""),
     }),
     fromDoc: (r) => ({
       id: Number(r.id),
@@ -43,6 +44,7 @@ export const ENTITIES = {
       rsvp: r.rsvp ?? "pending",
       gift: Number(r.gift) || 0,
       attendingCount: r.attendingCount == null ? null : Number(r.attendingCount),
+      iplanNotes: String(r.iplanNotes ?? ""),
     }),
   },
   tables: {

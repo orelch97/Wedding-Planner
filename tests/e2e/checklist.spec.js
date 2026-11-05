@@ -80,6 +80,7 @@ test("checklist editor manages options, notes, collapse, filters and persistence
 
   await page.getByRole("button", { name: "ניהול קטגוריות ושיוך", exact: true }).click();
   const manager = page.getByRole("dialog", { name: "ניהול קטגוריות ושיוך" });
+  await expect(manager.getByRole("textbox", { name: "קטגוריה חדשה", exact: true })).toBeFocused();
   await manager.getByRole("textbox", { name: "קטגוריה חדשה", exact: true }).fill("הסעות");
   await manager.getByRole("button", { name: "הוספה", exact: true }).click();
   await expect(manager.getByRole("textbox", { name: "שם הסעות", exact: true })).toHaveValue("הסעות");
@@ -114,6 +115,8 @@ test("checklist editor manages options, notes, collapse, filters and persistence
   await page.getByRole("button", { name: "ניקוי סינונים", exact: true }).click();
 
   await page.getByRole("button", { name: "ניהול קטגוריות ושיוך", exact: true }).click();
+  // The dialog focuses its "new" field one frame after opening; typing earlier lands there.
+  await expect(manager.getByRole("textbox", { name: "קטגוריה חדשה", exact: true })).toBeFocused();
   await manager.getByRole("textbox", { name: "שם הסעות", exact: true }).fill("תחבורה");
   await manager.getByRole("button", { name: "שמירת הסעות", exact: true }).click();
   await manager.getByRole("button", { name: "שיוך", exact: true }).click();

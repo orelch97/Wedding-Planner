@@ -75,6 +75,7 @@ import {
   Fingerprint,
   RotateCcw,
   ShieldCheck,
+  SlidersHorizontal,
 } from "lucide-react";
 import { SEED_GUESTS, GUEST_CATEGORIES } from "./data/guestsData";
 import { SEED_TABLES, SEED_VENDORS, SEED_BUDGET, CHECKLIST_TEMPLATE, CHECKLIST_CATEGORIES } from "./data/seedData";
@@ -1838,6 +1839,27 @@ const DEFAULT_GUEST_TABLE_COLUMNS = {
   gift: true,
 };
 
+const GUEST_SUMMARY_CARD_OPTIONS = [
+  { key: "records", label: "סה״כ רשומות" },
+  { key: "seats", label: "סה״כ כיסאות" },
+  { key: "probably", label: "כנראה יבואו" },
+  { key: "glatt", label: "מנות גלאט" },
+  { key: "considering", label: "לשקול הזמנה" },
+  { key: "unseated", label: "מאשרים שלא שובצו" },
+  { key: "drinkers", label: "שותים אלכוהול" },
+  { key: "gifts", label: "סה״כ מתנות" },
+];
+const DEFAULT_GUEST_SUMMARY_CARDS = ["records", "seats", "probably", "glatt", "considering"];
+const MAX_GUEST_SUMMARY_CARDS = 5;
+
+function normalizeGuestSummaryCards(stored) {
+  const known = new Set(GUEST_SUMMARY_CARD_OPTIONS.map(({ key }) => key));
+  const picked = [...new Set(Array.isArray(stored) ? stored : [])]
+    .filter((key) => known.has(key))
+    .slice(0, MAX_GUEST_SUMMARY_CARDS);
+  return picked.length ? picked : DEFAULT_GUEST_SUMMARY_CARDS;
+}
+
 function guestColumnsPopoverPosition(anchor, viewportWidth, viewportHeight) {
   const width = 256;
   const margin = 12;
@@ -2507,6 +2529,24 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   );
   const visibleColumnCount = GUEST_TABLE_COLUMNS.filter(({ key }) => visibleColumns[key]).length;
   const tableColumnCount = 5 + visibleColumnCount;
+  const [storedSummaryCards, setStoredSummaryCards] = usePersistentState(
+    "guestSummaryCards",
+    DEFAULT_GUEST_SUMMARY_CARDS
+  );
+  const summaryCardKeys = useMemo(
+    () => normalizeGuestSummaryCards(storedSummaryCards),
+    [storedSummaryCards]
+  );
+  const [summaryEditorOpen, setSummaryEditorOpen] = useState(false);
+  const toggleSummaryCard = (key) => {
+    setStoredSummaryCards((previous) => {
+      const current = normalizeGuestSummaryCards(previous);
+      if (current.includes(key)) {
+        return current.length > 1 ? current.filter((k) => k !== key) : current;
+      }
+      return current.length < MAX_GUEST_SUMMARY_CARDS ? [...current, key] : current;
+    });
+  };
   const [catManagerOpen, setCatManagerOpen] = useState(false);
   //  קריאת קובץ Excel גדול לוקחת זמן מורגש בנייד. בלי חיווי המשתמש
   //  לוחץ שוב ושוב על "ייבוא" וחושב שהכפתור לא עובד.
@@ -3279,55 +3319,119 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     notify(`יוצאו ${sorted.length} רשומות לקובץ CSV`, { tone: "success" });
   }
 
-  const guestSummaryCount =
-    2 +
-    Number(totals.probablySeats > 0) +
-    Number(totals.glattSeats > 0) +
-    Number(totals.consideringCount > 0);
+  const unseatedConfirmed = guests.filter(
+    (g) => g.rsvp === "confirmed" && !guestTableMap[g.id]
+  ).length;
+  const summaryCardContent = {
+    records: { icon: Users, label: "סה״כ רשומות", value: totals.count, tone: "gold" },
+    seats: { icon: UserCheck, label: "סה״כ כיסאות", value: totals.seatsTotal, tone: "sage" },
+    probably: { icon: Star, label: "כנראה יבואו", value: totals.probablySeats, sub: `${totals.probablyCount} רשומות מסומנות`, tone: "sage" },
+    glatt: { icon: UtensilsCrossed, label: "מנות גלאט להזמין", value: totals.glattSeats, sub: `${totals.glattCount} רשומות מסומנות`, tone: "gold" },
+    considering: { icon: HelpCircle, label: "לשקול הזמנה", value: totals.consideringCount, sub: "עדיין לא הוחלט", tone: "rose" },
+    unseated: { icon: Armchair, label: "מאשרים שלא שובצו", value: unseatedConfirmed, sub: "רשומות לשיבוץ", tone: "rose" },
+    drinkers: { icon: Wine, label: "שותים אלכוהול", value: totals.drinkers, sub: `${totals.drinkerRecords} רשומות`, tone: "gold" },
+    gifts: { icon: Gift, label: "סה״כ מתנות", value: fmt(totals.gifts), tone: "sage" },
+  };
+  const visibleSummaryCards = GUEST_SUMMARY_CARD_OPTIONS.filter(({ key }) =>
+    summaryCardKeys.includes(key)
+  );
   const guestSummaryGrid = {
+    1: "xl:grid-cols-1",
     2: "xl:grid-cols-2",
     3: "xl:grid-cols-3",
     4: "xl:grid-cols-4",
     5: "xl:grid-cols-5",
-  }[guestSummaryCount];
+  }[visibleSummaryCards.length];
 
   return (
     <div className="space-y-4 sm:space-y-6">
+      <div className="space-y-2.5">
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => setSummaryEditorOpen((open) => !open)}
+          aria-expanded={summaryEditorOpen}
+          aria-controls="guest-summary-editor"
+          className="btn-ghost min-h-11 text-xs"
+        >
+          <SlidersHorizontal size={15} />
+          התאמת כרטיסי הסיכום
+        </button>
+      </div>
+      {summaryEditorOpen && (
+        <section
+          id="guest-summary-editor"
+          aria-label="בחירת כרטיסי הסיכום"
+          className="rounded-2xl border border-slate-200 bg-white/80 p-3 shadow-sm sm:p-4"
+        >
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-slate-700">
+              בחרו עד {MAX_GUEST_SUMMARY_CARDS} כרטיסים להצגה
+              <span className="ms-2 text-xs font-medium text-slate-500">
+                {summaryCardKeys.length}/{MAX_GUEST_SUMMARY_CARDS}
+              </span>
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setStoredSummaryCards(DEFAULT_GUEST_SUMMARY_CARDS)}
+                className="btn-ghost min-h-11 text-xs"
+              >
+                <RotateCcw size={14} /> ברירת מחדל
+              </button>
+              <button
+                type="button"
+                onClick={() => setSummaryEditorOpen(false)}
+                className="btn-secondary min-h-11 text-xs"
+              >
+                סיום
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {GUEST_SUMMARY_CARD_OPTIONS.map(({ key, label }) => {
+              const active = summaryCardKeys.includes(key);
+              const locked = active
+                ? summaryCardKeys.length <= 1
+                : summaryCardKeys.length >= MAX_GUEST_SUMMARY_CARDS;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => toggleSummaryCard(key)}
+                  aria-pressed={active}
+                  disabled={locked}
+                  title={locked && !active ? `אפשר להציג עד ${MAX_GUEST_SUMMARY_CARDS} כרטיסים — הסירו כרטיס קודם` : undefined}
+                  className={`filter-chip disabled:cursor-not-allowed disabled:opacity-50 ${active ? "filter-chip-active" : ""}`}
+                >
+                  {active ? <CheckCircle2 size={15} /> : <Circle size={15} />}
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          {summaryCardKeys.length >= MAX_GUEST_SUMMARY_CARDS && (
+            <p className="mt-2 text-xs text-slate-500">
+              כדי להוסיף כרטיס אחר, הסירו קודם אחד מהנבחרים.
+            </p>
+          )}
+        </section>
+      )}
       <div data-tour="guests-summary" className={`grid grid-cols-2 gap-2.5 sm:gap-4 ${guestSummaryGrid}`}>
-        <StatCard icon={Users} label="סה״כ רשומות" value={totals.count} tone="gold" />
-        <StatCard
-          icon={UserCheck}
-          label="סה״כ כיסאות"
-          value={totals.seatsTotal}
-          tone="sage"
-        />
-        {totals.probablySeats > 0 && (
-          <StatCard
-            icon={Star}
-            label="כנראה יבואו"
-            value={totals.probablySeats}
-            sub={`${totals.probablyCount} רשומות מסומנות`}
-            tone="sage"
-          />
-        )}
-        {totals.glattSeats > 0 && (
-          <StatCard
-            icon={UtensilsCrossed}
-            label="מנות גלאט להזמין"
-            value={totals.glattSeats}
-            sub={`${totals.glattCount} רשומות מסומנות`}
-            tone="gold"
-          />
-        )}
-        {totals.consideringCount > 0 && (
-          <StatCard
-            icon={HelpCircle}
-            label="לשקול הזמנה"
-            value={totals.consideringCount}
-            sub="עדיין לא הוחלט"
-            tone="rose"
-          />
-        )}
+        {visibleSummaryCards.map(({ key }) => {
+          const card = summaryCardContent[key];
+          return (
+            <StatCard
+              key={key}
+              icon={card.icon}
+              label={card.label}
+              value={card.value}
+              sub={card.sub}
+              tone={card.tone}
+            />
+          );
+        })}
+      </div>
       </div>
 
       {/* RSVP summary */}

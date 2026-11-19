@@ -5663,6 +5663,40 @@ const TASK_DUE_BADGE = {
   soon: { label: "בקרוב", className: "bg-amber-50 text-amber-700 ring-amber-200" },
 };
 
+function DueDateField({ value, onChange, label, clearLabel, disabled = false, invalid = false, className = "" }) {
+  //  iOS's picker "Reset" may clear the field without a change event; re-read the value on blur.
+  const sync = (event) => {
+    const next = isValidIsoDate(event.target.value) ? event.target.value : "";
+    if (next !== value) onChange(next);
+  };
+  return (
+    <div className={`flex min-w-0 items-center gap-1.5 ${className}`}>
+      <input
+        type="date"
+        value={value}
+        disabled={disabled}
+        onChange={sync}
+        onBlur={sync}
+        aria-label={label}
+        className={`min-h-11 w-full min-w-0 flex-1 rounded-lg border bg-white px-2 text-base text-slate-700 outline-none focus:border-gold-400 disabled:bg-slate-50 sm:pointer-fine:text-sm ${
+          invalid ? "border-rose-300" : "border-slate-200"
+        }`}
+      />
+      {value && !disabled && (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          aria-label={clearLabel}
+          title="מחיקת התאריך"
+          className="btn-icon shrink-0"
+        >
+          <X size={16} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename, onAssign, onPatch, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.title);
@@ -5760,19 +5794,18 @@ function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename
           <AssigneeBadge value={item.assignee} options={assignees} />
         )}
       </div>
-      <label className="col-span-2 min-w-0 text-xs font-medium text-slate-500 lg:col-span-1">
-        תאריך יעד
-        <input
-          type="date"
+      <div className="col-span-2 min-w-0 text-xs font-medium text-slate-500 lg:col-span-1">
+        <span>תאריך יעד</span>
+        <DueDateField
           value={item.dueDate || ""}
           disabled={!canEdit}
-          onChange={(event) => onPatch(item.id, { dueDate: event.target.value })}
-          aria-label={`תאריך יעד — ${item.title}`}
-          className={`mt-1 min-h-11 w-full min-w-0 rounded-lg border bg-white px-2 text-base text-slate-700 outline-none focus:border-gold-400 disabled:bg-slate-50 sm:pointer-fine:text-sm ${
-            dueStatus === "overdue" ? "border-rose-300" : "border-slate-200"
-          }`}
+          onChange={(dueDate) => onPatch(item.id, { dueDate })}
+          label={`תאריך יעד — ${item.title}`}
+          clearLabel={`מחיקת תאריך היעד — ${item.title}`}
+          invalid={dueStatus === "overdue"}
+          className="mt-1"
         />
-      </label>
+      </div>
       <div className="col-span-2 min-w-0 space-y-1 lg:col-span-1">
         <p className="text-xs font-medium text-slate-500">הערות</p>
         <BudgetNotes item={item} label={item.title} canEdit={canEdit} onChange={onPatch} />
@@ -6130,16 +6163,15 @@ function Checklist({ items, setItems, options, setOptions }) {
                 ))}
               </select>
               </label>
-              <label className="col-span-2 min-w-0 space-y-1 lg:col-span-1">
+              <div className="col-span-2 min-w-0 space-y-1 lg:col-span-1">
                 <span className="text-xs font-medium text-slate-500">תאריך יעד (לא חובה)</span>
-                <input
-                  type="date"
+                <DueDateField
                   value={form.dueDate}
-                  onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
-                  aria-label="תאריך יעד למשימה החדשה"
-                  className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:pointer-fine:text-sm"
+                  onChange={(dueDate) => setForm((f) => ({ ...f, dueDate }))}
+                  label="תאריך יעד למשימה החדשה"
+                  clearLabel="מחיקת תאריך היעד למשימה החדשה"
                 />
-              </label>
+              </div>
               <button
                 type="submit"
                 className="btn-primary order-last col-span-2 lg:order-none lg:col-span-1"

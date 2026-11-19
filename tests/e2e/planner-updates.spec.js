@@ -71,6 +71,43 @@ test("checklist tasks get a deadline that is saved, flagged when late and editab
   await expect(page.getByLabel("תאריך יעד — לסגור צלם")).toHaveValue(overdue);
 });
 
+test("a task deadline can be removed with the clear button or a silent picker reset", async ({ page }) => {
+  test.setTimeout(120_000);
+  await signUp(page, uniqueIdentity("task-deadline-clear"), { readyTimeout: 60_000 });
+  await seed(page, { checklist: [{ id: 81, title: "משימה עם תאריך", category: "כללי", assignee: "both", notes: "", done: false, position: 10, dueDate: isoDaysFromToday(5) }] });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator('[aria-label="מצב סנכרון: מסונכרן"]')).toBeVisible({ timeout: 30_000 });
+  await navigateTo(page, "checklist");
+
+  const row = page.locator('[data-tour="checklist-items"] li').filter({ hasText: "משימה עם תאריך" });
+  const due = row.getByLabel("תאריך יעד — משימה עם תאריך");
+  const clear = row.getByRole("button", { name: "מחיקת תאריך היעד — משימה עם תאריך" });
+  await expect(clear).toBeVisible();
+  await clear.click();
+  await expect(due).toHaveValue("");
+  await expect(clear).toHaveCount(0);
+  await expect.poll(async () => (await cloud(page, "checklist")).checklist.find((t) => t.id === 81)?.dueDate, { timeout: 30_000 }).toBe("");
+
+  // iOS "Reset" empties the field without a change event; leaving the field must still save it.
+  await due.fill(isoDaysFromToday(0));
+  await expect(row.getByTestId("task-due-badge")).toHaveText("היום");
+  await due.evaluate((el) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, "");
+    el.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  });
+  await expect(row.getByTestId("task-due-badge")).toHaveCount(0);
+  await expect.poll(async () => (await cloud(page, "checklist")).checklist.find((t) => t.id === 81)?.dueDate, { timeout: 30_000 }).toBe("");
+
+  // The add form has its own clear button too.
+  const entry = page.locator('[data-tour="checklist-add"]');
+  await entry.locator("button[aria-expanded]").click();
+  const formDate = entry.getByLabel("תאריך יעד למשימה החדשה");
+  await formDate.fill(isoDaysFromToday(2));
+  await entry.getByRole("button", { name: "מחיקת תאריך היעד למשימה החדשה" }).click();
+  await expect(formDate).toHaveValue("");
+  expect(await noHorizontalOverflow(page)).toBe(true);
+});
+
 test("dashboard shows confirmed guests out of invited instead of 'probably coming'", async ({ page }) => {
   test.setTimeout(90_000);
   await signUp(page, uniqueIdentity("dash-confirmed"), { readyTimeout: 60_000 });

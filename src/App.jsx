@@ -162,7 +162,7 @@ import {
   isCryptoAvailable,
 } from "./lib/backupCrypto";
 import { exportWeddingWorkbook, readWorkbookBackup, validateBackupPayload } from "./lib/excelExport";
-import { ENTITIES } from "./lib/entityMap";
+import { ENTITIES, isValidIsoDate } from "./lib/entityMap";
 import { summarizeDrinkPurchase } from "./lib/alcoholCalculator";
 import { readGuestRows, rowsToGuests, ImportError } from "./lib/guestImport";
 import { useAccessibleModal } from "./hooks/useAccessibleModal";
@@ -1541,11 +1541,6 @@ function Overview({
         const seats = g.seats || 1;
         return s + (g.attendingCount != null ? Math.min(g.attendingCount, seats) : seats);
       }, 0);
-    //  מי שסימן “לא מגיע” אינו “כנראה יבוא” גם אם הסימון נשאר מקודם —
-    //  אחרת “כנראה יבואו” גדול מ“הוזמנו” וסרגל ההתקדמות נחתך בשקט.
-    const probably = guests
-      .filter((g) => g.probablyComing && g.rsvp !== "declined")
-      .reduce((s, g) => s + (g.seats || 1), 0);
     const considering = guests.filter((g) => g.considering).length;
     const openTasks = vendors.reduce(
       (s, v) => s + v.tasks.filter((t) => t.status !== "done").length,
@@ -1559,7 +1554,6 @@ function Overview({
       totalRemaining: Math.max(0, totalSpent - totalPaid),
       invited,
       confirmed,
-      probably,
       considering,
       openTasks,
       totalTasks,
@@ -1609,13 +1603,13 @@ function Overview({
         </StatCard>
 
         <StatCard
-          icon={Star}
-          label="כנראה יבואו (כיסאות)"
-          value={stats.probably}
-          sub={`מתוך ${stats.invited} כיסאות שהוזמנו`}
+          icon={UserCheck}
+          label="אישרו הגעה"
+          value={stats.confirmed}
+          sub={`מתוך ${stats.invited} מוזמנים${stats.invited ? ` · ${Math.round((stats.confirmed / stats.invited) * 100)}%` : ""}`}
           tone="sage"
         >
-          <ProgressBar value={stats.probably} max={stats.invited} tone="sage" />
+          <ProgressBar value={stats.confirmed} max={stats.invited} tone="sage" />
         </StatCard>
 
         <StatCard
@@ -1849,10 +1843,20 @@ const GUEST_SUMMARY_CARD_OPTIONS = [
   { key: "drinkers", label: "שותים אלכוהול" },
   { key: "gifts", label: "סה״כ מתנות" },
 ];
-const DEFAULT_GUEST_SUMMARY_CARDS = ["records", "seats", "probably", "glatt", "considering"];
+const DEFAULT_GUEST_SUMMARY_CARDS = ["records", "seats", "gifts"];
+//  The previous release stored a plain array and persisted its default on first visit,
+//  so a plain array equal to that old default means "never customized".
+const LEGACY_DEFAULT_GUEST_SUMMARY_CARDS = ["records", "seats", "probably", "glatt", "considering"];
 const MAX_GUEST_SUMMARY_CARDS = 5;
+const guestSummaryPreference = (cards) => ({ v: 2, cards });
 
 function normalizeGuestSummaryCards(stored) {
+  const legacyUntouched =
+    Array.isArray(stored) &&
+    stored.length === LEGACY_DEFAULT_GUEST_SUMMARY_CARDS.length &&
+    stored.every((key, index) => key === LEGACY_DEFAULT_GUEST_SUMMARY_CARDS[index]);
+  if (legacyUntouched) return DEFAULT_GUEST_SUMMARY_CARDS;
+  if (stored && !Array.isArray(stored) && stored.v === 2) stored = stored.cards;
   const known = new Set(GUEST_SUMMARY_CARD_OPTIONS.map(({ key }) => key));
   const picked = [...new Set(Array.isArray(stored) ? stored : [])]
     .filter((key) => known.has(key))
@@ -2531,7 +2535,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   const tableColumnCount = 5 + visibleColumnCount;
   const [storedSummaryCards, setStoredSummaryCards] = usePersistentState(
     "guestSummaryCards",
-    DEFAULT_GUEST_SUMMARY_CARDS
+    guestSummaryPreference(DEFAULT_GUEST_SUMMARY_CARDS)
   );
   const summaryCardKeys = useMemo(
     () => normalizeGuestSummaryCards(storedSummaryCards),
@@ -2542,9 +2546,9 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
     setStoredSummaryCards((previous) => {
       const current = normalizeGuestSummaryCards(previous);
       if (current.includes(key)) {
-        return current.length > 1 ? current.filter((k) => k !== key) : current;
+        return guestSummaryPreference(current.length > 1 ? current.filter((k) => k !== key) : current);
       }
-      return current.length < MAX_GUEST_SUMMARY_CARDS ? [...current, key] : current;
+      return guestSummaryPreference(current.length < MAX_GUEST_SUMMARY_CARDS ? [...current, key] : current);
     });
   };
   const [catManagerOpen, setCatManagerOpen] = useState(false);
@@ -2574,6 +2578,17 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
   });
 
   const [sort, setSort] = useState({ key: null, dir: "asc" });
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtersToggleRef = useRef(null);
+  const panelFilterCount =
+    Number(filters.category !== "all") +
+    Number(filters.rsvp !== "all") +
+    Number(filters.onlyProbably) +
+    Number(filters.onlyConsidering) +
+    Number(filters.onlyGlatt) +
+    Number(filters.onlyDrinkers) +
+    Number(filters.onlyUnassigned) +
+    Number(filters.onlyDuplicatePhones);
 
   useEffect(() => {
     if (!columnsOpen) return;
@@ -3374,7 +3389,7 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setStoredSummaryCards(DEFAULT_GUEST_SUMMARY_CARDS)}
+                onClick={() => setStoredSummaryCards(guestSummaryPreference(DEFAULT_GUEST_SUMMARY_CARDS))}
                 className="btn-ghost min-h-11 text-xs"
               >
                 <RotateCcw size={14} /> ברירת מחדל
@@ -3679,96 +3694,25 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
                 className="min-h-11 w-full rounded-xl border border-slate-200 bg-white py-2.5 pr-10 pl-3 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
               />
             </div>
-            <select
-              value={filters.category}
-              onChange={(e) => setFilters({ ...filters, category: e.target.value })}
-              title="סינון לפי קטגוריה"
-              aria-label="סינון לפי קטגוריה"
-              className={`filter-select sm:w-auto sm:max-w-56 ${filters.category !== "all" ? "filter-select-active" : ""}`}
-            >
-              <option value="all">כל הקטגוריות</option>
-              {categories.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-            <select
-              value={filters.rsvp}
-              onChange={(e) => setFilters({ ...filters, rsvp: e.target.value })}
-              title="סינון לפי אישור הגעה"
-              aria-label="סינון לפי אישור הגעה"
-              className={`filter-select sm:w-auto ${filters.rsvp !== "all" ? "filter-select-active" : ""}`}
-            >
-              <option value="all">כל הסטטוסים</option>
-              <option value="confirmed">אישרו הגעה</option>
-              <option value="maybe">מתלבטים</option>
-              <option value="pending">ממתין</option>
-              <option value="declined">לא מגיעים</option>
-            </select>
             <button
-              onClick={() =>
-                setFilters({ ...filters, onlyProbably: !filters.onlyProbably })
-              }
-              aria-pressed={filters.onlyProbably}
-              className={`filter-chip ${filters.onlyProbably ? "filter-chip-active" : ""}`}
+              ref={filtersToggleRef}
+              type="button"
+              onClick={() => setFiltersOpen((open) => !open)}
+              aria-expanded={filtersOpen}
+              aria-controls={filtersOpen ? "guest-filters-panel" : undefined}
+              className={`filter-select flex items-center justify-between gap-2 sm:w-auto ${panelFilterCount ? "filter-select-active" : ""}`}
             >
-              <Star size={15} /> כנראה יבוא
+              <span className="flex min-w-0 items-center gap-2">
+                <SlidersHorizontal size={16} className="shrink-0" />
+                סינונים
+                {panelFilterCount > 0 && (
+                  <span className="grid h-5 min-w-5 place-items-center rounded-full bg-gold-500 px-1.5 text-[11px] font-bold text-slate-950">
+                    {panelFilterCount}
+                  </span>
+                )}
+              </span>
+              <ChevronDown size={17} className={`shrink-0 transition-transform ${filtersOpen ? "rotate-180" : ""}`} />
             </button>
-            <button
-              onClick={() =>
-                setFilters({ ...filters, onlyConsidering: !filters.onlyConsidering })
-              }
-              aria-pressed={filters.onlyConsidering}
-              className={`filter-chip ${filters.onlyConsidering ? "filter-chip-active" : ""}`}
-            >
-              <HelpCircle size={15} /> לשקול
-            </button>
-            <button
-              onClick={() =>
-                setFilters({ ...filters, onlyGlatt: !filters.onlyGlatt })
-              }
-              aria-pressed={filters.onlyGlatt}
-              className={`filter-chip ${filters.onlyGlatt ? "filter-chip-active" : ""}`}
-            >
-              <UtensilsCrossed size={15} /> גלאט
-            </button>
-            <button
-              onClick={() =>
-                setFilters({ ...filters, onlyDrinkers: !filters.onlyDrinkers })
-              }
-              aria-pressed={filters.onlyDrinkers}
-              className={`filter-chip ${filters.onlyDrinkers ? "filter-chip-active" : ""}`}
-            >
-              <Wine size={15} /> שותים
-            </button>
-            <button
-              onClick={() =>
-                setFilters({ ...filters, onlyUnassigned: !filters.onlyUnassigned })
-              }
-              aria-pressed={filters.onlyUnassigned}
-              className={`filter-chip ${filters.onlyUnassigned ? "filter-chip-active" : ""}`}
-            >
-              <Armchair size={15} /> לא משובץ
-            </button>
-            {/*  מופיע רק כשיש כפילות (או כשהסינון כבר פעיל), כדי שלא יהיה רעש ויזואלי.  */}
-            {(duplicatePhoneNotes.size > 0 || filters.onlyDuplicatePhones) && (
-              <button
-                onClick={() =>
-                  setFilters({ ...filters, onlyDuplicatePhones: !filters.onlyDuplicatePhones })
-                }
-                aria-pressed={filters.onlyDuplicatePhones}
-                title="רשומות שמספר הנייד שלהן מופיע ביותר מרשומה אחת"
-                className={
-                  "filter-chip " +
-                  (filters.onlyDuplicatePhones
-                    ? "border-amber-600 bg-amber-500 text-slate-950 hover:bg-amber-600"
-                    : "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100")
-                }
-              >
-                <AlertTriangle size={15} /> נייד כפול ({duplicatePhoneNotes.size})
-              </button>
-            )}
             {(missingPhoneIds.size > 0 || filters.onlyMissingPhones) && (
               <button
                 onClick={() =>
@@ -3837,6 +3781,98 @@ function Guests({ guests, setGuests, tables, setTables, categories, setCategorie
               </button>
             </div>
           </div>
+          {filtersOpen && (
+            <div
+              id="guest-filters-panel"
+              role="group"
+              aria-label="סינונים"
+              className="mt-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4"
+            >
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="min-w-0 space-y-1">
+                  <span className="text-xs font-semibold text-slate-600">קטגוריה</span>
+                  <select
+                    value={filters.category}
+                    onChange={(e) => setFilters({ ...filters, category: e.target.value })}
+                    aria-label="סינון לפי קטגוריה"
+                    className={`filter-select ${filters.category !== "all" ? "filter-select-active" : ""}`}
+                  >
+                    <option value="all">כל הקטגוריות</option>
+                    {categories.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="min-w-0 space-y-1">
+                  <span className="text-xs font-semibold text-slate-600">אישור הגעה</span>
+                  <select
+                    value={filters.rsvp}
+                    onChange={(e) => setFilters({ ...filters, rsvp: e.target.value })}
+                    aria-label="סינון לפי אישור הגעה"
+                    className={`filter-select ${filters.rsvp !== "all" ? "filter-select-active" : ""}`}
+                  >
+                    <option value="all">כל הסטטוסים</option>
+                    <option value="confirmed">אישרו הגעה</option>
+                    <option value="maybe">מתלבטים</option>
+                    <option value="pending">ממתין</option>
+                    <option value="declined">לא מגיעים</option>
+                  </select>
+                </label>
+              </div>
+              <p className="mb-2 mt-4 text-xs font-semibold text-slate-600">מאפייני מוזמן</p>
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+                {[
+                  { key: "onlyProbably", icon: Star, label: "כנראה יבוא" },
+                  { key: "onlyConsidering", icon: HelpCircle, label: "לשקול" },
+                  { key: "onlyGlatt", icon: UtensilsCrossed, label: "גלאט" },
+                  { key: "onlyDrinkers", icon: Wine, label: "שותים" },
+                  { key: "onlyUnassigned", icon: Armchair, label: "לא משובץ" },
+                ].map(({ key, icon: Icon, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setFilters({ ...filters, [key]: !filters[key] })}
+                    aria-pressed={filters[key]}
+                    className={`filter-chip ${filters[key] ? "filter-chip-active" : ""}`}
+                  >
+                    <Icon size={15} /> {label}
+                  </button>
+                ))}
+                {(duplicatePhoneNotes.size > 0 || filters.onlyDuplicatePhones) && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFilters({ ...filters, onlyDuplicatePhones: !filters.onlyDuplicatePhones })
+                    }
+                    aria-pressed={filters.onlyDuplicatePhones}
+                    title="רשומות שמספר הנייד שלהן מופיע ביותר מרשומה אחת"
+                    className={
+                      "filter-chip " +
+                      (filters.onlyDuplicatePhones
+                        ? "border-amber-600 bg-amber-500 text-slate-950 hover:bg-amber-600"
+                        : "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100")
+                    }
+                  >
+                    <AlertTriangle size={15} /> נייד כפול ({duplicatePhoneNotes.size})
+                  </button>
+                )}
+              </div>
+              <div className="mt-4 flex justify-end border-t border-slate-100 pt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFiltersOpen(false);
+                    filtersToggleRef.current?.focus({ preventScroll: true });
+                  }}
+                  className="btn-primary w-full sm:w-auto"
+                >
+                  הצגת {filtered.length} רשומות
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <p data-tour="guests-list" className="mb-3 text-xs text-slate-400">
@@ -4405,6 +4441,8 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
   const [newDrink, setNewDrink] = useState({ label: "", packKind: "bottle", packUnits: "24", unitLiters: "1" });
   //  סגור כברירת מחדל: בנייד הטופס תופס מסך שלם, ורוב הזמן רק עורכים שורות קיימות.
   const [isAddDrinkOpen, setIsAddDrinkOpen] = useState(false);
+  //  Closed by default so the shopping list is the main focus of the screen.
+  const [neededOpen, setNeededOpen] = useState(false);
   const addDrinkToggleRef = useRef(null);
   const newDrinkNameRef = useRef(null);
   const addDrinkTouched = useRef(false);
@@ -4535,12 +4573,36 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
   return (
     <div className="space-y-4">
       {/* ===================== שלב א׳ — כמה צריך ===================== */}
-      <Card>
-        <SectionTitle
-          icon={Wine}
-          title="כמה אלכוהול צריך להזמין"
-          subtitle="שתי שאלות, ומכאן הכמויות והעלות מחושבות לבד"
-        />
+      <Card tourId="alcohol-needed">
+        <button
+          type="button"
+          onClick={() => setNeededOpen((open) => !open)}
+          aria-expanded={neededOpen}
+          aria-controls={neededOpen ? "alcohol-needed-panel" : undefined}
+          className="group flex min-h-12 w-full items-center justify-between gap-3 rounded-2xl text-start transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
+        >
+          <span className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-gold-400 to-gold-600 text-white shadow-lg shadow-gold-500/30 sm:h-11 sm:w-11 sm:rounded-2xl">
+              <Wine size={20} />
+            </span>
+            <span className="min-w-0">
+              <span className="block font-display text-lg font-bold text-slate-800 sm:text-2xl">
+                כמה אלכוהול צריך להזמין
+              </span>
+              <span data-testid="alcohol-needed-summary" className="block text-xs text-slate-500 sm:text-sm">
+                יעד {litersLabel(targetLiters)} ליטר · {peopleLabel(drinkerCount)} ששותים
+              </span>
+            </span>
+          </span>
+          <span className="flex shrink-0 items-center gap-1 rounded-full bg-gold-50 px-3 py-1.5 text-xs font-semibold text-gold-700 ring-1 ring-gold-200 transition group-hover:bg-gold-100">
+            {neededOpen ? "סגירה" : "פתיחה"}
+            <ChevronDown size={16} className={`transition-transform duration-300 ${neededOpen ? "rotate-180" : ""}`} />
+          </span>
+        </button>
+
+        {neededOpen && (
+        <div id="alcohol-needed-panel" className="mt-4">
+        <p className="mb-3 text-xs text-slate-500 sm:text-sm">שתי שאלות, ומכאן הכמויות והעלות מחושבות לבד</p>
 
         {/*  היעד הוא מספר אחד ולכן מקבל עמודה צרה; שתי השאלות, שיש בהן
             פקדים, מקבלות את הרוחב שנשאר.  */}
@@ -4734,6 +4796,8 @@ function AlcoholCalculator({ drinkers, listedSeats, setBudget, alcohol, setAlcoh
             </p>
           </div>
         </div>
+        </div>
+        )}
       </Card>
 
       <Card tourId="alcohol-shopping-list">
@@ -5579,9 +5643,30 @@ function AssigneeBadge({ value, options = ASSIGNEES }) {
   );
 }
 
+function localIsoDate(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** "overdue" | "today" | "soon" (within 7 days) | null. Completed tasks are never late. */
+function taskDueStatus(dueDate, done) {
+  if (!dueDate || done || !isValidIsoDate(dueDate)) return null;
+  const days = Math.round((Date.parse(dueDate) - Date.parse(localIsoDate())) / 86_400_000);
+  if (days < 0) return "overdue";
+  if (days === 0) return "today";
+  return days <= 7 ? "soon" : null;
+}
+
+const TASK_DUE_BADGE = {
+  overdue: { label: "באיחור", className: "bg-rose-100 text-rose-700 ring-rose-300" },
+  today: { label: "היום", className: "bg-amber-100 text-amber-800 ring-amber-300" },
+  soon: { label: "בקרוב", className: "bg-amber-50 text-amber-700 ring-amber-200" },
+};
+
 function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename, onAssign, onPatch, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.title);
+  const dueStatus = taskDueStatus(item.dueDate, item.done);
 
   function commit() {
     const clean = draft.trim();
@@ -5595,9 +5680,11 @@ function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename
 
   return (
     <li
-      className={`grid min-w-0 grid-cols-2 items-center gap-2 rounded-2xl border px-3 py-2 transition lg:grid-cols-[minmax(0,1.6fr)_minmax(0,.8fr)_minmax(0,.7fr)_minmax(0,1.2fr)_auto] ${
+      className={`grid min-w-0 grid-cols-2 items-center gap-2 rounded-2xl border px-3 py-2 transition lg:grid-cols-[minmax(0,1.6fr)_minmax(0,.8fr)_minmax(0,.7fr)_minmax(0,.8fr)_minmax(0,1.2fr)_auto] ${
         item.done
           ? "border-sage-200/70 bg-sage-50/50"
+          : dueStatus === "overdue"
+          ? "border-rose-200 bg-rose-50/40"
           : "border-slate-200/70 bg-white/60"
       }`}
     >
@@ -5636,6 +5723,14 @@ function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename
             }`}
           >
             {item.title}
+            {dueStatus && (
+              <span
+                data-testid="task-due-badge"
+                className={`ms-2 inline-flex items-center rounded-full px-2 py-0.5 align-middle text-[11px] font-bold ring-1 ${TASK_DUE_BADGE[dueStatus].className}`}
+              >
+                {TASK_DUE_BADGE[dueStatus].label}
+              </span>
+            )}
           </span>
         )}
       </label>
@@ -5665,6 +5760,19 @@ function ChecklistRow({ item, canEdit, categories, assignees, onToggle, onRename
           <AssigneeBadge value={item.assignee} options={assignees} />
         )}
       </div>
+      <label className="col-span-2 min-w-0 text-xs font-medium text-slate-500 lg:col-span-1">
+        תאריך יעד
+        <input
+          type="date"
+          value={item.dueDate || ""}
+          disabled={!canEdit}
+          onChange={(event) => onPatch(item.id, { dueDate: event.target.value })}
+          aria-label={`תאריך יעד — ${item.title}`}
+          className={`mt-1 min-h-11 w-full min-w-0 rounded-lg border bg-white px-2 text-base text-slate-700 outline-none focus:border-gold-400 disabled:bg-slate-50 sm:pointer-fine:text-sm ${
+            dueStatus === "overdue" ? "border-rose-300" : "border-slate-200"
+          }`}
+        />
+      </label>
       <div className="col-span-2 min-w-0 space-y-1 lg:col-span-1">
         <p className="text-xs font-medium text-slate-500">הערות</p>
         <BudgetNotes item={item} label={item.title} canEdit={canEdit} onChange={onPatch} />
@@ -5701,7 +5809,7 @@ function Checklist({ items, setItems, options, setOptions }) {
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [hideDone, setHideDone] = useState(true);
-  const [form, setForm] = useState({ title: "", category: options.categories[0], assignee: options.assignees[0].key, notes: "" });
+  const [form, setForm] = useState({ title: "", category: options.categories[0], assignee: options.assignees[0].key, notes: "", dueDate: "" });
   const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);
   const addTaskToggleRef = useRef(null);
@@ -5852,12 +5960,13 @@ function Checklist({ items, setItems, options, setOptions }) {
           category: formCategory,
           assignee: formAssignee,
           notes: form.notes,
+          dueDate: form.dueDate,
           done: false,
           position,
         },
       ];
     });
-    setForm((f) => ({ ...f, title: "", notes: "" }));
+    setForm((f) => ({ ...f, title: "", notes: "", dueDate: "" }));
     taskNameRef.current?.focus({ preventScroll: true });
     notify("המשימה נוספה לצ׳קליסט", { tone: "success" });
   }
@@ -5979,7 +6088,7 @@ function Checklist({ items, setItems, options, setOptions }) {
         <Card tourId="checklist-workspace">
           {canEdit && (
             <CollapsibleAdd tourId="checklist-add" label="הוספה" open={isAddTaskOpen} onToggle={() => { addTaskTouched.current = true; setIsAddTaskOpen((open) => !open); }} panelId="checklist-add-panel" toggleRef={addTaskToggleRef} className="mb-4">
-            <form onSubmit={addItem} className="mt-2.5 grid min-w-0 grid-cols-2 items-end gap-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3 sm:p-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+            <form onSubmit={addItem} className="mt-2.5 grid min-w-0 grid-cols-2 items-end gap-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3 sm:p-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
               <label className="col-span-2 min-w-0 space-y-1 lg:col-span-1">
                 <span className="text-xs font-medium text-slate-500">משימה חדשה</span>
               <input
@@ -6021,14 +6130,24 @@ function Checklist({ items, setItems, options, setOptions }) {
                 ))}
               </select>
               </label>
+              <label className="col-span-2 min-w-0 space-y-1 lg:col-span-1">
+                <span className="text-xs font-medium text-slate-500">תאריך יעד (לא חובה)</span>
+                <input
+                  type="date"
+                  value={form.dueDate}
+                  onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
+                  aria-label="תאריך יעד למשימה החדשה"
+                  className="min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:pointer-fine:text-sm"
+                />
+              </label>
               <button
                 type="submit"
-                className="btn-primary col-span-2 lg:col-span-1"
+                className="btn-primary order-last col-span-2 lg:order-none lg:col-span-1"
               >
                 <Plus size={16} />
                 הוספה
               </button>
-              <label className="col-span-2 min-w-0 space-y-1 lg:col-span-4">
+              <label className="col-span-2 min-w-0 space-y-1 lg:col-span-5">
                 <span className="text-xs font-medium text-slate-500">הערות</span>
                 <textarea value={form.notes} onChange={(event) => setForm((previous) => ({ ...previous, notes: event.target.value }))} rows={2} aria-label="הערות למשימה החדשה" className="block w-full min-w-0 resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-base text-slate-700 outline-none focus:border-gold-400 sm:pointer-fine:text-sm" />
               </label>
@@ -7095,8 +7214,8 @@ function moveBefore(list, id, targetId) {
     וסעיף שעודכן ידנית מוצגים באותה עמודה בלי לאבד נתון.  */
 const budgetCostOf = (b) => Number(b?.actual) || Number(b?.expected) || 0;
 
-const BUDGET_PAYMENT_METHODS = ["Bit", "Credit Card", "Cash", "Other"];
-const BUDGET_PAYMENT_LABELS = { Bit: "ביט", "Credit Card": "אשראי", Cash: "מזומן", Other: "אחר" };
+const BUDGET_PAYMENT_METHODS = ["Bit", "Credit Card", "Cash", "Check", "Other"];
+const BUDGET_PAYMENT_LABELS = { Bit: "ביט", "Credit Card": "אשראי", Cash: "מזומן", Check: "צ׳ק", Other: "אחר" };
 
 function BudgetNotes({ item, canEdit, onChange, label = item.category }) {
   const [expanded, setExpanded] = useState(false);

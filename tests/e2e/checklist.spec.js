@@ -177,6 +177,7 @@ test("checklist sharing keeps viewer notes readable and denies edits outside per
     const row = taskRow(view, "משימה משותפת");
     await expect(row.getByRole("checkbox")).toBeDisabled();
     await expect(row.getByRole("combobox", { name: "קטגוריה — משימה משותפת", exact: true })).toBeDisabled();
+    await expect(row.getByLabel("תאריך יעד — משימה משותפת")).toBeDisabled();
     await row.locator("summary").click();
     await expect(row.locator("details p")).toHaveText(note);
     const rejected = await view.evaluate(async () => {

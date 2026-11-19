@@ -9,6 +9,14 @@
 
 export const CHECKLIST_ASSIGNEES = ["both", "bride", "groom"];
 
+/** A real calendar date in YYYY-MM-DD form (rejects e.g. 2026-02-31). */
+export function isValidIsoDate(value) {
+  const text = String(value ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  const parsed = new Date(`${text}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text;
+}
+
 export const ENTITIES = {
   guests: {
     col: "guests",
@@ -121,6 +129,7 @@ export const ENTITIES = {
       category: String(c.category ?? ""),
       assignee: String(c.assignee || "both"),
       notes: String(c.notes ?? ""),
+      dueDate: isValidIsoDate(c.dueDate) ? String(c.dueDate) : "",
       done: !!c.done,
       position: Number(c.position) || 0,
     }),
@@ -130,6 +139,7 @@ export const ENTITIES = {
       category: r.category ?? "",
       assignee: String(r.assignee || "both"),
       notes: String(r.notes ?? ""),
+      dueDate: isValidIsoDate(r.dueDate) ? String(r.dueDate) : "",
       done: !!r.done,
       position: Number(r.position) || 0,
     }),

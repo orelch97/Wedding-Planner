@@ -115,6 +115,20 @@ test.describe("mobile UI/UX audit", () => {
       findings.push(await auditViewport(page, `guests-bulk-bar@${width}`));
       await page.getByRole("checkbox", { name: "בחירת אורח בדיקה 2", exact: true }).uncheck();
 
+      const filtersToggle = page.locator('[data-tour="guests-filters"]').getByRole("button", { name: /^סינונים/ });
+      await filtersToggle.click();
+      await expect(page.locator("#guest-filters-panel")).toBeVisible();
+      findings.push(await auditViewport(page, `guests-filters-panel@${width}`));
+      await filtersToggle.click();
+
+      await navigateTo(page, "alcohol");
+      const neededToggle = page.locator('[data-tour="alcohol-needed"]').getByRole("button", { name: /כמה אלכוהול צריך להזמין/ });
+      await neededToggle.click();
+      await expect(page.locator('[data-tour="alcohol-result"]')).toBeVisible();
+      findings.push(await auditViewport(page, `alcohol-needed-open@${width}`));
+      await neededToggle.click();
+      await navigateTo(page, "guests");
+
       await page.getByRole("button", { name: "ניהול קטגוריות", exact: true }).click();
       findings.push(await auditViewport(page, `category-manager@${width}`));
       await page.getByRole("dialog", { name: "ניהול קטגוריות מוזמנים" }).getByRole("button", { name: "סגירה" }).click();

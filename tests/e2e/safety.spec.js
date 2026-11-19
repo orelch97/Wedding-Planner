@@ -190,12 +190,21 @@ test.describe("emulator isolation and account lifecycle", () => {
     const exportColor = await exportButton.evaluate((element) => getComputedStyle(element).backgroundColor);
     expect(exportColor).not.toBe("rgb(255, 255, 255)");
     const filters = page.locator('[data-tour="guests-filters"]');
+    const filtersToggle = filters.getByRole("button", { name: /^סינונים/ });
+    await expect(filtersToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(filters.getByRole("combobox", { name: "סינון לפי אישור הגעה", exact: true })).toHaveCount(0);
+    await filtersToggle.click();
     const status = filters.getByRole("combobox", { name: "סינון לפי אישור הגעה", exact: true });
     await status.selectOption("confirmed");
     await expect(status).toHaveClass(/filter-select-active/);
     await filters.getByRole("button", { name: "כנראה יבוא", exact: true }).click();
     await expect(filters.getByRole("button", { name: "כנראה יבוא", exact: true })).toHaveAttribute("aria-pressed", "true");
+    // Closing the panel keeps the filters and shows how many are active.
+    await filtersToggle.click();
+    await expect(filtersToggle).toContainText("2");
     await filters.getByRole("button", { name: "נקה", exact: true }).click();
+    await expect(filtersToggle).not.toContainText("2");
+    await filtersToggle.click();
     await expect(status).toHaveValue("all");
     await page.getByRole("button", { name: "ניהול קטגוריות", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "ניהול קטגוריות מוזמנים" })).toBeVisible();
@@ -621,6 +630,14 @@ test.describe("emulator isolation and account lifecycle", () => {
     await page.getByRole("button", { name: /הוסף לרשימה/ }).click();
     await navigateTo(page, "alcohol");
 
+    // The "how much to order" section starts collapsed so the shopping list leads the screen.
+    const neededToggle = page.locator('[data-tour="alcohol-needed"]').getByRole("button", { name: /כמה אלכוהול צריך להזמין/ });
+    await expect(neededToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(neededToggle).toContainText("פתיחה");
+    await expect(page.locator('[data-tour="alcohol-result"]')).toHaveCount(0);
+    await neededToggle.click();
+    await expect(neededToggle).toHaveAttribute("aria-expanded", "true");
+
     // The guest list has 8 seats, but the headcount is the couple's own estimate, not the RSVPs.
     await expect(page.locator('[data-tour="alcohol-result"]')).toContainText("0 אנשים");
     await page.getByRole("spinbutton", { name: "מספר האורחים המשוער באירוע" }).fill("8");
@@ -628,6 +645,9 @@ test.describe("emulator isolation and account lifecycle", () => {
     await expect(page.locator('[data-tour="alcohol-result"]')).toContainText("4 אנשים");
     await page.getByRole("button", { name: /שותים הרבה/ }).click();
     await expect(page.getByRole("spinbutton", { name: "כמה אנשים לבקבוק אחד" })).toHaveValue("4");
+    // The closed header keeps the result visible.
+    await neededToggle.click();
+    await expect(page.getByTestId("alcohol-needed-summary")).toContainText("4 אנשים");
 
     // The list starts empty — nothing is pre-seeded for the couple.
     await expect(page.locator('[data-tour="alcohol-shopping-list"]')).toContainText("הרשימה עדיין ריקה");
@@ -682,6 +702,8 @@ test.describe("emulator isolation and account lifecycle", () => {
     test.setTimeout(120_000);
     await signUp(page, uniqueIdentity("dupes"));
     await navigateTo(page, "guests");
+    // The duplicate-phone filter lives inside the filters panel.
+    await page.locator('[data-tour="guests-filters"]').getByRole("button", { name: /^סינונים/ }).click();
 
     const flags = page.locator("[data-duplicate-phone]:visible");
     const chip = page.getByRole("button", { name: /נייד כפול/ });
@@ -787,7 +809,7 @@ test.describe("emulator isolation and account lifecycle", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 
-  test("zero invitee summary cards stay hidden and return when their values become positive", async ({ page }) => {
+  test("selected invitee summary cards show zero, then reflect imported values", async ({ page }) => {
     test.setTimeout(120_000);
     await signUp(page, uniqueIdentity("guest-summary-zero"), { readyTimeout: 60_000 });
     await navigateTo(page, "guests");
@@ -796,9 +818,19 @@ test.describe("emulator isolation and account lifecycle", () => {
     const likely = summary.getByText("כנראה יבואו", { exact: true });
     const glatt = summary.getByText("מנות גלאט להזמין", { exact: true });
     const considering = summary.getByText("לשקול הזמנה", { exact: true });
+    // Not in the default cards; the couple opts in via the customize panel.
     await expect(likely).toHaveCount(0);
-    await expect(glatt).toHaveCount(0);
-    await expect(considering).toHaveCount(0);
+    await page.getByRole("button", { name: "התאמת כרטיסי הסיכום" }).click();
+    const editor = page.locator("#guest-summary-editor");
+    await editor.getByRole("button", { name: "סה״כ מתנות" }).click();
+    for (const name of ["כנראה יבואו", "מנות גלאט", "לשקול הזמנה"]) {
+      await editor.getByRole("button", { name }).click();
+    }
+    await editor.getByRole("button", { name: "סיום" }).click();
+    // A selected card stays visible at zero instead of disappearing.
+    await expect(likely.locator("xpath=..")).toContainText("0");
+    await expect(glatt.locator("xpath=..")).toContainText("0");
+    await expect(considering.locator("xpath=..")).toContainText("0");
 
     const csv = [
       "שם,נייד,כיסאות,גלאט,כנראה יבוא,לשקול",

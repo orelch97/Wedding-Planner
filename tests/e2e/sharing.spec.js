@@ -18,6 +18,11 @@ import {
   visibleNavKeys,
 } from "./helpers/sharing.js";
 
+async function openAlcoholNeeded(page) {
+  const toggle = page.locator('[data-tour="alcohol-needed"]').getByRole("button", { name: /כמה אלכוהול צריך להזמין/ });
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+}
+
 assertEmulatorEnvironment();
 
 const PNG_1X1 = Buffer.from(
@@ -103,6 +108,7 @@ test.describe("shared access: owner, editors and viewers", () => {
     await owner.getByRole("button", { name: /הוספת ספק ראשון/ }).click();
 
     await navigateTo(owner, "alcohol");
+    await openAlcoholNeeded(owner);
     await owner.getByRole("spinbutton", { name: "מספר האורחים המשוער באירוע" }).fill("400");
     const addDrink = owner.locator('[data-tour="alcohol-add-drink"]');
     await addDrink.getByRole("button", { name: "הוספת משקה חדש" }).click();
@@ -215,6 +221,7 @@ test.describe("shared access: owner, editors and viewers", () => {
     await financeForm.getByRole("button", { name: /הוסף/ }).click();
 
     await navigateTo(page, "alcohol");
+    await openAlcoholNeeded(page);
     await page.getByRole("spinbutton", { name: "מספר האורחים המשוער באירוע" }).fill("500");
 
     await page.waitForTimeout(3000);
@@ -229,6 +236,7 @@ test.describe("shared access: owner, editors and viewers", () => {
     await navigateTo(owner, "finance");
     await expect(shownText(owner, "סעיף מהשותף")).toBeVisible();
     await navigateTo(owner, "alcohol");
+    await openAlcoholNeeded(owner);
     await expect(owner.getByRole("spinbutton", { name: "מספר האורחים המשוער באירוע" })).toHaveValue("500");
   });
 
@@ -236,6 +244,7 @@ test.describe("shared access: owner, editors and viewers", () => {
     for (const key of ["editorAll", "viewerAll", "editorGuests"]) {
       const page = ctx[key].page;
       await reloadToScreen(page, "alcohol");
+      await openAlcoholNeeded(page);
       await expect(page.getByRole("spinbutton", { name: "מספר האורחים המשוער באירוע" }), `${key} headcount`).toHaveValue("500");
       await expect(page.getByRole("textbox", { name: "שם המשקה וודקה מהבעלים" }), `${key} drink`).toBeVisible();
     }
@@ -290,6 +299,8 @@ test.describe("shared access: owner, editors and viewers", () => {
   test("a viewer cannot change the shared alcohol calculator even by typing", async () => {
     const page = ctx.viewerAll.page;
     await navigateTo(page, "alcohol");
+    // Viewers may open the collapsed section to read it, but every field stays locked.
+    await openAlcoholNeeded(page);
     const headcount = page.getByRole("spinbutton", { name: "מספר האורחים המשוער באירוע" });
     await expect(headcount).toBeDisabled();
     await expect(page.getByRole("spinbutton", { name: "אחוז האורחים ששותים אלכוהול" })).toBeDisabled();

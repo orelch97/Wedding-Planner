@@ -12,6 +12,8 @@
  *  האפליקציה ישלם עליו בטעינה הראשונה.
  * ====================================================================== */
 
+import { isValidIsoDate } from "./entityMap.js";
+
 const RSVP_LABELS = {
   confirmed: "אישרו הגעה",
   maybe: "מתלבטים",
@@ -278,6 +280,7 @@ export function buildSheets({
       { header: "קטגוריה", key: "category", width: 20 },
       { header: "שיוך", key: "assignee", width: 18 },
       { header: "הערות", key: "notes", width: 48, wrap: true },
+      { header: "תאריך יעד", key: "dueDate", width: 14 },
       { header: "הושלם", key: "done", width: 10 },
     ],
     rows: checklist.map((c) => ({
@@ -286,6 +289,7 @@ export function buildSheets({
       category: text(c.category || "כללי"),
       assignee: assigneeLabel[c.assignee] || text(c.assignee || "both"),
       notes: text(c.notes),
+      dueDate: isValidIsoDate(c.dueDate) ? c.dueDate.split("-").reverse().join("/") : "",
       done: yesNo(c.done),
     })),
   };
